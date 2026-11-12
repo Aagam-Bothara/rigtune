@@ -14,43 +14,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
-import re
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List
 
-INSTRUCTION = "Solve the problem step by step. End your answer with a line of the form 'The answer is N'."
-_ANSWER = re.compile(r"answer is\s*:?\s*\$?\s*(-?[\d,]*\.?\d+)", re.IGNORECASE)
-_NUMBER = re.compile(r"-?\d[\d,]*\.?\d*")
-
-
-def final_number(text: str) -> Optional[float]:
-    """The number after the last 'The answer is', else the last number anywhere in the answer."""
-    found = _ANSWER.findall(text)
-    candidate = found[-1] if found else (_NUMBER.findall(text) or [None])[-1]
-    if candidate is None:
-        return None
-    try:
-        return float(candidate.replace(",", "").rstrip("."))
-    except ValueError:
-        return None
-
-
-def reference(answer: str) -> float:
-    """GSM8K reference answers end with '#### N'."""
-    return float(answer.split("####")[-1].strip().replace(",", ""))
-
-
-def wilson(correct: int, n: int, z: float = 1.96) -> Tuple[float, float]:
-    """95% Wilson score interval for an accuracy."""
-    if n == 0:
-        return 0.0, 0.0
-    p = correct / n
-    denom = 1 + z * z / n
-    centre = (p + z * z / (2 * n)) / denom
-    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
-    return centre - half, centre + half
+# The grader lives in the package, where calibration's accuracy gate uses it too; these names stay importable
+# from here so this script's results and the gate's are graded the same way.
+from rigtune.accuracy import INSTRUCTION, final_number, reference, wilson
 
 
 def answers(model: str, quant: str, questions: List[str], max_len: int, max_tokens: int) -> List[str]:
