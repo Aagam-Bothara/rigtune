@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from polyserve.bench.ablation import load_pick
-from polyserve.bench.compare import results_path
-from polyserve.models import Config, ModelSpec
+from rigtune.bench.ablation import load_pick
+from rigtune.bench.compare import results_path
+from rigtune.models import Config, ModelSpec
 
 
 def _write(root: Path, hw_hash: str, quant: str) -> None:
-    rows = [{"label": "polyserve", "config": Config(backend="vllm", quant=quant).model_dump()}]
+    rows = [{"label": "rigtune", "config": Config(backend="vllm", quant=quant).model_dump()}]
     results_path(hw_hash, ModelSpec(hf_id="org/M"), "chat", "balanced", root).write_text(json.dumps({"rows": rows}))
 
 

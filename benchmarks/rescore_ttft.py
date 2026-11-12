@@ -1,8 +1,8 @@
 """Re-score recorded comparisons with the TTFT ceiling judged at p95 instead of the median.
 
 Every comparison row stores each concurrency level's median and 95th-percentile time to first token,
-so no GPU is needed: this ranks the same measurements under both rules and prints PolyServe's pick
-and each stock row at both. The p50 columns reproduce the tables the runs printed. The PolyServe pick
+so no GPU is needed: this ranks the same measurements under both rules and prints rigtune's pick
+and each stock row at both. The p50 columns reproduce the tables the runs printed. The rigtune pick
 itself is the one calibration chose by the median; a calibration run with the p95 rule may pick a
 different configuration, which only a new run can show.
 
@@ -17,9 +17,10 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
-from polyserve.bench.ablation import score_row
-from polyserve.calibrate.objectives import Constraints
-from polyserve.models import Config, TrialMetrics, TrialResult
+from rigtune.bench.compare import self_label
+from rigtune.bench.ablation import score_row
+from rigtune.calibrate.objectives import Constraints
+from rigtune.models import Config, TrialMetrics, TrialResult
 
 STOCK = (("stock vLLM bf16", ("vllm-default",)), ("stock vLLM fp8", ("vllm-fp8-default",)),
          ("stock SGLang", ("sglang-default",)), ("stock llama.cpp", ("llamacpp-cuda-default", "llamacpp-cpu-default")))
@@ -44,11 +45,11 @@ def rescore(path: Path) -> Optional[Dict[str, object]]:
         t = _trial(row)
         if t is None:
             continue
-        out["rows"][row["label"]] = {
+        out["rows"][self_label(row["label"])] = {
             pct: score_row(t, "balanced", Constraints(ttft_ceiling_ms=float(d["ttft_ceiling_ms"]),
                                                       tpot_ceiling_ms=d.get("tpot_ceiling_ms"), ttft_percentile=pct))
             for pct in (50, 95)}
-        if row["label"] == "polyserve":
+        if self_label(row["label"]) == "rigtune":
             out["pick"] = row.get("config_key")
     return out
 
@@ -61,15 +62,15 @@ def _cell(ours: Dict[str, object], ref: Optional[Dict[str, object]]) -> str:
 
 
 def table(results: Sequence[Dict[str, object]]) -> str:
-    lines = ["| GPU | model | workload | ceiling | rule | PolyServe tok/s | its TTFT p50 / p95 | "
+    lines = ["| GPU | model | workload | ceiling | rule | rigtune tok/s | its TTFT p50 / p95 | "
              + " | ".join(name for name, _ in STOCK) + " |",
              "|---|---|---|---|---|---|---|" + "---|" * len(STOCK)]
     for r in results:
         rows = r["rows"]
-        if "polyserve" not in rows:
+        if "rigtune" not in rows:
             continue
         for pct in (50, 95):
-            ours = rows["polyserve"][pct]
+            ours = rows["rigtune"][pct]
             refs = [next((rows[lab][pct] for lab in labels if lab in rows), None) for _, labels in STOCK]
             lines.append(f"| {r['gpu']} | {r['model']} | {r['workload']} | {r['ceiling']:.0f} ms | p{pct} | "
                          f"{ours['tok_s']:.0f}{'' if ours['meets_slo'] else ', misses'} (at {ours['concurrency']}) | "
@@ -80,15 +81,15 @@ def table(results: Sequence[Dict[str, object]]) -> str:
 
 def main(argv: Optional[List[str]] = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("dirs", nargs="+", type=Path, help="folders of `polyserve compare` results")
+    ap.add_argument("dirs", nargs="+", type=Path, help="folders of `rigtune compare` results")
     args = ap.parse_args(argv)
     files = sorted({f for d in args.dirs for f in Path(d).glob("*.json")})
     results = [r for r in (rescore(f) for f in files) if r is not None]
-    broke = [r for r in results if "polyserve" in r["rows"] and not r["rows"]["polyserve"][95]["meets_slo"]
-             or ("polyserve" in r["rows"] and r["rows"]["polyserve"][95]["concurrency"]
-                 != r["rows"]["polyserve"][50]["concurrency"])]
+    broke = [r for r in results if "rigtune" in r["rows"] and not r["rows"]["rigtune"][95]["meets_slo"]
+             or ("rigtune" in r["rows"] and r["rows"]["rigtune"][95]["concurrency"]
+                 != r["rows"]["rigtune"][50]["concurrency"])]
     print(table(results))
-    print(f"\n{len(broke)} of {sum('polyserve' in r['rows'] for r in results)} picks scored at a lower load "
+    print(f"\n{len(broke)} of {sum('rigtune' in r['rows'] for r in results)} picks scored at a lower load "
           f"or missed the ceiling once judged at p95: " + ", ".join(f"{r['gpu']} {r['model']} {r['workload']}"
                                                                    for r in broke))
 

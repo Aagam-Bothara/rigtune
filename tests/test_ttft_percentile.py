@@ -5,10 +5,10 @@ from __future__ import annotations
 import pytest
 import typer
 
-from polyserve.calibrate.objectives import Constraints, pick
-from polyserve.cli import _percentile
-from polyserve.models import Config, TrialMetrics, TrialResult
-from polyserve.pipeline import SearchOptions
+from rigtune.calibrate.objectives import Constraints, pick
+from rigtune.cli import _percentile
+from rigtune.models import Config, TrialMetrics, TrialResult
+from rigtune.pipeline import SearchOptions
 
 
 def _trial(batch: int, levels) -> TrialResult:

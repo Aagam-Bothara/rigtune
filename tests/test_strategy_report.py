@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from polyserve.bench.ablation import (
+from rigtune.bench.ablation import (
     ablation_report,
     compare_table,
     gguf_quality_table,
@@ -24,7 +24,7 @@ def test_compare_table_reports_gains_and_layout_notes(tmp_path):
         "model_id": "Qwen/Qwen2.5-3B-Instruct", "workload": "chat",
         "notes": ["best multi-GPU layout 2 replicas: 7000 tok/s (+92.0% vs one GPU 3640); 2 replicas wins",
                   "calibration took 900s"],
-        "rows": [_row("polyserve", "vllm/gptq/b64", 1000.0), _row("vllm-default", "vllm/bf16/b256", 500.0),
+        "rows": [_row("rigtune", "vllm/gptq/b64", 1000.0), _row("vllm-default", "vllm/bf16/b256", 500.0),
                  _row("vllm-fp8-default", "vllm/fp8/b256", 800.0, slo=False)],
     }))
     md = compare_table([f])
@@ -38,7 +38,7 @@ def test_compare_table_labels_reruns_and_skips_other_json(tmp_path):
     rerun.mkdir(parents=True)
     f = rerun / "h__Qwen__Qwen2.5-3B-Instruct__extract__balanced.json"
     f.write_text(json.dumps({"model_id": "Qwen/Qwen2.5-3B-Instruct", "workload": "extract", "gpu": "NVIDIA A40",
-                             "rows": [_row("polyserve", "vllm/bf16/b256", 731.0), _row("vllm-default", "k", 439.0),
+                             "rows": [_row("rigtune", "vllm/bf16/b256", 731.0), _row("vllm-default", "k", 439.0),
                                       _row("sglang-default", "s", 474.0)]}))
     profile = rerun / "extract-run2.profile.json"
     profile.write_text(json.dumps({"calibration_table": []}))
@@ -53,7 +53,7 @@ def test_ablation_report_includes_the_sweep(tmp_path):
     f = tmp_path / "h__M__chat__ablation.json"
     f.write_text(json.dumps({
         "model_id": "org/M", "workload": "chat",
-        "rows": [{"label": "polyserve", "config_key": "k", "ok": True, "tok_s": 1000.0, "ttft_ms": 50.0,
+        "rows": [{"label": "rigtune", "config_key": "k", "ok": True, "tok_s": 1000.0, "ttft_ms": 50.0,
                   "tpot_ms": 7.0, "e2e_ms": 940.0, "meets_slo": True},
                  {"label": "+spec:ngram:4", "config_key": "k2", "ok": True, "tok_s": 880.0, "ttft_ms": 52.0,
                   "tpot_ms": 8.0, "e2e_ms": 1070.0, "meets_slo": True}],

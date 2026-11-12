@@ -13,7 +13,7 @@ time it matched the staged search on an A40 and an A100 and beat it by 29% on an
 
 What is worth keeping is not the ordering but the space: random search samples the 720–984 configurations that
 remain after the memory planner drops what cannot fit and the capability filter drops what the engine cannot do.
-Run blind over the raw product of settings and most draws fail to launch. Random search here *is* PolyServe
+Run blind over the raw product of settings and most draws fail to launch. Random search here *is* rigtune
 minus the stage order, and it inherits the expensive parts — the planner, the measurement harness, the objective.
 
 The stages buy three things random draws do not: the same answer on every run, where a seed change moves random's
@@ -67,7 +67,7 @@ the prompts on one card: suffix decoding on Dolly-15k, a draft model on extracti
 Stock `vllm serve` is what a machine runs when nobody tunes it, so it is the honest zero point, but it is a weak
 opponent and the headline should not rest on it. The rule-of-thumb comparison is the one that answers "could an
 informed engineer have guessed this?", which is why the README leads with it. Against someone who already knows
-the winning flags for this card and this traffic, PolyServe ties by construction — knowing them takes measuring
+the winning flags for this card and this traffic, rigtune ties by construction — knowing them takes measuring
 ([limits](benchmarks.md#limits)).
 
 ## Why change one setting at a time?

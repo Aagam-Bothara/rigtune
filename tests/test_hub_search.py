@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import polyserve.quantized as Q
-from polyserve.gguf import list_hub_models
-from polyserve.models import ModelSpec
+import rigtune.quantized as Q
+from rigtune.gguf import list_hub_models
+from rigtune.models import ModelSpec
 
 
 class Hub1x:

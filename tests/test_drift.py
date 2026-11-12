@@ -4,8 +4,8 @@ import json
 
 from fastapi.testclient import TestClient
 
-from polyserve.drift import TrafficWatch
-from polyserve.serve.proxy import _ask_for_usage, create_app
+from rigtune.drift import TrafficWatch
+from rigtune.serve.proxy import _ask_for_usage, create_app
 
 CHAT = {"name": "chat", "prefill_tokens": 512, "decode_tokens": 128, "concurrencies": [1, 4, 8]}
 CHAT_MEASURED = {**CHAT, "prompt_tokens_seen": {"p50": 500, "p90": 900, "max": 1000, "mean": 560}}
@@ -193,7 +193,7 @@ def test_the_proxy_exposes_the_report_and_balances_in_flight():
 
     with TestClient(app) as client:
         assert client.post("/v1/completions", json={"prompt": "hi"}).status_code == 502
-        report = client.get("/polyserve/drift").json()
+        report = client.get("/rigtune/drift").json()
 
     assert report["requests_seen"] == 1
     assert report["calibrated_workload"] == "chat"
@@ -204,7 +204,7 @@ def test_the_drift_endpoint_is_absent_without_a_watch():
     app = create_app("http://127.0.0.1:9", profile=None, status_fn=lambda: {"alive": False})
 
     with TestClient(app) as client:
-        assert client.get("/polyserve/drift").status_code == 404
+        assert client.get("/rigtune/drift").status_code == 404
 
 
 def test_streamed_requests_are_asked_for_their_usage():

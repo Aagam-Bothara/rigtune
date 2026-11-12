@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 
-from polyserve.calibrate.search import StagedSearch
-from polyserve.calibrate.workload import get_workload, workload_from_file
-from polyserve.models import Config, TrialMetrics, TrialResult
-from polyserve.pipeline import SearchOptions, quality_probe_for
-from polyserve.quality import QualityProbe, agreement, precision_rank
+from rigtune.calibrate.search import StagedSearch
+from rigtune.calibrate.workload import get_workload, workload_from_file
+from rigtune.models import Config, TrialMetrics, TrialResult
+from rigtune.pipeline import SearchOptions, quality_probe_for
+from rigtune.quality import QualityProbe, agreement, precision_rank
 
 FEASIBLE = [Config(backend="vllm", quant=q, ctx=4096, batch=b, gpu_memory_utilization=0.9)
             for q in ("bf16", "awq") for b in (16, 64)]
@@ -65,7 +65,7 @@ def test_drift_is_reported_next_to_the_reference_noise():
 
 def test_a_precision_is_answered_twice(monkeypatch):
     """The second pass is what makes the first interpretable, so record() must take it."""
-    import polyserve.quality as Q
+    import rigtune.quality as Q
 
     calls = []
     monkeypatch.setattr(Q, "greedy_answers", lambda url, prompts, *a, **kw: calls.append(url) or ["a"] * len(prompts))
@@ -107,7 +107,7 @@ def test_a_precision_on_the_refused_list_can_never_win():
 def test_a_probe_that_gets_no_answers_records_nothing(monkeypatch):
     """Every request failed. Empty answers compare equal to any other empty set, so recording them would report
     perfect agreement and wave the precision through."""
-    import polyserve.quality as Q
+    import rigtune.quality as Q
 
     monkeypatch.setattr(Q, "greedy_answers", lambda url, prompts, *a, **kw: ["" for _ in prompts])
     probe = Q.QualityProbe(prompts=["q1", "q2"])
@@ -159,8 +159,8 @@ def test_no_probe_when_the_gate_was_not_asked_for():
 
 
 def _plan_with(quants, spec_id="org/big-model"):
-    from polyserve.models import ModelSpec
-    from polyserve.pipeline import PlanResult
+    from rigtune.models import ModelSpec
+    from rigtune.pipeline import PlanResult
 
     plan = PlanResult(hw=None, spec=ModelSpec(hf_id=spec_id), candidates=["vllm"])
     plan.feasible["vllm"] = [(Config(backend="vllm", quant=q, ctx=4096, batch=16), None) for q in quants]
@@ -170,7 +170,7 @@ def _plan_with(quants, spec_id="org/big-model"):
 def test_a_card_that_cannot_hold_full_precision_says_so(caplog):
     """`--quant auto` skips 4-bit checkpoints on quality grounds, which is the right default and the wrong
     silence: on a 14B at 24 GB the skipped ones measured 3.9x faster for about 2 GSM8K points."""
-    from polyserve.pipeline import _warn_if_only_quantized_fits
+    from rigtune.pipeline import _warn_if_only_quantized_fits
 
     with caplog.at_level("WARNING"):
         _warn_if_only_quantized_fits(_plan_with(["fp8"]), SearchOptions())
@@ -180,7 +180,7 @@ def test_a_card_that_cannot_hold_full_precision_says_so(caplog):
 
 
 def test_no_such_warning_when_full_precision_fits_or_the_user_chose(caplog):
-    from polyserve.pipeline import _warn_if_only_quantized_fits
+    from rigtune.pipeline import _warn_if_only_quantized_fits
 
     with caplog.at_level("WARNING"):
         _warn_if_only_quantized_fits(_plan_with(["bf16", "fp8"]), SearchOptions())  # bf16 fits: nothing to say

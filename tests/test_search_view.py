@@ -6,10 +6,10 @@ from typing import Optional
 from rich.console import Console
 from typer.testing import CliRunner
 
-from polyserve import __version__
-from polyserve.cli import app
-from polyserve.models import Config, Profile, TrialMetrics, TrialResult
-from polyserve.searchview import SearchView, stage_counts
+from rigtune import __version__
+from rigtune.cli import app
+from rigtune.models import Config, Profile, TrialMetrics, TrialResult
+from rigtune.searchview import SearchView, stage_counts
 
 
 def _cfg(batch: int = 64, spec: Optional[str] = None) -> Config:
@@ -95,7 +95,7 @@ def test_the_live_picture_draws_on_a_terminal():
 
 
 def test_profiles_trace_redraws_a_saved_search(tmp_path, hw_a100):
-    profile = Profile(polyserve_version=__version__, hardware_hash="test-hash", hardware=hw_a100, model_id="org/model",
+    profile = Profile(rigtune_version=__version__, hardware_hash="test-hash", hardware=hw_a100, model_id="org/model",
                       objective="balanced", backend="vllm", backend_version="1.0", config=_cfg(),
                       launch_args=["vllm", "serve", "org/model"],
                       calibration_table=[_trial("quant", 700), _trial("spec", 1138, spec="draft:x:4")],

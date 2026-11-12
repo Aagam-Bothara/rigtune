@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Isolate what the search contributes beyond simply choosing 8-bit weights.
 
-The headline comparison in RESULTS.md is PolyServe's pick against `vllm serve <model>`, which
+The headline comparison in RESULTS.md is rigtune's pick against `vllm serve <model>`, which
 defaults to 16-bit. On Ampere, vLLM's fp8 is weight-only, so it halves weight traffic in a
 memory-bound decode and most of the measured gain may be that choice alone rather than the
 configuration search.
@@ -10,7 +10,7 @@ This script measures three configurations on the same workload, back to back on 
 
     vllm-default       stock bf16     (model max context, max_num_seqs 256, gmu 0.90)
     vllm-fp8-default   stock fp8      (identical, plus --quantization fp8)
-    polyserve          the calibrated pick, read from the matching results file
+    rigtune          the calibrated pick, read from the matching results file
 
 The gap between the second and third is the search's own contribution.
 
@@ -26,23 +26,24 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from polyserve.bench.compare import results_path
-from polyserve.calibrate.objectives import Constraints, rank
-from polyserve.calibrate.search import SubprocessTrialRunner
-from polyserve.calibrate.workload import get_workload
-from polyserve.hardware import hardware_hash, probe
-from polyserve.models import Config, ModelSpec, TrialResult
-from polyserve.pipeline import prepare_and_plan, select
+from rigtune.bench.compare import self_label
+from rigtune.bench.compare import results_path
+from rigtune.calibrate.objectives import Constraints, rank
+from rigtune.calibrate.search import SubprocessTrialRunner
+from rigtune.calibrate.workload import get_workload
+from rigtune.hardware import hardware_hash, probe
+from rigtune.models import Config, ModelSpec, TrialResult
+from rigtune.pipeline import prepare_and_plan, select
 
 
-def _load_polyserve_pick(results_dir: Path, model: str, workload: str, objective: str) -> Optional[Config]:
+def _load_rigtune_pick(results_dir: Path, model: str, workload: str, objective: str) -> Optional[Config]:
     """The calibrated configuration this workload chose, from any machine's results file."""
     spec = ModelSpec(hf_id=model)
     exact = results_path("*", spec, workload, objective, results_dir)
     for f in sorted(results_dir.glob(exact.name.replace("*", "*"))):
         data = json.loads(f.read_text(encoding="utf-8"))
         for row in data["rows"]:
-            if row["label"] == "polyserve":
+            if self_label(row["label"]) == "rigtune":
                 return Config.model_validate(row["config"])
     return None
 
@@ -100,11 +101,11 @@ def main() -> int:
             "vllm-fp8-default": Config(backend="vllm", quant="fp8", ctx=max_pos, batch=256,
                                        gpu_memory_utilization=0.90),
         }
-        pick = _load_polyserve_pick(args.results, args.model, wl_name, args.objective)
+        pick = _load_rigtune_pick(args.results, args.model, wl_name, args.objective)
         if pick is None:
-            print(f"no polyserve row for {wl_name}; skipping that column", file=sys.stderr)
+            print(f"no rigtune row for {wl_name}; skipping that column", file=sys.stderr)
         else:
-            configs["polyserve"] = pick
+            configs["rigtune"] = pick
 
         runner = SubprocessTrialRunner(backends=reg, models=planned.prepared, hw=hw, workload=wl,
                                        log_dir=args.log_dir)

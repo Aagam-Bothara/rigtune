@@ -5,13 +5,13 @@ same time, all re-measured side by side.
     python benchmarks/search_baselines.py meta-llama/Llama-3.1-8B-Instruct --workload chat \
         --workload-file dolly.jsonl --eval-workload-file oasst.jsonl --seeds 0 1 --repeats 3 --out results-baselines
 
-1. PolyServe calibrates as `polyserve compare` would (or reuses its cached profile); its calibration time is the
+1. rigtune calibrates as `rigtune compare` would (or reuses its cached profile); its calibration time is the
    budget unless --budget is given.
-2. The rule of thumb is one configuration chosen without measuring (polyserve.bench.baselines.rule_of_thumb).
+2. The rule of thumb is one configuration chosen without measuring (rigtune.bench.baselines.rule_of_thumb).
 3. Random search draws from the same space calibration explores, one run per seed, each until the budget is spent,
    with the same measurement rules as calibration (busiest level first, close calls measured again).
 4. Every pick, and stock vLLM and SGLang, is measured with --repeats interleaved runs, on the held-out prompts when
-   --eval-workload-file is given. The comparison is saved like `polyserve compare`'s, next to a summary of each
+   --eval-workload-file is given. The comparison is saved like `rigtune compare`'s, next to a summary of each
    search (space size, trials, seconds, pick).
 """
 
@@ -23,15 +23,15 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from polyserve.bench import compare, to_markdown
-from polyserve.bench.baselines import random_search, rule_of_thumb, search_space
-from polyserve.bench.compare import save
-from polyserve.calibrate.objectives import Constraints, close_call_level
-from polyserve.calibrate.search import SubprocessTrialRunner
-from polyserve.calibrate.workload import get_workload, workload_from_file
-from polyserve.hardware import probe
-from polyserve.models import Config, ModelSpec
-from polyserve.pipeline import SearchOptions, level_rule, prepare_and_plan, resolve_profile, select
+from rigtune.bench import compare, to_markdown
+from rigtune.bench.baselines import random_search, rule_of_thumb, search_space
+from rigtune.bench.compare import save
+from rigtune.calibrate.objectives import Constraints, close_call_level
+from rigtune.calibrate.search import SubprocessTrialRunner
+from rigtune.calibrate.workload import get_workload, workload_from_file
+from rigtune.hardware import probe
+from rigtune.models import Config, ModelSpec
+from rigtune.pipeline import SearchOptions, level_rule, prepare_and_plan, resolve_profile, select
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -42,7 +42,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--eval-workload-file", type=Path, default=None, help="measure every row on these prompts")
     ap.add_argument("--objective", default="balanced")
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1])
-    ap.add_argument("--budget", type=float, default=None, help="seconds per random search (default: PolyServe's)")
+    ap.add_argument("--budget", type=float, default=None, help="seconds per random search (default: rigtune's)")
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--include", nargs="*", default=["vllm-default", "sglang-default"], help="stock rows to keep")
     ap.add_argument("--out", type=Path, default=Path("results-baselines"))
@@ -58,7 +58,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     profile = resolve_profile(spec, args.objective, workload=wl, constraints=cons, hw=hw,
                               on_stage=lambda s: print(f"-> {s}", flush=True))
     budget = args.budget or float(profile.calibration_seconds or 0)
-    print(f"PolyServe: {profile.config.key()} after {profile.calibration_trials} trials in {budget:.0f}s", flush=True)
+    print(f"rigtune: {profile.config.key()} after {profile.calibration_trials} trials in {budget:.0f}s", flush=True)
 
     candidates, reg = select(hw, spec)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl)
@@ -68,8 +68,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                    close_call=close_call_level(args.objective, cons))
     extra: Dict[str, Config] = {}
     summary: Dict[str, object] = {"model": args.model, "workload": wl.name, "eval_workload": eval_wl.name,
-                                  "space": len(space), "budget_s": budget, "polyserve": profile.config.key(),
-                                  "polyserve_trials": profile.calibration_trials, "searches": []}
+                                  "space": len(space), "budget_s": budget, "rigtune": profile.config.key(),
+                                  "rigtune_trials": profile.calibration_trials, "searches": []}
     rule = rule_of_thumb(hw, planned, reg)
     if rule is not None:
         extra["rule-of-thumb"] = rule
@@ -99,7 +99,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     result.notes.append(f"random search: {len(space)} configurations in the space, "
                         + "; ".join(f"seed {s['seed']} measured {s['trials']} in {s['seconds']:.0f}s"
                                     for s in summary["searches"])
-                        + f", against PolyServe's {profile.calibration_trials} trials in {budget:.0f}s")
+                        + f", against rigtune's {profile.calibration_trials} trials in {budget:.0f}s")
     path = save(result, args.out)
     (args.out / f"{path.stem}__search.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
     print(to_markdown(result), flush=True)

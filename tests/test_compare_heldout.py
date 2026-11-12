@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from polyserve.bench import compare
-from polyserve.calibrate.workload import get_workload
-from polyserve.pipeline import calibrate, prepare_and_plan, select
+from rigtune.bench import compare
+from rigtune.calibrate.workload import get_workload
+from rigtune.pipeline import calibrate, prepare_and_plan, select
 from tests.test_compare import CompareRunner
 from tests.test_objectives_and_search import FakeRunner
 

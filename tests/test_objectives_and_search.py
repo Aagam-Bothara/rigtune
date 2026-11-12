@@ -5,11 +5,11 @@ from typing import List
 
 import pytest
 
-from polyserve.backends import get_backend
-from polyserve.calibrate.objectives import Constraints, pick, rank
-from polyserve.calibrate.search import StagedSearch, _baseline, _baseline_candidates
-from polyserve.memory import plan
-from polyserve.models import Config, TrialMetrics, TrialResult
+from rigtune.backends import get_backend
+from rigtune.calibrate.objectives import Constraints, pick, rank
+from rigtune.calibrate.search import StagedSearch, _baseline, _baseline_candidates
+from rigtune.memory import plan
+from rigtune.models import Config, TrialMetrics, TrialResult
 
 
 def _res(key: str, tok_s: float, ttft, jpt=None, ok=True, quant="bf16") -> TrialResult:
@@ -125,7 +125,7 @@ def test_objective_scores_each_trial_at_its_best_level():
     a = res(16, [(1, 200, 40), (4, 600, 120), (8, 900, 2000)])
     # Config B: slower everywhere but always under the ceiling.
     b = res(64, [(1, 180, 40), (4, 500, 100), (8, 650, 300)])
-    from polyserve.calibrate.objectives import rank
+    from rigtune.calibrate.objectives import rank
     ranked = rank([a, b], "balanced", Constraints(ttft_ceiling_ms=500, noise_tolerance=0))
     assert ranked[0].result is b and ranked[0].concurrency == 8  # 650 @ c8 beats A's 600 @ c4
     assert ranked[1].concurrency == 4  # A scored at its best feasible level, not its fastest

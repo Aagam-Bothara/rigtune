@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from polyserve.backends.base import LaunchSpec, Process
+from rigtune.backends.base import LaunchSpec, Process
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX")

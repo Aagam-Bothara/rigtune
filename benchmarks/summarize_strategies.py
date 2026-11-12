@@ -20,7 +20,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from polyserve.bench.ablation import (
+from rigtune.bench.ablation import (
     ablation_report,
     compare_table,
     gguf_quality_table,
@@ -31,7 +31,7 @@ from polyserve.bench.ablation import (
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--results", type=Path, nargs="*", default=[], help="directories of `polyserve compare` JSON")
+    ap.add_argument("--results", type=Path, nargs="*", default=[], help="directories of `rigtune compare` JSON")
     ap.add_argument("--ablation", type=Path, nargs="*", default=[], help="directories of ablation JSON")
     ap.add_argument("--quality", type=Path, nargs="*", default=[], help="quality_check.py JSON files")
     ap.add_argument("--gguf-quality", type=Path, default=None, help="llama-perplexity summary lines")
@@ -42,7 +42,7 @@ def main() -> int:
     parts = []
     results = [f for d in args.results for f in sorted(d.glob("*.json"))]
     if results:
-        parts += ["## PolyServe against stock settings", "", compare_table(results), ""]
+        parts += ["## rigtune against stock settings", "", compare_table(results), ""]
     ablations = [f for d in args.ablation for f in sorted(d.glob("*__ablation.json"))]
     if ablations:
         parts += ["## What each strategy is worth", "", ablation_report(ablations), ""]

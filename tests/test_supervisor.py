@@ -10,12 +10,12 @@ from typing import List
 import httpx
 import pytest
 
-from polyserve.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, free_port
-from polyserve.calibrate.search import SubprocessTrialRunner
-from polyserve.calibrate.workload import Workload
-from polyserve.memory import MemoryModel
-from polyserve.models import Config
-from polyserve.serve.supervisor import Supervisor
+from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, free_port
+from rigtune.calibrate.search import SubprocessTrialRunner
+from rigtune.calibrate.workload import Workload
+from rigtune.memory import MemoryModel
+from rigtune.models import Config
+from rigtune.serve.supervisor import Supervisor
 
 FAKE = Path(__file__).parent / "fake_server.py"
 

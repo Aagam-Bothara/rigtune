@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Dict, Optional
 
-from polyserve.calibrate.search import StagedSearch
-from polyserve.calibrate.workload import get_workload
-from polyserve.models import Config, TrialMetrics, TrialResult
+from rigtune.calibrate.search import StagedSearch
+from rigtune.calibrate.workload import get_workload
+from rigtune.models import Config, TrialMetrics, TrialResult
 
 VLLM = Config(backend="vllm", quant="bf16", ctx=4096, batch=64)
 GGUF = [Config(backend="llamacpp-cuda", quant=q, ctx=4096, batch=4, n_gpu_layers=37, n_batch=512)
@@ -65,10 +65,10 @@ def test_real_text_levels_send_a_few_rounds_per_slot():
 
 
 def test_run_trial_sends_the_capped_number_at_each_level(monkeypatch):
-    import polyserve.calibrate.measure as ms
-    from polyserve.calibrate.tokens import TokenCounter
-    from polyserve.calibrate.workload import Workload
-    from polyserve.backends.base import LlmtraceHooks
+    import rigtune.calibrate.measure as ms
+    from rigtune.calibrate.tokens import TokenCounter
+    from rigtune.calibrate.workload import Workload
+    from rigtune.backends.base import LlmtraceHooks
 
     sent = []
 

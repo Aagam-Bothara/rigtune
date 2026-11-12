@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from polyserve.bench import compare, to_markdown
-from polyserve.bench.compare import ComparisonResult, ComparisonRow, combine_runs, noise_notes
-from polyserve.calibrate.workload import get_workload
-from polyserve.models import Config
-from polyserve.pipeline import calibrate, prepare_and_plan, select
+from rigtune.bench import compare, to_markdown
+from rigtune.bench.compare import ComparisonResult, ComparisonRow, combine_runs, noise_notes
+from rigtune.calibrate.workload import get_workload
+from rigtune.models import Config
+from rigtune.pipeline import calibrate, prepare_and_plan, select
 from tests.test_compare import CompareRunner
 from tests.test_objectives_and_search import FakeRunner
 
@@ -40,8 +40,8 @@ def test_rows_are_measured_round_robin_and_stand_for_their_median_run(hw_a100, s
     runner = DriftingRunner()
     result = compare(hw_a100, spec, profile, planned.prepared, reg, workload=get_workload("default"), runner=runner,
                      repeats=3)
-    assert [s.split(":", 1)[1] for s in runner.stages] == ["polyserve", "vllm-default", "vllm-fp8-default"] * 3
-    ps = result.polyserve_row
+    assert [s.split(":", 1)[1] for s in runner.stages] == ["rigtune", "vllm-default", "vllm-fp8-default"] * 3
+    ps = result.rigtune_row
     assert ps.repeats == 3 and len(ps.runs_tok_s) == 3
     assert ps.scored_tok_s == sorted(ps.runs_tok_s)[1]  # the median run, not an average
     assert ps.tok_s_spread_pct == pytest.approx((max(ps.runs_tok_s) - min(ps.runs_tok_s)) / ps.scored_tok_s * 100)
@@ -67,10 +67,10 @@ def test_a_failed_run_is_kept_and_the_median_comes_from_the_rest():
 
 
 def test_overlapping_runs_are_flagged_as_noise_and_separated_ones_are_not():
-    res = ComparisonResult(polyserve_version="x", hardware_hash="h", gpu="A40", cpu="c", model_id="m",
+    res = ComparisonResult(rigtune_version="x", hardware_hash="h", gpu="A40", cpu="c", model_id="m",
                            objective="balanced", workload="chat", workload_spec={}, ttft_ceiling_ms=500,
-                           rows=[_row("polyserve", [510.0, 530.0, 520.0]), _row("vllm-default", [470.0, 515.0, 480.0]),
+                           rows=[_row("rigtune", [510.0, 530.0, 520.0]), _row("vllm-default", [470.0, 515.0, 480.0]),
                                  _row("llamacpp-cuda-default", [180.0, 190.0, 185.0])])
     notes = noise_notes(res)
     assert len(notes) == 1
-    assert notes[0].startswith("vllm-default: its runs (470-515 tok/s) overlap PolyServe's (510-530)")
+    assert notes[0].startswith("vllm-default: its runs (470-515 tok/s) overlap rigtune's (510-530)")

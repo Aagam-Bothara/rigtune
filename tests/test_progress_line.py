@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from polyserve.calibrate.objectives import Constraints
-from polyserve.cli import _progress_line
-from polyserve.models import Config, TrialMetrics, TrialResult
+from rigtune.calibrate.objectives import Constraints
+from rigtune.cli import _progress_line
+from rigtune.models import Config, TrialMetrics, TrialResult
 
 CFG = Config(backend="vllm", quant="fp8", batch=64)
 

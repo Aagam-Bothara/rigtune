@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import polyserve.backends.vllm as vl
-from polyserve.backends import get_backend
-from polyserve.models import Config
+import rigtune.backends.vllm as vl
+from rigtune.backends import get_backend
+from rigtune.models import Config
 
 
 def test_vllm_serve_cli_when_installed(prepared_vllm, monkeypatch):

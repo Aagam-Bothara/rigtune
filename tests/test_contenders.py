@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Callable, List
 
-from polyserve.calibrate.search import StagedSearch
-from polyserve.models import Config, TrialMetrics, TrialResult
+from rigtune.calibrate.search import StagedSearch
+from rigtune.models import Config, TrialMetrics, TrialResult
 
 VLLM = Config(backend="vllm", quant="bf16", ctx=8192, batch=64, gpu_memory_utilization=0.9)
 SGLANG = Config(backend="sglang", quant="bf16", ctx=8192, batch=64, gpu_memory_utilization=0.9)

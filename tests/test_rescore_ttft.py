@@ -29,12 +29,12 @@ def test_the_p95_rule_serves_fewer_users(tmp_path, capsys):
     # The L4 on sharegpt: by the median the pick ran 32 users; its 95th percentile broke the ceiling there.
     data = {"objective": "balanced", "workload": "sharegpt", "gpu": "NVIDIA L4", "model_id": "Qwen/Qwen2.5-7B-Instruct",
             "ttft_ceiling_ms": 1000.0, "tpot_ceiling_ms": 100.0,
-            "rows": [_row("polyserve", {8: (212.0, 285.0, 429.0), 32: (738.0, 985.0, 1227.0)}),
+            "rows": [_row("rigtune", {8: (212.0, 285.0, 429.0), 32: (738.0, 985.0, 1227.0)}),
                      _row("vllm-default", {8: (130.0, 300.0, 500.0), 32: (410.0, 628.0, 1664.0)})]}
     (tmp_path / "l4.json").write_text(json.dumps(data), encoding="utf-8")
     (tmp_path / "profile.json").write_text(json.dumps({"calibration_table": []}), encoding="utf-8")  # skipped
     mod = _load()
-    ours = mod.rescore(tmp_path / "l4.json")["rows"]["polyserve"]
+    ours = mod.rescore(tmp_path / "l4.json")["rows"]["rigtune"]
     assert (ours[50]["concurrency"], ours[95]["concurrency"]) == (32, 8)
     mod.main([str(tmp_path)])
     out = capsys.readouterr().out

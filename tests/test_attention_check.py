@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import polyserve.backends.vllm as vl
-from polyserve.backends import get_backend
-from polyserve.bench.ablation import strategy_variants
-from polyserve.calibrate.workload import get_workload
-from polyserve.models import Config
+import rigtune.backends.vllm as vl
+from rigtune.backends import get_backend
+from rigtune.bench.ablation import strategy_variants
+from rigtune.calibrate.workload import get_workload
+from rigtune.models import Config
 
 
 def test_forced_attention_backend_is_set_once_and_not_rendered_as_an_extra(prepared_vllm, monkeypatch):

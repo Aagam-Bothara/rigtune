@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run `polyserve compare` for every (model, workload) pair on this machine that has no results file yet.
+"""Run `rigtune compare` for every (model, workload) pair on this machine that has no results file yet.
 
     python benchmarks/run_matrix.py --models meta-llama/Llama-3.2-3B-Instruct [--workloads chat rag] [--ollama]
 """
@@ -11,11 +11,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from polyserve.bench.compare import results_path
-from polyserve.bench.references import ollama_tag_for
-from polyserve.calibrate.workload import WORKLOAD_NAMES
-from polyserve.hardware import hardware_hash, probe
-from polyserve.models import ModelSpec
+from rigtune.bench.compare import results_path
+from rigtune.bench.references import ollama_tag_for
+from rigtune.calibrate.workload import WORKLOAD_NAMES
+from rigtune.hardware import hardware_hash, probe
+from rigtune.models import ModelSpec
 
 
 def main() -> int:
@@ -38,7 +38,7 @@ def main() -> int:
             if path.exists():
                 print(f"skip {model} {wl}: {path} exists")
                 continue
-            cmd = [sys.executable, "-m", "polyserve.cli", "compare", model, "--workload", wl,
+            cmd = [sys.executable, "-m", "rigtune.cli", "compare", model, "--workload", wl,
                    "--objective", args.objective]
             if args.out:
                 cmd += ["--out", str(args.out)]

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from polyserve.calibrate.search import StagedSearch
-from polyserve.cli import _opts
-from polyserve.models import Config, TrialMetrics, TrialResult
-from polyserve.pipeline import SearchOptions
+from rigtune.calibrate.search import StagedSearch
+from rigtune.cli import _opts
+from rigtune.models import Config, TrialMetrics, TrialResult
+from rigtune.pipeline import SearchOptions
 
 FEASIBLE = [Config(backend="vllm", quant="bf16", ctx=8192, batch=b, gpu_memory_utilization=0.9) for b in (16, 64, 256)]
 

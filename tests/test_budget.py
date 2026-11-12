@@ -5,10 +5,10 @@ from __future__ import annotations
 import pytest
 import typer
 
-from polyserve.calibrate.search import StagedSearch
-from polyserve.cli import _duration
-from polyserve.models import Config, TrialMetrics, TrialResult
-from polyserve.pipeline import SearchOptions
+from rigtune.calibrate.search import StagedSearch
+from rigtune.cli import _duration
+from rigtune.models import Config, TrialMetrics, TrialResult
+from rigtune.pipeline import SearchOptions
 
 FEASIBLE = [Config(backend="llamacpp-cuda", quant=q, ctx=4096, batch=b, n_gpu_layers=37, n_batch=512)
             for q in ("Q4_K_M", "Q8_0") for b in (1, 4, 8)]

@@ -5,8 +5,8 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from polyserve import __version__
-from polyserve.cli import app
+from rigtune import __version__
+from rigtune.cli import app
 
 runner = CliRunner()
 
@@ -35,7 +35,7 @@ def test_bad_objective():
 
 @pytest.mark.usefixtures("no_network")
 def test_plan_command(hw_a100, monkeypatch):
-    import polyserve.hardware as hwmod
+    import rigtune.hardware as hwmod
 
     monkeypatch.setattr(hwmod, "probe", lambda: hw_a100)
     r = runner.invoke(app, ["plan", "meta-llama/Llama-3.2-3B-Instruct", "--backend", "vllm", "--json"])
@@ -51,11 +51,11 @@ def test_serve_listens_on_this_machine_only_by_default():
     serve = typer.main.get_command(app).commands["serve"]
     host = next(p for p in serve.params if p.name == "host")
     assert host.default == "127.0.0.1"
-    assert host.envvar == "POLYSERVE_HOST"  # how the Docker image opts back in
+    assert host.envvar == ["RIGTUNE_HOST", "POLYSERVE_HOST"]  # the Docker image sets the first
 
 
 def test_loopback_detection():
-    from polyserve.cli import _is_loopback
+    from rigtune.cli import _is_loopback
 
     assert _is_loopback("127.0.0.1") and _is_loopback("localhost") and _is_loopback("::1")
     assert _is_loopback("127.0.0.2")  # the whole 127/8 block is loopback
@@ -68,4 +68,4 @@ def test_the_docker_image_opts_back_in_to_every_interface():
     from pathlib import Path
 
     dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text(encoding="utf-8")
-    assert "ENV POLYSERVE_HOST=0.0.0.0" in dockerfile
+    assert "ENV RIGTUNE_HOST=0.0.0.0" in dockerfile

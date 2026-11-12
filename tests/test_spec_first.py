@@ -5,9 +5,9 @@ from __future__ import annotations
 
 from typing import List
 
-from polyserve.calibrate.search import StagedSearch
-from polyserve.models import Config
-from polyserve.pipeline import calibrate, combination_fits, prepare_and_plan, select
+from rigtune.calibrate.search import StagedSearch
+from rigtune.models import Config
+from rigtune.pipeline import calibrate, combination_fits, prepare_and_plan, select
 from tests.test_contenders import SGLANG, ScoredRunner
 from tests.test_objectives_and_search import FakeRunner
 

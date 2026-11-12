@@ -14,12 +14,12 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from polyserve.calibrate.search import SubprocessTrialRunner
-from polyserve.calibrate.workload import Workload
-from polyserve.hardware import probe
-from polyserve.models import Config, ModelSpec
-from polyserve.pipeline import prepare_and_plan, select
-from polyserve.quantized import INT4_METHODS
+from rigtune.calibrate.search import SubprocessTrialRunner
+from rigtune.calibrate.workload import Workload
+from rigtune.hardware import probe
+from rigtune.models import Config, ModelSpec
+from rigtune.pipeline import prepare_and_plan, select
+from rigtune.quantized import INT4_METHODS
 
 
 def _base(configs: List[Config], llamacpp: bool) -> Optional[Config]:

@@ -3,10 +3,10 @@
 ## Setup
 
 ```bash
-git clone https://github.com/Aagam-Bothara/polyserve.git && cd polyserve
+git clone https://github.com/Aagam-Bothara/rigtune.git && cd rigtune
 pip install -e ".[dev]"
 pytest                                  # no GPU or backend needed
-ruff check polyserve tests benchmarks
+ruff check rigtune tests benchmarks
 ```
 
 CI runs both on Python 3.10–3.13 for every push and pull request.
@@ -25,7 +25,7 @@ Implement the `Backend` interface in [docs/usage.md](docs/usage.md#backend-inter
 
 A number goes into [docs/benchmarks.md](docs/benchmarks.md) only if it was measured like this:
 
-1. PolyServe's pick against stock settings on the same card, minutes apart: `polyserve compare <model> --workload W`. For any gain under about 10%, add `--repeats 3`: rows are measured interleaved, and a gain whose runs overlap the stock row's is flagged as within noise.
+1. rigtune's pick against stock settings on the same card, minutes apart: `rigtune compare <model> --workload W`. For any gain under about 10%, add `--repeats 3`: rows are measured interleaved, and a gain whose runs overlap the stock row's is flagged as within noise.
 2. What each strategy was worth, flipped one at a time and measured back to back: `benchmarks/ablate_strategies.py`.
 3. Any change of weights checked for quality: `benchmarks/task_quality.py` (GSM8K, paired against bf16).
 4. The raw JSON committed under `benchmarks/strategies/`, and `SUMMARY.md` regenerated with `benchmarks/summarize_strategies.py` (the command is in its docstring).
@@ -36,12 +36,12 @@ State the GPU, engine versions and date. Report failures, losses and ties as wel
 
 Publishing a GitHub release uploads the package to PyPI through trusted publishing ([.github/workflows/release.yml](.github/workflows/release.yml)); no API token is stored anywhere. CI builds the package and runs `twine check --strict` on every push, so a release should not fail on packaging.
 
-One-time setup on pypi.org, under Account settings, Publishing: add a pending publisher with project name `polyserve`, owner `Aagam-Bothara`, repository `polyserve`, workflow `release.yml` and environment `pypi`. Then, for each release:
+One-time setup on pypi.org, under Account settings, Publishing: add a pending publisher with project name `rigtune`, owner `Aagam-Bothara`, repository `rigtune`, workflow `release.yml` and environment `pypi`. Then, for each release:
 
 1. Set `version` in `pyproject.toml` and push.
 2. Create a GitHub release with a tag `v<version>` (for example `v0.1.0`); the workflow builds, checks and publishes it.
 
-llmtrace, the GPU tracer PolyServe prefers for telemetry, is not a dependency on PyPI: the name `llmtrace` there belongs to an unrelated project, and PyPI refuses git dependencies. Without it PolyServe samples the GPU through `pynvml` (the `nvml` extra) or falls back to process-level `psutil` numbers.
+llmtrace, the GPU tracer rigtune prefers for telemetry, is not a dependency on PyPI: the name `llmtrace` there belongs to an unrelated project, and PyPI refuses git dependencies. Without it rigtune samples the GPU through `pynvml` (the `nvml` extra) or falls back to process-level `psutil` numbers.
 
 ## Style
 

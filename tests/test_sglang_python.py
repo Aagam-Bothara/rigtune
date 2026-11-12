@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import polyserve.hardware as H
-from polyserve.backends import get_backend
-from polyserve.models import Config
+import rigtune.hardware as H
+from rigtune.backends import get_backend
+from rigtune.models import Config
 
 
 def test_sglang_in_its_own_environment_is_found_and_launched_from_there(monkeypatch, tmp_path, hw_a100,

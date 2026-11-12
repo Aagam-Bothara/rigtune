@@ -6,20 +6,20 @@ import json
 
 import pytest
 
-from polyserve.backends import get_backend
-from polyserve.bench.ablation import (
+from rigtune.backends import get_backend
+from rigtune.bench.ablation import (
     crossover, load_pick, markdown, score_row, strategy_variants, sweep_workload,
 )
-from polyserve.bench.compare import results_path
-from polyserve.calibrate.objectives import Constraints
-from polyserve.calibrate.workload import get_workload
-from polyserve.models import Config, ModelSpec, TrialMetrics, TrialResult
+from rigtune.bench.compare import results_path
+from rigtune.calibrate.objectives import Constraints
+from rigtune.calibrate.workload import get_workload
+from rigtune.models import Config, ModelSpec, TrialMetrics, TrialResult
 
 
 @pytest.fixture
 def drafts(monkeypatch):
-    import polyserve.backends.vllm as vl
-    import polyserve.speculative as S
+    import rigtune.backends.vllm as vl
+    import rigtune.speculative as S
 
     monkeypatch.setattr(S, "vllm_supports_draft", lambda version=None: True)
     real = vl.importlib.util.find_spec
@@ -71,7 +71,7 @@ def test_load_pick_prefers_this_machine(tmp_path):
 
     def write(hw_hash: str, quant: str) -> None:
         rows = [{"label": "vllm-default", "config": Config(backend="vllm", quant="bf16").model_dump()},
-                {"label": "polyserve", "config": Config(backend="vllm", quant=quant).model_dump()}]
+                {"label": "rigtune", "config": Config(backend="vllm", quant=quant).model_dump()}]
         results_path(hw_hash, spec, "chat", "balanced", tmp_path).write_text(json.dumps({"rows": rows}))
 
     write("aaaa", "bf16")
@@ -104,7 +104,7 @@ def test_score_row_and_markdown():
     cons = Constraints(ttft_ceiling_ms=500)
     base = Config(backend="vllm", quant="fp8")
     rows = [{"label": label, "config_key": cfg.key(), **score_row(result(tok, cfg), "balanced", cons)}
-            for label, tok, cfg in (("polyserve", 500, base), ("+kv:fp8", 550, base.model_copy(update={"kv_dtype": "fp8"})))]
+            for label, tok, cfg in (("rigtune", 500, base), ("+kv:fp8", 550, base.model_copy(update={"kv_dtype": "fp8"})))]
     rows.append({"label": "-kv", "config_key": "-", "ok": False, "note": "does not fit in memory"})
     top = rows[0]
     assert top["ok"] and top["concurrency"] == 8 and top["meets_slo"]

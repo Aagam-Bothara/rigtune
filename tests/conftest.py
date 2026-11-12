@@ -5,7 +5,7 @@ from typing import Dict
 
 import pytest
 
-from polyserve.models import (
+from rigtune.models import (
     ArchInfo,
     BackendAvailability,
     CPUInfo,
@@ -93,7 +93,7 @@ def hw_cpu_avx512():
 
 @pytest.fixture
 def llama3b_arch() -> ArchInfo:
-    from polyserve.hfconfig import arch_from_config
+    from rigtune.hfconfig import arch_from_config
 
     return arch_from_config(LLAMA_3B_CONFIG)
 
@@ -112,7 +112,7 @@ def prepared_vllm(spec, llama3b_arch) -> PreparedModel:
 
 @pytest.fixture
 def prepared_llamacpp(spec, llama3b_arch) -> PreparedModel:
-    from polyserve.gguf import GGUF_QUANTS, estimate_gguf_bytes
+    from rigtune.gguf import GGUF_QUANTS, estimate_gguf_bytes
 
     p = llama3b_arch.num_params
     return PreparedModel(
@@ -125,10 +125,10 @@ def prepared_llamacpp(spec, llama3b_arch) -> PreparedModel:
 @pytest.fixture
 def no_network(monkeypatch, llama3b_arch):
     """Backends read HF configs via load_arch; pin it so tests never touch the hub."""
-    import polyserve.backends.llamacpp as lc
-    import polyserve.backends.sglang as sg
-    import polyserve.backends.vllm as vl
-    import polyserve.backends.vllm_cpu as vc
+    import rigtune.backends.llamacpp as lc
+    import rigtune.backends.sglang as sg
+    import rigtune.backends.vllm as vl
+    import rigtune.backends.vllm_cpu as vc
 
     for mod in (lc, sg, vl, vc):
         monkeypatch.setattr(mod, "load_arch", lambda spec, token=None: llama3b_arch)
@@ -136,7 +136,7 @@ def no_network(monkeypatch, llama3b_arch):
     monkeypatch.setattr(sg, "sglang_registry_archs", lambda: None)
     monkeypatch.setattr(lc, "search_hub_gguf", lambda spec, quants, **kw: {})
     monkeypatch.setattr(lc, "llama_server_binary", lambda: "/usr/local/bin/llama-server")
-    import polyserve.quantized as qz
+    import rigtune.quantized as qz
 
     monkeypatch.setattr(qz, "find_prequantized_repos", lambda spec, **kw: {})
     yield
@@ -144,7 +144,7 @@ def no_network(monkeypatch, llama3b_arch):
 
 @pytest.fixture
 def tmp_home(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYSERVE_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("RIGTUNE_HOME", str(tmp_path / "home"))
     yield tmp_path / "home"
 
 

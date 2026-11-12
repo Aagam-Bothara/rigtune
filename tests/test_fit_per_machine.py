@@ -1,14 +1,14 @@
-"""`polyserve fit` fits each machine's trials against that machine's GPU; start-up OOMs are recognised."""
+"""`rigtune fit` fits each machine's trials against that machine's GPU; start-up OOMs are recognised."""
 
 from __future__ import annotations
 
 from typer.testing import CliRunner
 
-import polyserve.hardware as H
-import polyserve.predict as P
-from polyserve import cache
-from polyserve.calibrate.search import mentions_oom
-from polyserve.cli import app
+import rigtune.hardware as H
+import rigtune.predict as P
+from rigtune import cache
+from rigtune.calibrate.search import mentions_oom
+from rigtune.cli import app
 from tests.conftest import make_hw
 from tests.test_cache_and_pipeline import _profile
 

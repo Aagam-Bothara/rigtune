@@ -17,8 +17,8 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from polyserve.calibrate.objectives import Constraints, enough_level, rank
-from polyserve.models import TrialResult
+from rigtune.calibrate.objectives import Constraints, enough_level, rank
+from rigtune.models import TrialResult
 
 
 def _ceilings(profile: Dict[str, object]) -> Tuple[float, Optional[float]]:

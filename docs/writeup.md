@@ -1,10 +1,10 @@
-# PolyServe: a benchmark-driven configuration planner for LLM serving
+# rigtune: a benchmark-driven configuration planner for LLM serving
 
 *Technical notes — memory planner, staged search, energy objective.*
 
 ## 1. Problem
 
-Serving one model on one machine means choosing a backend (vLLM, SGLang, llama.cpp, …), a precision or quant, a memory budget, a context length and a batch/concurrency limit. The space is small enough to enumerate (~144 points for one model on one box) and large enough that nobody does; people copy defaults, and defaults are tuned for the wrong GPU. PolyServe turns this into a measured decision that runs once per (machine, model, objective) and is cached.
+Serving one model on one machine means choosing a backend (vLLM, SGLang, llama.cpp, …), a precision or quant, a memory budget, a context length and a batch/concurrency limit. The space is small enough to enumerate (~144 points for one model on one box) and large enough that nobody does; people copy defaults, and defaults are tuned for the wrong GPU. rigtune turns this into a measured decision that runs once per (machine, model, objective) and is cached.
 
 The design has three parts that are reusable beyond this project: a **memory planner** that removes configurations that cannot run, a **staged search** that measures a few dozen configurations instead of hundreds, and a set of **constrained-argmax objectives** including an energy one, all measured by the same tracer (llmtrace). Of the three, the search order is the one the evidence supported least: given the same time, random sampling of the same configurations did as well on two GPUs and better on a third, until the search tried speculative decoding first; on that GPU it then matched random search's best in two-thirds of the time, and on the other two it held the tie and calibrated a third faster (§3, §8). Most of the results come from which configurations exist to be tried and how carefully each is measured.
 
@@ -26,11 +26,11 @@ keep cfg  iff  estimated(cfg) <= 0.95 * available
 - `safety_margin`: `max(5% of available, 512 MB)`.
 - `available`: *free* VRAM (or RAM) at probe time, not total. For vLLM/SGLang the budget is additionally capped at `gpu_memory_utilization × total`, because that is what the engine will refuse to exceed.
 
-**KV tokens is backend-specific.** llama.cpp allocates the whole `-c` context up front, and `-c` is shared across `-np` slots, so `kv_tokens = ctx × n_parallel` exactly. Paged-KV runtimes (vLLM, SGLang) allocate a pool and preempt requests when it fills; requiring `ctx × max_num_seqs` tokens would reject every realistic batch on a 24 GB card. PolyServe budgets `0.25 × ctx × max_num_seqs` for them (`PAGED_KV_FRACTION`). This keeps the planner honest about what must fit (weights + workspace + a useful pool) without pretending the engine cannot run below worst-case occupancy.
+**KV tokens is backend-specific.** llama.cpp allocates the whole `-c` context up front, and `-c` is shared across `-np` slots, so `kv_tokens = ctx × n_parallel` exactly. Paged-KV runtimes (vLLM, SGLang) allocate a pool and preempt requests when it fills; requiring `ctx × max_num_seqs` tokens would reject every realistic batch on a 24 GB card. rigtune budgets `0.25 × ctx × max_num_seqs` for them (`PAGED_KV_FRACTION`). This keeps the planner honest about what must fit (weights + workspace + a useful pool) without pretending the engine cannot run below worst-case occupancy.
 
 **Partial offload.** For llama.cpp with `n_gpu_layers < layers`, the GPU estimate is scaled by the offloaded fraction and the remainder is checked against host RAM with its own margin. Both must fit.
 
-Effect, computed by `polyserve plan` from the HF config alone (feasible / enumerated):
+Effect, computed by `rigtune plan` from the HF config alone (feasible / enumerated):
 
 | machine | model | vLLM | SGLang | llama.cpp (CUDA) |
 |---|---|---|---|---|
@@ -84,7 +84,7 @@ planner's estimate (weights + KV + workspace, before the safety margin) next to 
 the NVML peak during the trial minus what the device held before launch, and the backend's own
 accounting parsed from its startup log (vLLM prints weights, non-KV total and available KV cache;
 llama-server prints model, KV and compute buffer sizes per device; SGLang prints weight and KV
-pool sizes). `polyserve memory-report` reduces these to, per backend: mean absolute % error,
+pool sizes). `rigtune memory-report` reduces these to, per backend: mean absolute % error,
 signed bias, the worst under-prediction, component-wise error for weights and KV, and the number of
 OOMs among planner-feasible configs. That last number is the one the planner is judged on: a
 config the planner admitted that then OOMed is a planner failure, whatever the average error says.
@@ -92,7 +92,7 @@ config the planner admitted that then OOMed is a planner failure, whatever the a
 Two constants are then fitted rather than assumed. `runtime_workspace`, the only hand-set term,
 becomes the 95th percentile of measured workspace on this machine. The safety margin becomes the
 worst observed under-prediction plus 2%, clamped to [2%, 15%], with the 512 MB floor kept.
-`--apply` writes both to `~/.polyserve/memory-model.json` keyed by hardware hash and the planner
+`--apply` writes both to `~/.rigtune/memory-model.json` keyed by hardware hash and the planner
 uses them from then on. The claim the matrix is meant to support is therefore checkable:
 "predicts peak device memory within X% across N GPUs, with zero OOMs among the configs it admitted".
 
@@ -117,7 +117,7 @@ Device peak bandwidth and FLOPS come from a small table keyed on the NVML name; 
 parameters per backend (α bandwidth efficiency, β compute efficiency, per-step overhead) are fitted
 by grid search on log error from the machine's own calibration trials, one observation per
 (config, concurrency level) measured; a trial that stopped at its busiest level contributes only that
-level, which is also the load the pick is scored at. `polyserve fit` reports leave-one-trial-out MAPE for tok/s and TTFT
+level, which is also the load the pick is scored at. `rigtune fit` reports leave-one-trial-out MAPE for tok/s and TTFT
 and the Spearman rank correlation between predicted and measured tok/s, which is the number that
 matters: pruning is safe when the ranking is right even if the magnitudes are off.
 
@@ -146,4 +146,4 @@ A profile is keyed by `(hardware_hash, model, objective)`. The hash covers the *
 
 ## 9. Non-goals and roadmap
 
-PolyServe sits above the inference engines (vLLM, SGLang and llama.cpp) and launches them; it is not a replacement, a compiler or a kernel library, and it supports only the hardware [measured so far](benchmarks.md#hardware-and-engines-measured). Planned: AMD ROCm and Apple Silicon backends, Windows, and re-tuning under live traffic instead of a one-time calibration.
+rigtune sits above the inference engines (vLLM, SGLang and llama.cpp) and launches them; it is not a replacement, a compiler or a kernel library, and it supports only the hardware [measured so far](benchmarks.md#hardware-and-engines-measured). Planned: AMD ROCm and Apple Silicon backends, Windows, and re-tuning under live traffic instead of a one-time calibration.

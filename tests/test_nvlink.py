@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import types
 
-from polyserve.hardware import nvlink_between
+from rigtune.hardware import nvlink_between
 
 
 class _NotSupported(Exception):
@@ -36,8 +36,8 @@ def test_nvlink_detection(monkeypatch):
 
 
 def test_tensor_parallel_shapes_leave_room_for_nccl():
-    from polyserve.layout import TP_MAX_GPU_MEMORY_UTILIZATION, tp_candidates
-    from polyserve.models import Config
+    from rigtune.layout import TP_MAX_GPU_MEMORY_UTILIZATION, tp_candidates
+    from rigtune.models import Config
 
     shapes = tp_candidates(Config(backend="vllm", quant="awq", batch=256, gpu_memory_utilization=0.95), 2)
     assert [c.batch for c in shapes] == [256, 512] and all(c.tp == 2 for c in shapes)
@@ -47,10 +47,10 @@ def test_tensor_parallel_shapes_leave_room_for_nccl():
 
 
 def test_tensor_parallel_over_pcie_routes_nccl_through_the_host(prepared_vllm, monkeypatch):
-    import polyserve.backends.sglang as sg
-    import polyserve.backends.vllm as vl
-    from polyserve.backends import get_backend
-    from polyserve.models import Config
+    import rigtune.backends.sglang as sg
+    import rigtune.backends.vllm as vl
+    from rigtune.backends import get_backend
+    from rigtune.models import Config
 
     for mod, name in ((vl, "vllm"), (sg, "sglang")):
         cfg = Config(backend=name, quant="bf16", tp=2)

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import polyserve.bench.ablation as AB
-from polyserve.backends import get_backend
-from polyserve.calibrate.workload import get_workload
-from polyserve.models import Config
+import rigtune.bench.ablation as AB
+from rigtune.backends import get_backend
+from rigtune.calibrate.workload import get_workload
+from rigtune.models import Config
 
 
 def test_int4_removal_steps_the_batch_down_to_fit(monkeypatch, hw_a100, prepared_vllm):

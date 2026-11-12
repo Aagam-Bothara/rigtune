@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import importlib.util
 
-import polyserve.backends.vllm as vl
-from polyserve.backends import get_backend
-from polyserve.bench.ablation import strategy_variants
-from polyserve.calibrate.workload import get_workload
-from polyserve.hfconfig import kv_element_bytes
-from polyserve.models import Config
+import rigtune.backends.vllm as vl
+from rigtune.backends import get_backend
+from rigtune.bench.ablation import strategy_variants
+from rigtune.calibrate.workload import get_workload
+from rigtune.hfconfig import kv_element_bytes
+from rigtune.models import Config
 from tests.conftest import make_hw
 
 

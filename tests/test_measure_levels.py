@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import polyserve.calibrate.measure as M
-from polyserve.backends.base import LlmtraceHooks
-from polyserve.calibrate.objectives import Constraints, enough_level
-from polyserve.calibrate.tokens import TokenCounter
-from polyserve.calibrate.workload import Workload
-from polyserve.models import TrialMetrics
+import rigtune.calibrate.measure as M
+from rigtune.backends.base import LlmtraceHooks
+from rigtune.calibrate.objectives import Constraints, enough_level
+from rigtune.calibrate.tokens import TokenCounter
+from rigtune.calibrate.workload import Workload
+from rigtune.models import TrialMetrics
 
 
 def _words(text: str) -> int:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""Measure what each search strategy is worth: PolyServe's pick with one strategy flipped at a time.
+"""Measure what each search strategy is worth: rigtune's pick with one strategy flipped at a time.
 
-Reads the pick from `polyserve compare` results, so run those first. Then:
+Reads the pick from `rigtune compare` results, so run those first. Then:
 
     python benchmarks/ablate_strategies.py --model Qwen/Qwen2.5-3B-Instruct \
         --workloads chat chat-system rag-shared generation high-concurrency --out benchmarks/ablation
@@ -20,16 +20,16 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
-from polyserve.bench.ablation import (
+from rigtune.bench.ablation import (
     Variant, constraints_for, crossover, level_table, load_pick, markdown, score_row, strategy_variants,
     sweep_workload,
 )
-from polyserve.calibrate.search import SubprocessTrialRunner
-from polyserve.calibrate.workload import get_workload, workload_from_file
-from polyserve.hardware import hardware_hash, probe
-from polyserve.models import Config, ModelSpec
-from polyserve.pipeline import prepare_and_plan, select
-from polyserve.quantized import INT4_METHODS
+from rigtune.calibrate.search import SubprocessTrialRunner
+from rigtune.calibrate.workload import get_workload, workload_from_file
+from rigtune.hardware import hardware_hash, probe
+from rigtune.models import Config, ModelSpec
+from rigtune.pipeline import prepare_and_plan, select
+from rigtune.quantized import INT4_METHODS
 
 
 def _spec_sweep(pick: Config, backend, model, reg, prepared, hw, wl, levels: List[int], log_dir) -> Dict[str, object]:
@@ -62,7 +62,7 @@ def main() -> int:
     ap.add_argument("--model", required=True)
     ap.add_argument("--workloads", nargs="+", default=["default"])
     ap.add_argument("--workload-file", type=Path, default=None,
-                    help="your own prompts (JSONL), as for `polyserve compare`; the first --workloads name is the "
+                    help="your own prompts (JSONL), as for `rigtune compare`; the first --workloads name is the "
                          "template for concurrency and latency ceilings")
     ap.add_argument("--objective", default="balanced")
     ap.add_argument("--results", type=Path, default=Path("benchmarks/results"))
@@ -88,7 +88,7 @@ def main() -> int:
         cons = constraints_for(wl)
         pick = load_pick(args.results, args.model, wl_name, args.objective, hw_hash)
         if pick is None:
-            print(f"[{wl_name}] no polyserve row in {args.results}; run `polyserve compare` first", file=sys.stderr)
+            print(f"[{wl_name}] no rigtune row in {args.results}; run `rigtune compare` first", file=sys.stderr)
             failures += 1
             continue
         candidates, reg = select(hw, spec, force=pick.backend)
@@ -109,10 +109,10 @@ def main() -> int:
                              Config(backend="vllm", quant="bf16", ctx=ctx, batch=256, gpu_memory_utilization=0.90)),
                      Variant("vllm-fp8-default", "baseline",
                              Config(backend="vllm", quant="fp8", ctx=ctx, batch=256, gpu_memory_utilization=0.90))]
-        todo.append(Variant("polyserve", "pick", pick))
+        todo.append(Variant("rigtune", "pick", pick))
         todo += strategy_variants(pick, backend, hw, model, wl)
         if args.only is not None:
-            todo = [v for v in todo if v.label == "polyserve" or v.label in args.only]
+            todo = [v for v in todo if v.label == "rigtune" or v.label in args.only]
 
         rows: List[Dict[str, object]] = []
         for v in todo:

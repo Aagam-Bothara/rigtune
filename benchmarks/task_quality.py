@@ -56,7 +56,7 @@ def wilson(correct: int, n: int, z: float = 1.96) -> Tuple[float, float]:
 def answers(model: str, quant: str, questions: List[str], max_len: int, max_tokens: int) -> List[str]:
     from vllm import LLM, SamplingParams
 
-    from polyserve.quantized import PREQUANTIZED
+    from rigtune.quantized import PREQUANTIZED
 
     kwargs = dict(model=model, max_model_len=max_len, gpu_memory_utilization=0.85, disable_log_stats=True)
     if quant in PREQUANTIZED:
@@ -103,11 +103,11 @@ def main() -> int:
     results, checkpoints, samples, per_problem = {}, {}, {}, {}
     for q in args.quants:
         target = args.model
-        from polyserve.quantized import PREQUANTIZED
+        from rigtune.quantized import PREQUANTIZED
 
         if q in PREQUANTIZED:
-            from polyserve.models import ModelSpec
-            from polyserve.quantized import find_prequantized_repos
+            from rigtune.models import ModelSpec
+            from rigtune.quantized import find_prequantized_repos
 
             repo = find_prequantized_repos(ModelSpec(hf_id=args.model), methods=[q]).get(q)
             if repo is None:

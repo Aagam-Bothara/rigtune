@@ -14,15 +14,15 @@ from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from polyserve import quantized as Q
-from polyserve import speculative as S
-from polyserve.backends import get_backend, registry
-from polyserve.calibrate.objectives import Constraints, pick
-from polyserve.calibrate.search import StagedSearch
-from polyserve.calibrate.workload import Workload, get_workload
-from polyserve.memory import estimate, kv_cache_bytes
-from polyserve.models import Config, ModelSpec, TrialMetrics, TrialResult
-from polyserve.pipeline import PlanResult, SearchOptions, kv_variants_fn
+from rigtune import quantized as Q
+from rigtune import speculative as S
+from rigtune.backends import get_backend, registry
+from rigtune.calibrate.objectives import Constraints, pick
+from rigtune.calibrate.search import StagedSearch
+from rigtune.calibrate.workload import Workload, get_workload
+from rigtune.memory import estimate, kv_cache_bytes
+from rigtune.models import Config, ModelSpec, TrialMetrics, TrialResult
+from rigtune.pipeline import PlanResult, SearchOptions, kv_variants_fn
 from tests.conftest import make_hw
 from tests.test_measure_and_proxy import _Server
 from tests.test_objectives_and_search import FakeRunner, _feasible_a100
@@ -55,7 +55,7 @@ def test_kv_bytes_follow_the_cache_type(prepared_llamacpp):
 
 
 def test_kv_flags_per_engine(prepared_vllm, prepared_llamacpp, monkeypatch):
-    import polyserve.backends.llamacpp as lc
+    import rigtune.backends.llamacpp as lc
 
     monkeypatch.setattr(lc, "llama_server_binary", lambda: "/opt/llama-server")
     v = get_backend("vllm").launch_spec(Config(backend="vllm", quant="bf16", kv_dtype="fp8"), prepared_vllm, 1).args
@@ -73,7 +73,7 @@ def test_kv_flags_per_engine(prepared_vllm, prepared_llamacpp, monkeypatch):
 
 
 def test_which_engines_offer_a_quantized_cache(hw_a100, prepared_vllm, monkeypatch):
-    import polyserve.backends.vllm as vl
+    import rigtune.backends.vllm as vl
 
     real = vl.importlib.util.find_spec
     monkeypatch.setattr(vl.importlib.util, "find_spec", lambda n: None if n == "flashinfer" else real(n))
@@ -184,7 +184,7 @@ def test_precisions_track_the_gpu_generation(hw_a100):
 
 @pytest.mark.usefixtures("no_network")
 def test_quant_option_restricts_what_calibration_may_choose(hw_a100, spec):
-    from polyserve.pipeline import prepare_and_plan
+    from rigtune.pipeline import prepare_and_plan
 
     reg = registry()
     locked = prepare_and_plan(hw_a100, spec, ["vllm", "llamacpp-cuda"], reg, quants=["bf16"])
@@ -199,8 +199,8 @@ def test_quant_option_restricts_what_calibration_may_choose(hw_a100, spec):
 @pytest.mark.usefixtures("no_network")
 def test_materializing_one_backend_does_not_filter_the_next(hw_a100, spec, monkeypatch):
     # Regression: the survivors of backend 1's plan leaked into backend 2 as a --quant filter.
-    import polyserve.backends.llamacpp as lc
-    from polyserve.pipeline import prepare_and_plan
+    import rigtune.backends.llamacpp as lc
+    from rigtune.pipeline import prepare_and_plan
 
     def fake_materialize(self, m, quants):
         for q in quants:
@@ -218,7 +218,7 @@ def test_materializing_one_backend_does_not_filter_the_next(hw_a100, spec, monke
 
 
 def test_shared_prefix_workload_builds_prompts_on_one_prefix():
-    from polyserve.calibrate.tokens import TokenCounter
+    from rigtune.calibrate.tokens import TokenCounter
 
     wl = Workload(n_prompts=4, prefill_tokens=200, shared_prefix_tokens=150, decode_tokens=8)
     assert wl.prefix_text and all(p.startswith(wl.prefix_text) for p in wl.prompts)
@@ -233,9 +233,9 @@ def test_shared_prefix_workload_builds_prompts_on_one_prefix():
 
 
 def test_warmup_leaves_the_real_prefix_cached(monkeypatch):
-    import polyserve.calibrate.measure as M
-    from polyserve.backends.base import LlmtraceHooks
-    from polyserve.calibrate.tokens import TokenCounter
+    import rigtune.calibrate.measure as M
+    from rigtune.backends.base import LlmtraceHooks
+    from rigtune.calibrate.tokens import TokenCounter
 
     seen: List[List[str]] = []
 
@@ -251,7 +251,7 @@ def test_warmup_leaves_the_real_prefix_cached(monkeypatch):
 
 
 def test_prefix_cache_controls(prepared_vllm, prepared_llamacpp, monkeypatch):
-    import polyserve.backends.llamacpp as lc
+    import rigtune.backends.llamacpp as lc
 
     monkeypatch.setattr(lc, "llama_server_binary", lambda: "/opt/llama-server")
     v = get_backend("vllm")
@@ -275,8 +275,8 @@ def test_prefix_cache_controls(prepared_vllm, prepared_llamacpp, monkeypatch):
 
 @pytest.mark.usefixtures("no_network")
 def test_prefix_stage_only_for_shared_prefix_workloads(hw_gtx1080, spec, monkeypatch):
-    import polyserve.backends.llamacpp as lc
-    from polyserve.pipeline import calibrate, prepare_and_plan, select
+    import rigtune.backends.llamacpp as lc
+    from rigtune.pipeline import calibrate, prepare_and_plan, select
 
     def fake_materialize(self, m, quants):
         for q in quants:
@@ -306,7 +306,7 @@ def test_a_gated_model_says_how_to_get_in(monkeypatch):
     import huggingface_hub
     from huggingface_hub.utils import GatedRepoError
 
-    from polyserve import hfconfig
+    from rigtune import hfconfig
 
     class Gated(GatedRepoError):
         def __init__(self):
@@ -367,7 +367,7 @@ def test_vllm_offers_draft_models_only_where_supported(prepared_vllm, monkeypatc
 
 
 def test_llamacpp_speculation_needs_a_downloaded_draft(prepared_llamacpp, monkeypatch):
-    import polyserve.backends.llamacpp as lc
+    import rigtune.backends.llamacpp as lc
 
     monkeypatch.setattr(lc, "llama_server_binary", lambda: "/opt/llama-server")
     be = get_backend("llamacpp-cuda")
@@ -386,7 +386,7 @@ def test_llamacpp_speculation_needs_a_downloaded_draft(prepared_llamacpp, monkey
 
 
 def test_llamacpp_follows_the_renamed_speculative_flags(prepared_llamacpp, monkeypatch):
-    import polyserve.backends.llamacpp as lc
+    import rigtune.backends.llamacpp as lc
 
     monkeypatch.setattr(lc, "llama_server_binary", lambda: "/opt/llama-server")
     monkeypatch.setattr(lc, "server_help", lambda binary: "--spec-type ngram-mod\n--spec-draft-n-max N")
@@ -451,7 +451,7 @@ def _counting_engine(name: str) -> FastAPI:
 
 
 def test_load_balancer_spreads_requests_and_streams():
-    from polyserve.layout import create_lb_app
+    from rigtune.layout import create_lb_app
 
     a, b = _counting_engine("a"), _counting_engine("b")
     with _Server(a) as sa, _Server(b) as sb:
@@ -468,7 +468,7 @@ def test_load_balancer_spreads_requests_and_streams():
 
 
 def test_replica_and_tensor_parallel_launches(hw_a100, prepared_vllm, prepared_llamacpp, monkeypatch):
-    import polyserve.backends.llamacpp as lc
+    import rigtune.backends.llamacpp as lc
 
     monkeypatch.setattr(lc, "llama_server_binary", lambda: "/opt/llama-server")
     cfg = Config(backend="vllm", quant="fp8", ctx=4096, batch=64, gpu_memory_utilization=0.9)
@@ -489,7 +489,7 @@ def test_replica_and_tensor_parallel_launches(hw_a100, prepared_vllm, prepared_l
 
 
 def test_replica_runner_measures_through_the_balancer(tmp_path):
-    from polyserve.layout import LayoutTrialRunner
+    from rigtune.layout import LayoutTrialRunner
 
     class Counting(FakeBackend):
         def __init__(self):
@@ -510,7 +510,7 @@ def test_replica_runner_measures_through_the_balancer(tmp_path):
 
 
 def test_replica_supervisor_serves_and_stops(tmp_path):
-    from polyserve.layout import ReplicaSupervisor, create_lb_app
+    from rigtune.layout import ReplicaSupervisor, create_lb_app
 
     sup = ReplicaSupervisor(FakeBackend(), Config(backend="fake", quant="none", ctx=128, batch=1), None, [0, 1],
                             log_dir=tmp_path, startup_timeout=15)
@@ -549,7 +549,7 @@ class FakeTPRunner:
 
 @pytest.fixture
 def single_gpu_winner(no_network, spec):
-    from polyserve.pipeline import calibrate, prepare_and_plan, select
+    from rigtune.pipeline import calibrate, prepare_and_plan, select
 
     hw = two_gpus()
     candidates, reg = select(hw, spec, force="vllm")
@@ -558,7 +558,7 @@ def single_gpu_winner(no_network, spec):
 
 
 def test_layout_auto_keeps_the_best_arrangement(single_gpu_winner):
-    from polyserve.layout import _single_reference, calibrate_layout
+    from rigtune.layout import _single_reference, calibrate_layout
 
     hw, reg, base = single_gpu_winner
     ref = _single_reference(base).metrics.tok_s
@@ -579,8 +579,8 @@ def test_layout_auto_keeps_the_best_arrangement(single_gpu_winner):
 
 @pytest.mark.usefixtures("no_network")
 def test_layout_refuses_or_falls_back_on_one_gpu(hw_a100, spec):
-    from polyserve.layout import calibrate_layout
-    from polyserve.pipeline import calibrate, prepare_and_plan, select
+    from rigtune.layout import calibrate_layout
+    from rigtune.pipeline import calibrate, prepare_and_plan, select
 
     candidates, reg = select(hw_a100, spec, force="vllm")
     base = calibrate(hw_a100, spec, "throughput", prepare_and_plan(hw_a100, spec, candidates, reg), reg,
@@ -595,7 +595,7 @@ def test_layout_refuses_or_falls_back_on_one_gpu(hw_a100, spec):
 
 
 def test_options_shape_the_cache_path(tmp_home, hw_a100, spec, prepared_vllm):
-    from polyserve import cache
+    from rigtune import cache
     from tests.test_cache_and_pipeline import _profile
 
     assert SearchOptions().key() == {}
@@ -609,7 +609,7 @@ def test_options_shape_the_cache_path(tmp_home, hw_a100, spec, prepared_vllm):
 
 
 def test_cli_validates_the_new_options():
-    from polyserve.cli import app
+    from rigtune.cli import app
 
     runner = CliRunner()
     for args in (["--kv-quant", "maybe"], ["--speculative", "yes"], ["--layout", "sideways"], ["--quant", "int3"]):
@@ -620,14 +620,14 @@ def test_cli_validates_the_new_options():
 
 
 def test_phases_and_layout_are_exclusive(spec, hw_a100):
-    from polyserve.pipeline import resolve_profile
+    from rigtune.pipeline import resolve_profile
 
     with pytest.raises(RuntimeError, match="not both"):
         resolve_profile(spec, hw=hw_a100, phases="auto", layout="replicas")
 
 
 def test_trial_keys_sanitise_into_log_filenames(tmp_path):
-    from polyserve.calibrate.search import SubprocessTrialRunner
+    from rigtune.calibrate.search import SubprocessTrialRunner
 
     cfg = Config(backend="fake", quant="none", ctx=128, batch=1, spec_decode="draft:org/model:4")
     runner = SubprocessTrialRunner(backends={"fake": FakeBackend()}, models={"fake": None}, hw=make_hw("cpu"),

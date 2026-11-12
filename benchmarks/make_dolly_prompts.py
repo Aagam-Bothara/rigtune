@@ -2,11 +2,11 @@
 """Write the prompt file used for the `--workload-file` results in docs/benchmarks.md.
 
     python benchmarks/make_dolly_prompts.py --out dolly.jsonl
-    polyserve compare Qwen/Qwen2.5-3B-Instruct --workload chat --workload-file dolly.jsonl --repeats 3
+    rigtune compare Qwen/Qwen2.5-3B-Instruct --workload chat --workload-file dolly.jsonl --repeats 3
 
     # 300 more, disjoint from those, to measure a pick on prompts its calibration never saw:
     python benchmarks/make_dolly_prompts.py --offset 300 --out dolly-heldout.jsonl
-    polyserve compare ... --workload-file dolly.jsonl --eval-workload-file dolly-heldout.jsonl
+    rigtune compare ... --workload-file dolly.jsonl --eval-workload-file dolly-heldout.jsonl
 
 The prompts come from databricks-dolly-15k (CC BY-SA 3.0), a dataset none of the presets use: rows
 after a seed-0 shuffle (the first 300 by default), each row's context (when it has one) followed by

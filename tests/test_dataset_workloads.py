@@ -6,11 +6,11 @@ import asyncio
 
 import pytest
 
-import polyserve.calibrate.datasets as D
-import polyserve.calibrate.measure as M
-from polyserve.backends.base import LlmtraceHooks
-from polyserve.calibrate.tokens import TokenCounter
-from polyserve.calibrate.workload import WORKLOAD_NAMES, Workload, get_workload
+import rigtune.calibrate.datasets as D
+import rigtune.calibrate.measure as M
+from rigtune.backends.base import LlmtraceHooks
+from rigtune.calibrate.tokens import TokenCounter
+from rigtune.calibrate.workload import WORKLOAD_NAMES, Workload, get_workload
 
 
 @pytest.fixture

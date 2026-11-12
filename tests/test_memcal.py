@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from polyserve import memcal
-from polyserve.memlog import MeasuredMemory, merge, parse_llamacpp, parse_log, parse_sglang, parse_vllm
-from polyserve.memory import DEFAULT_MARGIN_FRACTION, MemoryModel, estimate, safety_margin
-from polyserve.models import Config, GiB, MemoryEstimate, MemoryObservation, MiB, TrialMetrics, TrialResult
+from rigtune import memcal
+from rigtune.memlog import MeasuredMemory, merge, parse_llamacpp, parse_log, parse_sglang, parse_vllm
+from rigtune.memory import DEFAULT_MARGIN_FRACTION, MemoryModel, estimate, safety_margin
+from rigtune.models import Config, GiB, MemoryEstimate, MemoryObservation, MiB, TrialMetrics, TrialResult
 
 VLLM_LOG = """
 INFO 09-10 18:14:01 [model_runner.py] Model loading took 6.4265 GiB memory and 8.16 seconds
@@ -127,12 +127,12 @@ def test_analysis_reports_error_bias_and_recommendations():
 
 
 def test_overrides_roundtrip_and_planner_uses_them(tmp_home, hw_a100, prepared_llamacpp):
-    from polyserve.backends import get_backend
+    from rigtune.backends import get_backend
 
     be = get_backend("llamacpp-cuda")
     assert not be.memory_model(hw_a100).calibrated
     assert be.memory_model(hw_a100).runtime_workspace == be.runtime_workspace_bytes
-    from polyserve.hardware import hardware_hash
+    from rigtune.hardware import hardware_hash
 
     hh = hardware_hash(hw_a100)
     cal = memcal.BackendCalibration(backend="llamacpp-cuda", n=3, n_measured=3, fitted_workspace_mb=330.0,
@@ -156,9 +156,9 @@ def test_overrides_roundtrip_and_planner_uses_them(tmp_home, hw_a100, prepared_l
 def test_runner_records_observation(tmp_path):
     """The real subprocess runner attaches prediction + measurement to every trial."""
     from tests.test_supervisor import FakeBackend, _cfg
-    from polyserve.calibrate.search import SubprocessTrialRunner
-    from polyserve.calibrate.workload import Workload
-    from polyserve.models import ArchInfo, ModelSpec, PreparedModel
+    from rigtune.calibrate.search import SubprocessTrialRunner
+    from rigtune.calibrate.workload import Workload
+    from rigtune.models import ArchInfo, ModelSpec, PreparedModel
     from tests.conftest import make_hw
 
     hw = make_hw("cpu")

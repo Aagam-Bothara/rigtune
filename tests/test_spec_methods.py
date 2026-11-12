@@ -6,7 +6,7 @@ import importlib.util
 
 import pytest
 
-from polyserve import speculative
+from rigtune import speculative
 
 
 def test_the_new_methods_become_vllm_speculative_configs():
@@ -38,8 +38,8 @@ def test_suffix_decoding_needs_arctic_inference(monkeypatch):
     ("0.11.0", False, ["ngram:4"]),  # no separate draft model before 0.12
 ])
 def test_vllm_offers_what_the_installed_release_supports(monkeypatch, prepared_vllm, version, arctic, expected):
-    from polyserve.backends import get_backend
-    from polyserve.models import Config
+    from rigtune.backends import get_backend
+    from rigtune.models import Config
 
     monkeypatch.setattr(speculative, "_vllm_version", lambda: version)
     real = importlib.util.find_spec

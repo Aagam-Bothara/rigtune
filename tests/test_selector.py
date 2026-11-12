@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from polyserve.backends import registry
-from polyserve.selector import select_backends
+from rigtune.backends import registry
+from rigtune.selector import select_backends
 
 
 @pytest.mark.usefixtures("no_network")
@@ -42,7 +42,7 @@ def test_unavailable_backend_excluded(hw_a100, spec):
 
 @pytest.mark.usefixtures("no_network")
 def test_unsupported_arch_excluded_from_vllm(hw_a100, spec, monkeypatch, llama3b_arch):
-    import polyserve.backends.vllm as vl
+    import rigtune.backends.vllm as vl
 
     monkeypatch.setattr(vl, "vllm_registry_archs", lambda: {"SomethingElse"})
     assert "vllm" not in select_backends(hw_a100, spec, registry())

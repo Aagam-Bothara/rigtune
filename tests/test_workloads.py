@@ -5,13 +5,13 @@ from dataclasses import replace
 import pytest
 from typer.testing import CliRunner
 
-from polyserve import cache
-from polyserve.backends import get_backend
-from polyserve.backends.base import ctx_grid
-from polyserve.calibrate.workload import WORKLOAD_NAMES, Workload, get_workload, workload_table
-from polyserve.cli import app
-from polyserve.memory import plan
-from polyserve.pipeline import default_profile, prepare_and_plan, select
+from rigtune import cache
+from rigtune.backends import get_backend
+from rigtune.backends.base import ctx_grid
+from rigtune.calibrate.workload import WORKLOAD_NAMES, Workload, get_workload, workload_table
+from rigtune.cli import app
+from rigtune.memory import plan
+from rigtune.pipeline import default_profile, prepare_and_plan, select
 
 
 def test_presets_are_sane():

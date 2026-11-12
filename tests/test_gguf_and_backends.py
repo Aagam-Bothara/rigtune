@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from polyserve.backends import get_backend, registry
-from polyserve.gguf import GGUF_QUANTS, estimate_gguf_bytes, match_gguf_files
-from polyserve.models import Config
+from rigtune.backends import get_backend, registry
+from rigtune.gguf import GGUF_QUANTS, estimate_gguf_bytes, match_gguf_files
+from rigtune.models import Config
 
 
 def test_match_gguf_files_picks_single_file_quants():
@@ -90,7 +90,7 @@ def test_llamacpp_refuses_unmaterialized_gguf(hw_gtx1080, prepared_llamacpp):
 
 
 def test_llamacpp_cpu_sets_threads_and_hides_gpu(hw_cpu, prepared_llamacpp, monkeypatch):
-    import polyserve.backends.llamacpp as lc
+    import rigtune.backends.llamacpp as lc
 
     monkeypatch.setattr(lc, "llama_server_binary", lambda: "/opt/llama-server")
     be = get_backend("llamacpp-cpu")

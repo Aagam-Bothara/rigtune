@@ -1,9 +1,9 @@
-"""How long a PolyServe pick has to serve before its calibration has paid for itself.
+"""How long a rigtune pick has to serve before its calibration has paid for itself.
 
 Calibration occupies the GPU without serving. Against the fastest stock setup that met the objective's
 limits in the same comparison, the pick's extra throughput repays that time after
 
-    break-even hours = calibration seconds x stock tok/s / (PolyServe tok/s - stock tok/s) / 3600
+    break-even hours = calibration seconds x stock tok/s / (rigtune tok/s - stock tok/s) / 3600
 
 of serving at the load the comparison scored. That prices throughput, for a server kept busy; at light
 traffic a pick's value is its latency instead, which this does not count. A pick no faster than stock
@@ -19,13 +19,14 @@ import json
 import math
 from pathlib import Path
 from typing import Dict, List, Optional
+from rigtune.bench.compare import self_label
 
 
 def break_even(path: Path) -> Optional[Dict[str, object]]:
-    """The break-even of one `polyserve compare` results file, or None when it has no calibrated pick."""
+    """The break-even of one `rigtune compare` results file, or None when it has no calibrated pick."""
     d = json.loads(path.read_text(encoding="utf-8"))
-    rows = {r["label"]: r for r in d.get("rows", [])}
-    ps = rows.get("polyserve")
+    rows = {self_label(r["label"]): r for r in d.get("rows", [])}
+    ps = rows.get("rigtune")
     if ps is None or not ps.get("ok") or not ps.get("calibration_seconds") or not ps.get("scored_tok_s"):
         return None
     run = path.parent  # a rerun kept in a folder inside a results folder (results-dolly/p95) is labelled
@@ -37,7 +38,7 @@ def break_even(path: Path) -> Optional[Dict[str, object]]:
         "stock": None, "stock_tok_s": None, "hours": None,
     }
     stock = [r for label, r in rows.items()
-             if label != "polyserve" and r.get("ok") and r.get("meets_slo") and r.get("scored_tok_s")]
+             if label != "rigtune" and r.get("ok") and r.get("meets_slo") and r.get("scored_tok_s")]
     if stock:
         best = max(stock, key=lambda r: r["scored_tok_s"])
         gain = out["tok_s"] - float(best["scored_tok_s"])
@@ -55,7 +56,7 @@ def _cell(r: Dict[str, object]) -> str:
 
 
 def table(results: List[Dict[str, object]]) -> str:
-    lines = ["| GPU | model | workload | calibration | PolyServe tok/s | fastest stock that met the limits | "
+    lines = ["| GPU | model | workload | calibration | rigtune tok/s | fastest stock that met the limits | "
              "break-even |", "|---|---|---|---|---|---|---|"]
     for r in results:
         stock = f"{r['stock']} {r['stock_tok_s']:.0f}" if r["stock"] else "-"
@@ -66,7 +67,7 @@ def table(results: List[Dict[str, object]]) -> str:
 
 def main(argv: Optional[List[str]] = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("dirs", nargs="+", type=Path, help="folders of `polyserve compare` results")
+    ap.add_argument("dirs", nargs="+", type=Path, help="folders of `rigtune compare` results")
     args = ap.parse_args(argv)
     files = sorted({f for d in args.dirs for f in Path(d).glob("*.json")})
     print(table([r for r in (break_even(f) for f in files) if r is not None]))

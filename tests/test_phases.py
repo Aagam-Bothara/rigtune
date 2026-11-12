@@ -15,13 +15,13 @@ from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from polyserve import disagg as D
-from polyserve.backends import get_backend
-from polyserve.calibrate.objectives import Constraints, pick
-from polyserve.calibrate.search import StagedSearch
-from polyserve.calibrate.workload import Workload, get_workload
-from polyserve.models import Config, DisaggSpec, TrialMetrics, TrialResult
-from polyserve.power import PowerSetting
+from rigtune import disagg as D
+from rigtune.backends import get_backend
+from rigtune.calibrate.objectives import Constraints, pick
+from rigtune.calibrate.search import StagedSearch
+from rigtune.calibrate.workload import Workload, get_workload
+from rigtune.models import Config, DisaggSpec, TrialMetrics, TrialResult
+from rigtune.power import PowerSetting
 from tests.conftest import make_hw
 from tests.test_measure_and_proxy import _Server
 from tests.test_objectives_and_search import FakeRunner, _feasible_a100
@@ -42,7 +42,7 @@ def two_gpus(kind: str = "a100"):
 
 
 def test_prefill_knob_reaches_every_engine(hw_a100, prepared_vllm, prepared_llamacpp, monkeypatch):
-    import polyserve.backends.llamacpp as lc
+    import rigtune.backends.llamacpp as lc
 
     monkeypatch.setattr(lc, "llama_server_binary", lambda: "/opt/llama-server")
     v = get_backend("vllm").launch_spec(Config(backend="vllm", quant="fp8", ctx=4096, batch=64, prefill_budget=16384),
@@ -121,7 +121,7 @@ def test_staged_search_tunes_the_prefill_knob_on_the_leader(hw_a100, prepared_vl
 
 @pytest.mark.usefixtures("no_network")
 def test_calibration_tunes_prefill_by_default_and_can_skip_it(hw_a100, spec):
-    from polyserve.pipeline import calibrate, prepare_and_plan, select
+    from rigtune.pipeline import calibrate, prepare_and_plan, select
 
     candidates, reg = select(hw_a100, spec, force="vllm")
     planned = prepare_and_plan(hw_a100, spec, candidates, reg)
@@ -132,7 +132,7 @@ def test_calibration_tunes_prefill_by_default_and_can_skip_it(hw_a100, spec):
 
 
 def test_predictor_respects_a_tpot_ceiling(hw_rtx4090, prepared_vllm):
-    from polyserve import predict as P
+    from rigtune import predict as P
 
     pred = P.Predictor(hw_rtx4090, {"vllm": P.PerfParams(alpha=0.6, beta=0.35, overhead_s=0.004, fitted=True)})
     cfg = Config(backend="vllm", quant="bf16", ctx=4096, batch=64, gpu_memory_utilization=0.9)
@@ -338,7 +338,7 @@ class FakeDisaggRunner:
 
 @pytest.fixture
 def unified_base(no_network, spec, monkeypatch):
-    from polyserve.pipeline import calibrate, prepare_and_plan, select
+    from rigtune.pipeline import calibrate, prepare_and_plan, select
 
     monkeypatch.setattr(D, "connector_available", lambda pkg: True)
     hw = two_gpus()
@@ -376,7 +376,7 @@ def test_disaggregated_is_served_when_asked_even_if_slower(unified_base, spec):
 
 @pytest.mark.usefixtures("no_network")
 def test_unsupported_machines_fail_or_fall_back(spec, monkeypatch):
-    from polyserve.pipeline import calibrate, prepare_and_plan, select
+    from rigtune.pipeline import calibrate, prepare_and_plan, select
 
     hw = make_hw("a100")  # one GPU
     candidates, reg = select(hw, spec, force="vllm")
@@ -388,7 +388,7 @@ def test_unsupported_machines_fail_or_fall_back(spec, monkeypatch):
 
 
 def test_profiles_are_cached_per_phase_mode(tmp_home, hw_a100, spec, prepared_vllm):
-    from polyserve import cache
+    from rigtune import cache
     from tests.test_cache_and_pipeline import _profile
 
     p = _profile(hw_a100, spec, prepared_vllm)
@@ -401,7 +401,7 @@ def test_profiles_are_cached_per_phase_mode(tmp_home, hw_a100, spec, prepared_vl
 
 
 def test_cli_phase_options():
-    from polyserve.cli import app
+    from rigtune.cli import app
 
     r = CliRunner().invoke(app, ["bench", "x/y", "--phases", "sideways"])
     assert r.exit_code != 0
@@ -409,10 +409,10 @@ def test_cli_phase_options():
     assert r.exit_code == 0 and "TPOT" in r.output
 
 
-def test_report_draws_polyserve_in_its_own_colour():
-    from polyserve.bench.report import RUNTIME_COLOR, render_svg
+def test_report_draws_rigtune_in_its_own_colour():
+    from rigtune.bench.report import RUNTIME_COLOR, render_svg
     from tests.test_report import _result, _row
 
-    svg = render_svg([_result("A100", "m/a", "chat", [_row("polyserve", "vllm", 1500, 50),
+    svg = render_svg([_result("A100", "m/a", "chat", [_row("rigtune", "vllm", 1500, 50),
                                                       _row("vllm-default", "vllm", 1000, 60)])])
-    assert f'fill="{RUNTIME_COLOR["polyserve"]}" stroke' in svg  # filled PolyServe point, not vLLM blue
+    assert f'fill="{RUNTIME_COLOR["rigtune"]}" stroke' in svg  # filled rigtune point, not vLLM blue

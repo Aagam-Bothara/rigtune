@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Measure --power on real hardware: the one feature so far tested only against a simulated NVML.
 # It needs root on a machine you control (NVML power limits and clock locks are machine-wide), so it
-# cannot run on a rented container. From the repo root, in the environment where polyserve is installed:
+# cannot run on a rented container. From the repo root, in the environment where rigtune is installed:
 #
 #   sudo -E env PATH="$PATH" benchmarks/measure_power.sh [model] [workloads...]
 #
@@ -15,12 +15,12 @@ shift || true
 WORKLOADS=${*:-generation rag}
 OUT=benchmarks/strategies/results-power
 
-polyserve power status
-trap 'polyserve power reset || true' EXIT
+rigtune power status
+trap 'rigtune power reset || true' EXIT
 for wl in $WORKLOADS; do
   for objective in efficiency balanced; do
     echo "=== $MODEL / $wl / $objective / --power both"
-    polyserve compare "$MODEL" --workload "$wl" --objective "$objective" --power both --out "$OUT"
+    rigtune compare "$MODEL" --workload "$wl" --objective "$objective" --power both --out "$OUT"
   done
 done
 echo "results in $OUT; regenerate SUMMARY.md with the command in benchmarks/summarize_strategies.py"

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 
-from polyserve import predict as P
-from polyserve.calibrate.search import StagedSearch
-from polyserve.models import Config, Profile, TrialMetrics, TrialResult
+from rigtune import predict as P
+from rigtune.calibrate.search import StagedSearch
+from rigtune.models import Config, Profile, TrialMetrics, TrialResult
 from tests.conftest import make_hw
 from tests.test_objectives_and_search import FakeRunner
 
@@ -79,7 +79,7 @@ def test_fit_recovers_synthetic_parameters(hw_rtx4090):
 
 
 def test_params_roundtrip_and_predictor(tmp_home, hw_rtx4090, prepared_vllm):
-    from polyserve.hardware import hardware_hash
+    from rigtune.hardware import hardware_hash
 
     hh = hardware_hash(hw_rtx4090)
     assert not P.Predictor(hw_rtx4090).is_fitted("vllm")
@@ -102,7 +102,7 @@ def test_observations_from_profile(hw_rtx4090, spec, prepared_vllm):
     good = TrialResult(config=cfg, stage="quant", metrics=TrialMetrics(tok_s=800, ttft_ms=240, requests=48,
                                                                         output_tokens=300, by_concurrency=by))
     bad = TrialResult(config=cfg, stage="quant", metrics=TrialMetrics(), launched=False, error="oom")
-    prof = Profile(polyserve_version="0", hardware_hash="h", hardware=hw_rtx4090, model_id=spec.hf_id,
+    prof = Profile(rigtune_version="0", hardware_hash="h", hardware=hw_rtx4090, model_id=spec.hf_id,
                    objective="balanced", workload="chat", workload_spec={"prefill_tokens": 512, "decode_tokens": 128},
                    backend="vllm", backend_version="1", config=cfg, prepared=prepared_vllm, launch_args=[],
                    calibration_table=[good, bad])
@@ -112,8 +112,8 @@ def test_observations_from_profile(hw_rtx4090, spec, prepared_vllm):
 
 
 def test_search_prunes_with_fitted_predictor(hw_a100, prepared_vllm):
-    from polyserve.backends import get_backend
-    from polyserve.memory import plan
+    from rigtune.backends import get_backend
+    from rigtune.memory import plan
 
     be = get_backend("vllm")
     feasible = [c for c, _ in plan(hw_a100, prepared_vllm, be.candidate_configs(hw_a100, prepared_vllm), be.memory_model(hw_a100))]

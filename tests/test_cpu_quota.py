@@ -1,8 +1,8 @@
-"""Inside a container PolyServe sizes CPU threads to the cgroup quota, not the host's visible cores."""
+"""Inside a container rigtune sizes CPU threads to the cgroup quota, not the host's visible cores."""
 
 from __future__ import annotations
 
-import polyserve.hardware as hwmod
+import rigtune.hardware as hwmod
 
 
 def test_cgroup_v2_quota(tmp_path):

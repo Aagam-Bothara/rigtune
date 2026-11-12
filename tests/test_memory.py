@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from polyserve.backends.llamacpp import LlamaCppCudaBackend
-from polyserve.backends.vllm import PAGED_KV_FRACTION, VllmBackend
-from polyserve.memory import MemoryModel, estimate, kv_cache_bytes, plan, safety_margin
-from polyserve.models import Config, GiB, MiB
+from rigtune.backends.llamacpp import LlamaCppCudaBackend
+from rigtune.backends.vllm import PAGED_KV_FRACTION, VllmBackend
+from rigtune.memory import MemoryModel, estimate, kv_cache_bytes, plan, safety_margin
+from rigtune.models import Config, GiB, MiB
 
 
 def test_safety_margin_rule():
@@ -79,7 +79,7 @@ def test_llamacpp_kv_is_full_context_times_slots(hw_gtx1080, prepared_llamacpp):
 
 
 def test_cpu_planner_uses_ram(hw_cpu, prepared_llamacpp):
-    from polyserve.backends.llamacpp import LlamaCppCpuBackend
+    from rigtune.backends.llamacpp import LlamaCppCpuBackend
 
     be = LlamaCppCpuBackend()
     prepared_llamacpp.backend = "llamacpp-cpu"

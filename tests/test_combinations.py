@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List
 
-from polyserve.calibrate.search import StagedSearch
-from polyserve.models import Config, TrialMetrics, TrialResult
+from rigtune.calibrate.search import StagedSearch
+from rigtune.models import Config, TrialMetrics, TrialResult
 
 BASE = Config(backend="llamacpp-cuda", quant="Q4_K_M", ctx=8192, batch=8, n_gpu_layers=37, n_batch=512)
 

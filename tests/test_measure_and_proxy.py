@@ -14,12 +14,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.testclient import TestClient
 
-from polyserve.backends.base import LlmtraceHooks
-from polyserve.calibrate.measure import RequestOutcome, _metrics_from, _parse_sse_line, run_trial
-from polyserve.calibrate.tokens import TokenCounter, worst_source
-from polyserve.calibrate.workload import Workload
-from polyserve.drift import TrafficWatch
-from polyserve.serve.proxy import create_app
+from rigtune.backends.base import LlmtraceHooks
+from rigtune.calibrate.measure import RequestOutcome, _metrics_from, _parse_sse_line, run_trial
+from rigtune.calibrate.tokens import TokenCounter, worst_source
+from rigtune.calibrate.workload import Workload
+from rigtune.drift import TrafficWatch
+from rigtune.serve.proxy import create_app
 
 
 def fake_upstream(token_delay_s: float = 0.002) -> FastAPI:
@@ -149,7 +149,7 @@ def test_proxy_streams_and_forwards(upstream):
             assert s.headers["content-type"].startswith("text/event-stream")
             lines = [ln for ln in s.iter_lines() if ln.startswith("data:")]
         assert lines[-1] == "data: [DONE]" and len(lines) == 4  # 2 content chunks + usage + DONE
-        assert client.get("/polyserve/profile").status_code == 404
+        assert client.get("/rigtune/profile").status_code == 404
 
 
 def test_the_proxy_times_the_first_streamed_chunk(upstream):
@@ -191,7 +191,7 @@ def test_proxy_profile_endpoint(hw_a100, spec, prepared_vllm):
     p = _profile(hw_a100, spec, prepared_vllm)
     app = create_app("http://127.0.0.1:9", profile=p, status_fn=lambda: {"alive": True, "restarts": 0})
     with TestClient(app) as client:
-        data = client.get("/polyserve/profile").json()
+        data = client.get("/rigtune/profile").json()
         assert data["backend"] == "vllm" and data["config"]["batch"] == 64
         assert data["runtime"]["restarts"] == 0
 
@@ -199,7 +199,7 @@ def test_proxy_profile_endpoint(hw_a100, spec, prepared_vllm):
 def test_telemetry_without_gpu_falls_back_to_process(monkeypatch):
     import os
 
-    from polyserve.calibrate.measure import Telemetry
+    from rigtune.calibrate.measure import Telemetry
 
     with Telemetry(LlmtraceHooks(gpu_ids=[], process_memory=True), pid=os.getpid(), interval_ms=20) as t:
         time.sleep(0.15)
@@ -243,7 +243,7 @@ def test_worst_source_and_prompt_fitting():
 
 def test_trial_tolerates_a_few_degenerate_requests():
     """A small model emitting EOS immediately must not invalidate a whole trial."""
-    from polyserve.models import TrialMetrics
+    from rigtune.models import TrialMetrics
 
     assert TrialMetrics(requests=48, failed=2, output_tokens=6000).ok      # 4%, tolerated
     assert TrialMetrics(requests=48, failed=4, output_tokens=6000).ok      # exactly 8.3%

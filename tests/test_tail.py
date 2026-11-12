@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import math
 
-import polyserve.calibrate.measure as M
-from polyserve.backends.base import LlmtraceHooks
-from polyserve.calibrate.objectives import Constraints, close_call_level
-from polyserve.calibrate.tail import attained_confidence, quantile_interval, samples_needed
-from polyserve.calibrate.tokens import TokenCounter
-from polyserve.calibrate.workload import Workload
-from polyserve.models import TrialMetrics
+import rigtune.calibrate.measure as M
+from rigtune.backends.base import LlmtraceHooks
+from rigtune.calibrate.objectives import Constraints, close_call_level
+from rigtune.calibrate.tail import attained_confidence, quantile_interval, samples_needed
+from rigtune.calibrate.tokens import TokenCounter
+from rigtune.calibrate.workload import Workload
+from rigtune.models import TrialMetrics
 
 
 def test_the_interval_brackets_the_sample_percentile_and_narrows_with_more_samples():

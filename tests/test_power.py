@@ -8,12 +8,12 @@ from typing import List, Optional
 import pytest
 from typer.testing import CliRunner
 
-from polyserve import power as P
-from polyserve.calibrate.objectives import Constraints, pick
-from polyserve.calibrate.search import StagedSearch, SubprocessTrialRunner
-from polyserve.calibrate.workload import Workload
-from polyserve.models import ArchInfo, Config, ModelSpec, PreparedModel, TrialMetrics, TrialResult
-from polyserve.power import Capabilities, PowerControlUnavailable, PowerSetting, candidate_points, with_power
+from rigtune import power as P
+from rigtune.calibrate.objectives import Constraints, pick
+from rigtune.calibrate.search import StagedSearch, SubprocessTrialRunner
+from rigtune.calibrate.workload import Workload
+from rigtune.models import ArchInfo, Config, ModelSpec, PreparedModel, TrialMetrics, TrialResult
+from rigtune.power import Capabilities, PowerControlUnavailable, PowerSetting, candidate_points, with_power
 from tests.test_objectives_and_search import FakeRunner, _feasible_a100
 
 DEFAULT_W, MAX_MHZ = 350, 1695
@@ -204,7 +204,7 @@ def test_reset_from_file_undoes_a_crashed_run(tmp_home):
     nv = FakeNVML()
     P.NvmlPowerController(0, nvml=nv).apply(PowerSetting(power_limit_w=192))
     assert nv.limit_mw == 192_000 and P.pending_restore() is not None
-    # The process dies here without restoring. A later `polyserve power reset`:
+    # The process dies here without restoring. A later `rigtune power reset`:
     state = P.reset_from_file(nvml=nv)
     assert state["power_limit_mw"] == 350_000 and nv.limit_mw == 350_000
     assert P.pending_restore() is None
@@ -349,7 +349,7 @@ def test_runner_run_applies_and_restores_a_power_config(tmp_path):
 
 
 def test_supervisor_serves_at_the_calibrated_setting(tmp_path):
-    from polyserve.serve.supervisor import Supervisor
+    from rigtune.serve.supervisor import Supervisor
     from tests.test_supervisor import FakeBackend
 
     ctl = FakeController()
@@ -385,7 +385,7 @@ def test_config_keys_distinguish_power_but_share_a_base():
 
 
 def test_profile_cache_is_keyed_by_power_mode(tmp_home, hw_a100, spec, prepared_vllm):
-    from polyserve import cache
+    from rigtune import cache
     from tests.test_cache_and_pipeline import _profile
 
     p = _profile(hw_a100, spec, prepared_vllm)
@@ -398,7 +398,7 @@ def test_profile_cache_is_keyed_by_power_mode(tmp_home, hw_a100, spec, prepared_
 
 
 def test_setup_power_explains_what_it_skips(hw_a100, hw_cpu):
-    from polyserve.pipeline import setup_power
+    from rigtune.pipeline import setup_power
 
     ctl, pts, notes = setup_power(hw_cpu, "both")
     assert ctl is None and pts == [] and "no GPU" in notes[0]
@@ -416,8 +416,8 @@ def test_setup_power_explains_what_it_skips(hw_a100, hw_cpu):
 
 
 def test_cli_power_status_and_option_validation(monkeypatch, hw_a100):
-    import polyserve.hardware as hwmod
-    from polyserve.cli import app
+    import rigtune.hardware as hwmod
+    from rigtune.cli import app
 
     monkeypatch.setattr(hwmod, "probe", lambda: hw_a100)
     monkeypatch.setattr(P, "controller_for", lambda i: FakeController())

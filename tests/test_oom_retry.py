@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from polyserve.calibrate.search import StagedSearch
-from polyserve.models import Config, TrialMetrics, TrialResult
+from rigtune.calibrate.search import StagedSearch
+from rigtune.models import Config, TrialMetrics, TrialResult
 
 OOM = "out of memory at start-up; failed to start (rc=1)"
 

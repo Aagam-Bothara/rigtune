@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-import polyserve.quantized as Q
-from polyserve.backends import registry
-from polyserve.models import Config
-from polyserve.pipeline import SearchOptions, _usable, allowed_quants, prepare_and_plan
+import rigtune.quantized as Q
+from rigtune.backends import registry
+from rigtune.models import Config
+from rigtune.pipeline import SearchOptions, _usable, allowed_quants, prepare_and_plan
 
 
 def test_auto_skips_4bit_checkpoints_unless_asked():
@@ -51,7 +51,7 @@ def test_options_and_cached_profiles_follow_the_default(hw_a100, spec, prepared_
 
 
 def test_cli_accepts_auto_inside_a_list():
-    from polyserve.cli import _opts, _quant_list
+    from rigtune.cli import _opts, _quant_list
 
     assert _quant_list("auto,awq") == "auto,awq"
     assert _opts("auto,awq", "on", "on", "on").quants == ["auto", "awq"]

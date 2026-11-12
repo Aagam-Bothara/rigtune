@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import typer
 
-from polyserve.calibrate.objectives import Constraints
-from polyserve.cli import _opts, app
-from polyserve.pipeline import SearchOptions, level_rule
+from rigtune.calibrate.objectives import Constraints
+from rigtune.cli import _opts, app
+from rigtune.pipeline import SearchOptions, level_rule
 
 
 def test_the_shortcut_is_on_by_default_and_off_when_asked():

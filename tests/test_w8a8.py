@@ -6,13 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from polyserve import quantized as Q
-from polyserve.backends import get_backend
-from polyserve.bench.ablation import strategy_variants
-from polyserve.calibrate.workload import get_workload
-from polyserve.cli import _quant_list
-from polyserve.models import Config, ModelSpec
-from polyserve.pipeline import allowed_quants
+from rigtune import quantized as Q
+from rigtune.backends import get_backend
+from rigtune.bench.ablation import strategy_variants
+from rigtune.calibrate.workload import get_workload
+from rigtune.cli import _quant_list
+from rigtune.models import Config, ModelSpec
+from rigtune.pipeline import allowed_quants
 from tests.conftest import make_hw
 
 

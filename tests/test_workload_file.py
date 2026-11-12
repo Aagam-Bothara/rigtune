@@ -7,10 +7,10 @@ import logging
 
 import pytest
 
-from polyserve.calibrate import datasets
-from polyserve.calibrate.measure import _level_workload
-from polyserve.calibrate.tokens import TokenCounter
-from polyserve.calibrate.workload import get_workload, workload_from_file
+from rigtune.calibrate import datasets
+from rigtune.calibrate.measure import _level_workload
+from rigtune.calibrate.tokens import TokenCounter
+from rigtune.calibrate.workload import get_workload, workload_from_file
 
 
 def _write(tmp_path, lines, name="prompts.jsonl"):

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from polyserve.bench import compare
-from polyserve.bench.baselines import random_search, rule_of_thumb, search_space
-from polyserve.calibrate.objectives import Constraints
-from polyserve.calibrate.workload import get_workload
-from polyserve.models import Config, TrialMetrics, TrialResult
-from polyserve.pipeline import calibrate, combination_fits, prepare_and_plan, select
+from rigtune.bench import compare
+from rigtune.bench.baselines import random_search, rule_of_thumb, search_space
+from rigtune.calibrate.objectives import Constraints
+from rigtune.calibrate.workload import get_workload
+from rigtune.models import Config, TrialMetrics, TrialResult
+from rigtune.pipeline import calibrate, combination_fits, prepare_and_plan, select
 from tests.test_compare import CompareRunner
 from tests.test_objectives_and_search import FakeRunner
 
@@ -78,4 +78,4 @@ def test_other_searches_picks_are_compared_as_rows_of_their_own(hw_a100, spec):
     rule = rule_of_thumb(hw_a100, plan, reg)
     result = compare(hw_a100, spec, profile, plan.prepared, reg, runner=CompareRunner(), include=["vllm-default"],
                      extra={"rule-of-thumb": rule})
-    assert [r.label for r in result.rows] == ["polyserve", "vllm-default", "rule-of-thumb"]
+    assert [r.label for r in result.rows] == ["rigtune", "vllm-default", "rule-of-thumb"]

@@ -2,7 +2,7 @@
 """Write held-out prompts from OpenAssistant (oasst2, Apache-2.0): the opening user turn of English conversations.
 
     python benchmarks/make_oasst_prompts.py --out oasst.jsonl
-    polyserve compare <model> --workload chat --workload-file dolly.jsonl --eval-workload-file oasst.jsonl --repeats 3
+    rigtune compare <model> --workload chat --workload-file dolly.jsonl --eval-workload-file oasst.jsonl --repeats 3
 
 Nothing else in the repository uses this dataset, so a pick calibrated on other prompts meets these for the
 first time. The first 300 distinct openers after a seed-0 shuffle; they are not committed, this script

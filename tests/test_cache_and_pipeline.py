@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from polyserve import cache
-from polyserve.hardware import hardware_hash
-from polyserve.models import Config, Profile
-from polyserve.pipeline import calibrate, default_profile, prepare_and_plan, resolve_profile, select
+from rigtune import cache
+from rigtune.hardware import hardware_hash
+from rigtune.models import Config, Profile
+from rigtune.pipeline import calibrate, default_profile, prepare_and_plan, resolve_profile, select
 from tests.test_objectives_and_search import FakeRunner
 
 
 def _profile(hw, spec, prepared) -> Profile:
     return Profile(
-        polyserve_version="0.1.0", hardware_hash=hardware_hash(hw), hardware=hw, model_id=spec.hf_id,
+        rigtune_version="0.1.0", hardware_hash=hardware_hash(hw), hardware=hw, model_id=spec.hf_id,
         objective="balanced", backend="vllm", backend_version="1.0",
         config=Config(backend="vllm", quant="bf16", ctx=4096, batch=64, gpu_memory_utilization=0.9),
         prepared=prepared, launch_args=["python", "-m", "vllm"],
@@ -75,7 +75,7 @@ def test_calibrate_produces_profile_with_table(hw_a100, spec):
 
 @pytest.mark.usefixtures("no_network")
 def test_resolve_profile_caches_then_hits(tmp_home, hw_a100, spec, monkeypatch):
-    import polyserve.pipeline as pl
+    import rigtune.pipeline as pl
 
     calls = {"n": 0}
     runner = FakeRunner()
@@ -96,7 +96,7 @@ def test_resolve_profile_caches_then_hits(tmp_home, hw_a100, spec, monkeypatch):
 
 @pytest.mark.usefixtures("no_network")
 def test_resolve_profile_skip_calibration(tmp_home, hw_cpu, spec, monkeypatch):
-    import polyserve.backends.llamacpp as lc
+    import rigtune.backends.llamacpp as lc
 
     def fake_materialize(self, m, quants):
         for q in quants:
