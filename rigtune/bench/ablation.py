@@ -20,6 +20,7 @@ from rigtune.backends.base import BaseBackend
 from rigtune.backends.vllm import KV_ATTENTION
 from rigtune.bench.compare import results_path
 from rigtune.calibrate.objectives import Constraints, _e2e_latency, rank
+from rigtune.calibrate.paired import mcnemar_p
 from rigtune.calibrate.workload import Workload
 from rigtune.memory import estimate
 from rigtune.models import Config, HardwareDescriptor, ModelSpec, PreparedModel, TrialMetrics, TrialResult
@@ -277,14 +278,6 @@ def gguf_quality_table(path: Path, reference: str = "q8_0") -> str:
     for q, v in ppl.items():
         lines.append(f"| {q.upper()} | {v:.3f} | {'' if not ref or q == reference else f'{(v / ref - 1) * 100:+.1f}%'} |")
     return "\n".join(lines)
-
-
-def mcnemar_p(lost: int, gained: int) -> float:
-    """Two-sided exact McNemar test: how lopsided the split is among problems only one side got right."""
-    n = lost + gained
-    if n == 0:
-        return 1.0
-    return min(1.0, 2 * sum(math.comb(n, i) for i in range(min(lost, gained) + 1)) / 2 ** n)
 
 
 def task_quality_table(paths: Sequence[Path]) -> str:
