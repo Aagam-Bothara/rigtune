@@ -83,3 +83,44 @@ def test_a_gated_profile_is_reused_only_on_the_same_eval_set(tmp_path, hw_a100, 
     assert _usable(base, SearchOptions(), None)  # ungated options never look at the set
     f.write_bytes(b'{"prompt": "2 + 2?", "answer": "4", "grader": "number"}\n')
     assert not _usable(gated, opts, None)  # same name, different items: grade again
+
+
+def test_auto_takes_prequantized_checkpoints_only_when_an_eval_set_gates_them():
+    assert SearchOptions().search_quants() is None  # ungated: auto, as before
+    assert SearchOptions(quants=["auto", "awq"]).search_quants() == ["auto", "awq"]
+    gated = SearchOptions(eval_set="gsm8k")
+    assert gated.search_quants() == ["auto", *Q.PREQUANTIZED]
+    assert gated.allows("gptq") and gated.allows("w8a8") and gated.allows("bf16")
+    assert SearchOptions(eval_set="gsm8k", quants=["auto", "awq"]).search_quants() == ["auto", "awq", "gptq", "w8a8"]
+    assert SearchOptions(eval_set="gsm8k", quants=["bf16", "fp8"]).search_quants() == ["bf16", "fp8"]  # their list
+    assert not SearchOptions(eval_set="gsm8k", quants=["bf16", "fp8"]).allows("gptq")
+    assert gated.key() == {"eval": "gsm8k-300", "maxloss": "3"}  # no quant key: auto is still auto
+
+
+@pytest.mark.usefixtures("no_network")
+def test_a_gated_auto_plans_the_4bit_checkpoints(hw_a100, spec, monkeypatch):
+    monkeypatch.setattr(Q, "find_prequantized_repos", lambda s, methods=Q.INT4_METHODS, **kw: {
+        m: Q.PrequantizedRepo(repo_id=f"org/Llama-3.2-3B-Instruct-{m.upper()}", method=m, size_bytes=2_000_000_000)
+        for m in methods if m in Q.INT4_METHODS})
+    gated = prepare_and_plan(hw_a100, spec, ["vllm"], registry(), quants=SearchOptions(eval_set="gsm8k").search_quants())
+    assert {"awq", "gptq"} <= set(gated.prepared["vllm"].weights_bytes)
+
+
+def test_a_cached_gated_4bit_pick_is_served_to_a_gated_caller(hw_a100, spec, prepared_vllm):
+    from tests.test_cache_and_pipeline import _profile
+
+    gptq = _profile(hw_a100, spec, prepared_vllm).model_copy(update={"config": Config(backend="vllm", quant="gptq")})
+    assert SearchOptions(eval_set="gsm8k").allows(gptq.config.quant)
+    assert not SearchOptions().allows(gptq.config.quant)
+
+
+def test_no_full_precision_warning_when_the_gate_is_trying_the_checkpoints(caplog):
+    from rigtune.pipeline import _warn_if_only_quantized_fits
+    from tests.test_quality import _plan_with
+
+    with caplog.at_level("WARNING"):
+        _warn_if_only_quantized_fits(_plan_with(["fp8"]), SearchOptions(eval_set="gsm8k"))
+    assert caplog.text == ""
+    with caplog.at_level("WARNING"):
+        _warn_if_only_quantized_fits(_plan_with(["fp8"]), SearchOptions())
+    assert "--eval-set gsm8k" in caplog.text

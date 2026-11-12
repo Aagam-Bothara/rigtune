@@ -313,7 +313,8 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
 QUANT_OPT = typer.Option("auto", "--quant", callback=_quant_list,
                          help="Weight precisions calibration may choose. auto: everything supported except the "
                               "Hub's pre-quantized checkpoints, 4-bit AWQ/GPTQ and 8-bit W8A8, which can cost quality "
-                              "(auto,awq,gptq,w8a8 adds them). Or a list such as bf16, bf16,fp8 or gptq (also fp16, "
+                              "(auto,awq,gptq,w8a8 adds them; with --eval-set, auto includes them and the accuracy "
+                              "gate decides). Or a list such as bf16, bf16,fp8 or gptq (also fp16, "
                               "Q4_K_M, Q5_K_M, Q6_K, Q8_0).")
 KVQ_OPT = typer.Option("on", "--kv-quant", callback=_on_off,
                        help="Try quantized KV caches (fp8 on vLLM and SGLang, q8_0 and q4_0 on llama.cpp)")
@@ -339,7 +340,9 @@ EVAL_SET_OPT = typer.Option(None, "--eval-set",
                             help="Gate weight precisions on labelled accuracy: gsm8k (bundled, 1319 problems) or a "
                                  "JSONL file of {prompt or messages, answer, grader} items. Each precision answers "
                                  "them during calibration, and one below the most precise format that runs is "
-                                 "served only if its loss is certified to be under --max-accuracy-loss.")
+                                 "served only if its loss is certified to be under --max-accuracy-loss. With "
+                                 "--quant auto it also tries the AWQ, GPTQ and W8A8 checkpoints auto otherwise "
+                                 "leaves out.")
 MAX_LOSS_OPT = typer.Option(3.0, "--max-accuracy-loss", callback=_max_loss,
                             help="With --eval-set: the largest accuracy loss, in points, a cheaper precision may "
                                  "carry. It is admitted only when the lower end of the 95% interval for its "
@@ -522,7 +525,7 @@ def bench(
         raise typer.Exit(2)
     opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items)
-    result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.quants)
+    result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.search_quants())
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
@@ -655,7 +658,7 @@ def compare(
     candidates, reg = select(hw, spec, force=backend)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
                                quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
-                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items).quants)
+                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items).search_quants())
 
     def _row_progress(label: str, row) -> None:
         if row is None:

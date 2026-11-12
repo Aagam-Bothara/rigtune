@@ -119,9 +119,18 @@ class SearchOptions:
             out["ttft"] = f"p{self.ttft_percentile}"
         return out
 
+    def search_quants(self) -> Optional[List[str]]:
+        """The precisions calibration prepares. `auto` leaves the Hub's pre-quantized checkpoints out on quality
+        measured elsewhere (4-5 GSM8K points on Qwen2.5-3B); with an eval set the gate measures that cost here and
+        refuses what it cannot certify, so `auto` takes them too: on a 14B at 24 GB, GPTQ measured 3.9x the best
+        fp8 configuration. An explicit list without `auto` is left as the user wrote it."""
+        if not self.eval_set or (self.quants is not None and AUTO_QUANT not in self.quants):
+            return self.quants
+        return list(dict.fromkeys([*(self.quants or [AUTO_QUANT]), *PREQUANTIZED]))
+
     def allows(self, quant: str) -> bool:
-        """Whether --quant permits this precision (see allowed_quants)."""
-        return quant in (allowed_quants([quant], self.quants) or [])
+        """Whether --quant permits this precision (see allowed_quants and search_quants)."""
+        return quant in (allowed_quants([quant], self.search_quants()) or [])
 
 
 def _usable(cached: Optional[Profile], opts: SearchOptions, force_backend: Optional[str]) -> bool:
@@ -262,7 +271,7 @@ def _warn_if_only_quantized_fits(plan, opts) -> None:
     user who never hears that cannot make the trade; one who hears it can, which is why this is a message and not
     a change of default.
     """
-    if opts.quants is not None:  # the user chose the list themselves
+    if opts.quants is not None or opts.eval_set:  # the user chose the list, or the gate is trying them
         return
     feasible = plan.all_feasible
     if not feasible or any(c.quant in FULL_PRECISION for c in feasible):
@@ -271,7 +280,7 @@ def _warn_if_only_quantized_fits(plan, opts) -> None:
         "%s does not fit this GPU at full precision, so calibration is limited to %s. The Hub's pre-quantized "
         "4-bit checkpoints are excluded by --quant auto because they can cost answer quality: on a 14B at 24 GB "
         "they measured 3.9x faster for about 2 GSM8K points. Add --quant auto,awq,gptq to consider them, and "
-        "benchmarks/task_quality.py to grade the result.",
+        "benchmarks/task_quality.py to grade the result, or --eval-set gsm8k to have calibration grade them.",
         plan.spec.hf_id, ", ".join(sorted({c.quant for c in feasible})))
 
 
@@ -621,7 +630,7 @@ def resolve_profile(
         raise RuntimeError("no backend supports this machine/model; run `rigtune probe` for details")
     say("prepare + plan")
     plan = prepare_and_plan(hw, spec, candidates, reg, materialize=not skip_calibration, workload=workload,
-                            quants=opts.quants)
+                            quants=opts.search_quants())
     if skip_calibration:
         say("defaults")
         return default_profile(hw, spec, plan, reg, objective, workload=workload)
