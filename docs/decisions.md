@@ -161,13 +161,52 @@ precision twice, so the reference's disagreement with itself is the floor a cand
 
 And even working, it is not an accuracy guarantee: instruction-following answers can agree perfectly while
 multi-step arithmetic degrades, which is exactly what happened on that card — near-zero drift where GSM8K lost
-about 2 points ([evidence](benchmarks.md#qwen25-14b-where-memory-binds)). Labelled grading stays a separate step.
+about 2 points ([evidence](benchmarks.md#qwen25-14b-where-memory-binds)). Labelled grading is what can gate.
 
-The separate, labelled check remains, because calibration measures speed and latency, and quantization can cost
-accuracy that no throughput number shows. The separate check is deliberately narrow and its narrowness is the weak point: GSM8K only, where
-quantization cost Qwen2.5-3B 2–5 points and 7B about one, and fp8 with activation quantization on Ada cost 7B
-nothing. Other tasks, other families and llama.cpp's GGUF formats are ungraded, which is why 4-bit checkpoints
-are not in `--quant auto` for larger models ([gaps](benchmarks.md#not-yet-measured)).
+The labelled check remains, because calibration measures speed and latency, and quantization can cost accuracy
+that no throughput number shows. By default it is still a separate step, `benchmarks/task_quality.py`, and its
+narrowness is the weak point: GSM8K only, where quantization cost Qwen2.5-3B 2–5 points and 7B about one, and fp8
+with activation quantization on Ada cost 7B nothing. Other tasks, other families and llama.cpp's GGUF formats are
+ungraded, which is why 4-bit checkpoints are not in `--quant auto` for larger models
+([gaps](benchmarks.md#not-yet-measured)). `--eval-set` brings the same grading into calibration, on labels rather
+than drift and on items the operator chooses; the next section says how it decides. It is opt-in and has not run
+on a GPU yet.
+
+## Why does the accuracy gate use a non-inferiority bound?
+
+Because the question it answers is "is this precision's loss within the tolerance?", and a significance test
+answers a different one, "is there any difference?". The two disagree exactly where the gate matters. On
+Qwen2.5-14B at 24 GB, GPTQ against fp8 on 200 GSM8K problems lost 4 and gained none: McNemar's test gives
+p = 0.125, not significant, so a gate built on it would admit GPTQ at any tolerance, and with fewer problems it
+would admit anything, because a small sample convicts nothing. The lower end of a 95% interval for the
+difference is −5.0 points on those counts (computed in `tests/test_paired.py`), so the gate refuses GPTQ at a
+3-point tolerance and admits it at 6. Small samples refuse; the note says what tolerance and how many items
+would have admitted.
+
+The interval is Tango's score interval for paired proportions, not the textbook Wald interval: when nothing is
+discordant the Wald interval has zero width at any sample size, while the score interval on 300 items still
+spans ±1.3 points.
+
+What a precision is compared with matters as much. One reference for every engine, the most precise format
+anywhere, would gate vLLM's fp8 against llama.cpp's Q8_0 (which ranks above it) and refuse it for differences
+that belong to the engine and its chat template. One reference per engine, whatever its format, fails the other
+way: on the 14B at 24 GB SGLang's fp8 failed to start and its GPTQ was the fastest first trial (701 tok/s), so
+GPTQ would have been SGLang's reference and been served ungated. So each engine's reference is its most precise
+*faithful* format (bf16, fp16, fp8, Q8_0: the model's own weights or the 8-bit format the engine makes from
+them); fp8 under bf16 on one engine is gated against it; a checkpoint is gated against its own engine's
+reference, or against another engine's when its own has none, with the note saying the comparison is
+cross-engine; and faithful formats are never gated across engines. Each reference runs first, so neither the
+predictor nor a faster engine can skip it, and answers twice: if it cannot certify the tolerance against itself,
+the note says the set is too small to certify anything.
+
+Four choices fail closed: a precision that ran but answered nothing is refused; a checkpoint with no faithful
+format graded on any engine is refused; a precision the gate may yet refuse does not set the pace that drops
+slower engines in stage 1; and refusals go to the same `refused` set as the drift gate's would have, which every
+later stage and the final pick respect. The withdrawn drift gate taught that last one: dropping a precision from
+stage 1's kept list only stopped it being tuned, and the argmax over every trial served it anyway.
+
+What it does not grade: the KV-cache quantization and speculative decoding the later stages choose. Speculative
+decoding is designed not to change greedy answers, but an fp8 or int8 KV cache can.
 
 ## Why not Bayesian optimisation?
 

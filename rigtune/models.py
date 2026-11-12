@@ -303,6 +303,49 @@ from rigtune.memlog import MeasuredMemory  # noqa: E402  (after MemoryEstimate i
 MemoryObservation.model_rebuild()
 
 
+class EvalSetInfo(BaseModel):
+    """The labelled items an accuracy-gated profile was graded on (--eval-set)."""
+
+    name: str  # "gsm8k", or the file's stem
+    path: str
+    items: int  # items graded: the first `items` of the file
+    total: int = 0  # items in the file
+    sha256: str  # of the whole file: a cached profile is reused only on the same set
+    max_accuracy_loss: float  # the tolerance, in points
+
+
+class PrecisionAccuracy(BaseModel):
+    """One weight precision's grades and the accuracy gate's decision on them (rigtune/accuracy_gate.py)."""
+
+    backend: str
+    quant: str
+    items: int
+    answered: int
+    correct: int
+    accuracy: float  # correct / answered
+    ci95: Tuple[float, float]  # Wilson interval
+    reference: bool = False
+    # Against `against` (its engine's reference, or another engine's), over the items both answered.
+    against: Optional[str] = None  # "backend/quant"
+    cross_engine: bool = False  # compared with another engine's reference: engine and template are confounded
+    paired: Optional[int] = None
+    lost: Optional[int] = None  # the reference right, this one wrong
+    gained: Optional[int] = None
+    delta_points: Optional[float] = None
+    delta_ci95: Optional[Tuple[float, float]] = None  # score interval, points
+    mcnemar_p: Optional[float] = None
+    admitted: Optional[bool] = None  # None: not gated (the reference, or its precision on another engine)
+    reason: str = ""
+    # The reference answers twice; how its grades moved between the passes (its own noise).
+    self_lost: Optional[int] = None
+    self_gained: Optional[int] = None
+    seconds: float = 0.0  # grading time
+    # Per item, in eval-set order: '1' right, '0' wrong, '-' unanswered. With the set's sha256 this is enough to
+    # decide again at another tolerance without a GPU.
+    outcomes: str = ""
+    outcomes_repeat: Optional[str] = None  # the reference's second pass
+
+
 class Profile(BaseModel):
     """What gets cached: the winner plus everything needed to reproduce the decision."""
 
@@ -335,3 +378,6 @@ class Profile(BaseModel):
     llmtrace_version: Optional[str] = None
     created_at: float = Field(default_factory=time.time)
     notes: List[str] = Field(default_factory=list)
+    # --eval-set: what each weight precision scored and what the accuracy gate decided. Empty when ungated.
+    accuracy: List[PrecisionAccuracy] = Field(default_factory=list)
+    eval_set: Optional[EvalSetInfo] = None

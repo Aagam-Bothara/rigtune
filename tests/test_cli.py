@@ -69,3 +69,45 @@ def test_the_docker_image_opts_back_in_to_every_interface():
 
     dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text(encoding="utf-8")
     assert "ENV RIGTUNE_HOST=0.0.0.0" in dockerfile
+
+
+def test_the_accuracy_gate_options_reach_the_search_options():
+    from rigtune.cli import _opts
+
+    opts = _opts("auto", "on", "on", "on", eval_set="gsm8k", max_accuracy_loss=5.0, eval_items=0)
+    assert (opts.eval_set, opts.max_accuracy_loss, opts.eval_items) == ("gsm8k", 5.0, 0)
+    assert _opts("auto", "on", "on", "on").eval_set is None
+
+
+def test_a_bad_eval_set_fails_before_anything_runs(tmp_path):
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text('{"prompt": "fine", "answer": "1", "grader": "number"}\n{"prompt": "q", "answer": "1"}\n',
+                   encoding="utf-8")
+    r = runner.invoke(app, ["recalibrate", "x/y", "--eval-set", str(bad)])
+    assert r.exit_code == 2 and "line 2: no grader" in r.output
+    r = runner.invoke(app, ["recalibrate", "x/y", "--eval-set", "gsm8k", "--max-accuracy-loss", "0"])
+    assert r.exit_code == 2 and "above 0 and below 100" in r.output
+
+
+@pytest.mark.parametrize("command", ["bench", "recalibrate", "compare", "serve"])
+def test_every_calibrating_command_takes_the_accuracy_gate_options(command):
+    import typer.main
+
+    params = {p.name for p in typer.main.get_command(app).commands[command].params}
+    assert {"eval_set", "max_accuracy_loss", "eval_items", "quality_probe"} <= params
+
+
+def test_an_eval_set_error_found_during_calibration_is_a_clean_message(monkeypatch):
+    """The context check needs the plan, so it can only fail inside calibrate(): that must still read as a user
+    error, not a traceback under the live view."""
+    import rigtune.pipeline as pl
+    from rigtune.evalset import EvalSetError
+
+    def too_long(*args, **kwargs):
+        raise EvalSetError("set.jsonl: item long needs about 3512 tokens with its answer, more than the largest "
+                           "feasible context (2048)")
+
+    monkeypatch.setattr(pl, "resolve_profile", too_long)
+    r = runner.invoke(app, ["recalibrate", "x/y"])
+    assert r.exit_code == 2 and "--eval-set: set.jsonl: item long needs about 3512 tokens" in r.output
+    assert not isinstance(r.exception, EvalSetError) and "Traceback" not in r.output

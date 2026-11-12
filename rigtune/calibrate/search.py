@@ -83,6 +83,7 @@ class SubprocessTrialRunner:
         enough: Optional[Callable[[TrialMetrics], bool]] = None,
         close_call: Optional[Callable[[TrialMetrics], bool]] = None,
         quality: Optional[object] = None,
+        gate: Optional[object] = None,
     ):
         self.backends = backends
         self.models = models
@@ -96,6 +97,7 @@ class SubprocessTrialRunner:
         self.enough = enough  # measure levels highest first and stop early (objectives.enough_level)
         self.close_call = close_call  # measure a level again when its tail is too close to call (close_call_level)
         self.quality = quality  # rigtune.quality.QualityProbe: does this precision still answer the same way?
+        self.gate = gate  # rigtune.accuracy_gate.AccuracyGate: grades each precision on labelled items
 
     def _apply_power(self, cfg: Config) -> Optional[str]:
         """Apply cfg's power setting to the GPU. Returns an error message if it cannot be applied."""
@@ -169,6 +171,9 @@ class SubprocessTrialRunner:
                 parse_log(cfg.backend, proc.tail_log(400)), metrics.peak_mem_mb, baseline_mb,
                 metrics.telemetry_source,
             )
+            if self.gate is not None and metrics.ok:
+                # Same warm engine, after the log is read: grading traffic would push its memory lines out of the tail.
+                self.gate.record(f"http://127.0.0.1:{port}", hooks.model_name, cfg)
             err = None
             if not metrics.ok:
                 err = metrics.failure_summary()
@@ -333,6 +338,9 @@ class StagedSearch:
     # stops it being tuned, and the winner is the argmax over every successful trial, so a refused precision
     # whose baseline was fastest got served anyway. Any future gate must add to this, not just to `kept`.
     refused: set = field(default_factory=set)
+    # --eval-set: a rigtune.accuracy_gate.AccuracyGate. Stage 1 grades each precision on labelled items and refuses,
+    # through `refused`, every gated one whose loss against its reference is not certified within a tolerance.
+    gate: Optional[object] = None
     # Stage 5: re-measure the leader and up to confirm_top - 1 others within confirm_band of it,
     # confirm_rounds times each in turn, and choose on those runs alone (0 = off).
     confirm_top: int = 0
@@ -434,8 +442,10 @@ class StagedSearch:
         t0 = self.clock()
         if self._started is None:
             self._started = t0
+        graded = self._grading_seconds()
         res = self.runner.run(cfg, stage)
-        self._trial_seconds.append(self.clock() - t0)
+        # Grading runs inside a trial but only once per precision, so --budget's typical trial leaves it out.
+        self._trial_seconds.append(self.clock() - t0 - (self._grading_seconds() - graded))
         self._done[key] = res
         retry = self._headroom_retry(cfg, res)
         if retry is not None:
@@ -449,6 +459,9 @@ class StagedSearch:
         if self.progress:
             self.progress(stage, cfg, res)
         return res
+
+    def _grading_seconds(self) -> float:
+        return float(getattr(self.gate, "seconds_total", 0.0)) if self.gate is not None else 0.0
 
     def _eligible(self, results: Sequence[TrialResult]) -> List[TrialResult]:
         """The trials that may still win.
@@ -480,7 +493,8 @@ class StagedSearch:
         ok = [r for r in results if r.ok]
         within: Dict[str, float] = {}  # best constrained tok/s per backend (score is -tok/s for both objectives)
         for x in rank(ok, self.objective, self.constraints):
-            if x.feasible:
+            if x.feasible and (self.gate is None or self.gate.cannot_be_refused(  # type: ignore[attr-defined]
+                    (x.result.config.backend, x.result.config.quant))):  # a precision the gate may refuse sets no pace
                 b = x.result.config.backend
                 within[b] = max(within.get(b, 0.0), -x.score)
         bound: Dict[str, float] = {}  # best raw tok/s per backend
@@ -502,6 +516,12 @@ class StagedSearch:
         groups: Dict[Tuple[str, str], List[Config]] = {}
         for c in feasible:
             groups.setdefault((c.backend, c.quant), []).append(c)
+        references: set = set()
+        if self.gate is not None:
+            # Each engine's planned reference runs first, so neither the predictor nor a faster engine can skip the
+            # precisions everything else is compared with.
+            references = set(self.gate.plan(list(groups)))  # type: ignore[attr-defined]
+            groups = dict(sorted(groups.items(), key=lambda kv: kv[0] not in references))
         # Predictor-guided pruning: skip (backend, quant) groups predicted far below the best group.
         predicted: Dict[Tuple[str, str], float] = {}
         for key, group in groups.items():
@@ -511,7 +531,7 @@ class StagedSearch:
         if predicted:
             best_pred = max(predicted.values())
             for key, p in predicted.items():
-                if p < self.prune_below * best_pred:
+                if p < self.prune_below * best_pred and key not in references:
                     self.notes.append(
                         f"skipped {key[0]}/{key[1]}: predicted {p:.0f} tok/s < {self.prune_below:.0%} of best "
                         f"predicted {best_pred:.0f}"
@@ -546,6 +566,11 @@ class StagedSearch:
             # from themselves on 10% of answer openings while cheaper precisions differ on 83-100%, so no
             # threshold separates them, and GSM8K put those same weights ~2 points back (quality.py).
             self.notes.extend(self.quality.summary())
+        if self.gate is not None:
+            refused, notes = self.gate.decide()  # type: ignore[attr-defined]
+            self.refused |= refused
+            self.notes.extend(notes)
+            kept = [k for k in kept if k not in self.refused]
         kept = kept[: self.top_quants]
         logger.info("stage 1 kept: %s", kept)
         return kept
@@ -723,7 +748,7 @@ class StagedSearch:
     def _leader(self, backend: Optional[str] = None, spec: Any = _ANY) -> Optional[TrialResult]:
         """The objective's current winner, overall or among one engine's trials, and among those with one
         speculation setting when `spec` is given (None: no speculation)."""
-        pool = [r for r in self.results if (backend is None or r.config.backend == backend)
+        pool = [r for r in self._eligible(self.results) if (backend is None or r.config.backend == backend)
                 and (spec is _ANY or r.config.spec_decode == spec)]
         leader, _ = pick(pool, self.objective, self.constraints)
         return leader
@@ -885,9 +910,9 @@ class StagedSearch:
             return None
         if self.progress:
             self.progress("confirm", cfg, None)
-        t0 = self.clock()
+        t0, graded = self.clock(), self._grading_seconds()
         res = self.runner.run(cfg, "confirm")
-        self._trial_seconds.append(self.clock() - t0)
+        self._trial_seconds.append(self.clock() - t0 - (self._grading_seconds() - graded))
         self.results.append(res)
         if self.progress:
             self.progress("confirm", cfg, res)
@@ -987,6 +1012,8 @@ class StagedSearch:
         if not feasible:
             return None, ["memory planner left no feasible configuration"]
         kept = self.stage_quant(feasible)
+        if not kept and self.gate is not None and any(r.ok for r in self.results):
+            return None, self.notes + ["the accuracy gate refused every precision that ran"]
         if not kept:
             return None, ["every stage-1 trial failed"] + [
                 f"{r.config.key()}: {r.error}" for r in self.results if r.error
@@ -1022,6 +1049,8 @@ class StagedSearch:
             pn = self._power_note(winner, pool)
             if pn:
                 notes.append(pn)
+        if self.gate is not None:
+            notes.extend(self.gate.final_notes(winner, self.results, self.objective, self.constraints))  # type: ignore
         if self._skipped:
             shown = "; ".join(self._skipped[:5]) + (f"; and {len(self._skipped) - 5} more" if len(self._skipped) > 5 else "")
             self.notes.append(f"calibration budget of {self.budget_s:.0f}s reached after {len(self.results)} trials; "

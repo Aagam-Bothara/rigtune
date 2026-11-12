@@ -56,3 +56,30 @@ def test_cli_accepts_auto_inside_a_list():
     assert _quant_list("auto,awq") == "auto,awq"
     assert _opts("auto,awq", "on", "on", "on").quants == ["auto", "awq"]
     assert _opts("auto", "on", "on", "on").quants is None
+
+
+def test_an_eval_set_adds_cache_keys_only_when_given(tmp_path):
+    """Existing profiles keep their cache paths: the gate's options say nothing until a set is given."""
+    assert SearchOptions(max_accuracy_loss=5.0, eval_items=100).key() == {}
+    assert SearchOptions(eval_set="gsm8k").key() == {"eval": "gsm8k-300", "maxloss": "3"}
+    mine = str(tmp_path / "mine.jsonl")
+    assert SearchOptions(eval_set=mine, eval_items=0, max_accuracy_loss=2.5).key() == {"eval": "mine-all",
+                                                                                          "maxloss": "2.5"}
+
+
+def test_a_gated_profile_is_reused_only_on_the_same_eval_set(tmp_path, hw_a100, spec, prepared_vllm):
+    from rigtune.evalset import eval_set_sha256
+    from rigtune.models import EvalSetInfo
+    from tests.test_cache_and_pipeline import _profile
+
+    f = tmp_path / "mine.jsonl"
+    f.write_bytes(b'{"prompt": "2 + 3?", "answer": "5", "grader": "number"}\n')
+    opts = SearchOptions(eval_set=str(f))
+    base = _profile(hw_a100, spec, prepared_vllm)
+    gated = base.model_copy(update={"eval_set": EvalSetInfo(name="mine", path=str(f), items=1, total=1,
+                                                            sha256=eval_set_sha256(str(f)), max_accuracy_loss=3.0)})
+    assert _usable(gated, opts, None)
+    assert not _usable(base, opts, None)  # never graded
+    assert _usable(base, SearchOptions(), None)  # ungated options never look at the set
+    f.write_bytes(b'{"prompt": "2 + 2?", "answer": "4", "grader": "number"}\n')
+    assert not _usable(gated, opts, None)  # same name, different items: grade again

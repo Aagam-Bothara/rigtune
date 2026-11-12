@@ -132,6 +132,19 @@ def _progress_for(objective: str, cons):
     return lambda stage, cfg, res: err.print(_progress_line(stage, cfg, res, objective, cons))
 
 
+def _calibrating(view, fn, *args, **kwargs):
+    """Run a calibration, and turn an eval-set problem found during it (an item too long for every feasible
+    context, which needs the plan to see) into a one-line error instead of a traceback under the live view."""
+    from rigtune.evalset import EvalSetError
+
+    try:
+        return fn(*args, **kwargs)
+    except EvalSetError as exc:
+        view.stop()
+        err.print(f"[red]--eval-set: {exc}[/]")
+        raise typer.Exit(2)
+
+
 def _search_view(objective: str, cons):
     """The search drawn as it runs. On a terminal it is a picture; piped, it is the same per-trial lines as
     before, so logs that scripts grep are unchanged."""
@@ -277,14 +290,23 @@ def _percentile(value: int) -> int:
 
 def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combine: str = "on",
           budget: Optional[float] = None, ttft_percentile: int = 95, confirm: str = "on", all_levels: bool = False,
-          explore: str = "off", quality_probe: str = "off"):
+          explore: str = "off", quality_probe: str = "off", eval_set: Optional[str] = None,
+          max_accuracy_loss: float = 3.0, eval_items: int = 300):
     from rigtune.pipeline import SearchOptions
 
+    if eval_set:
+        from rigtune.evalset import EvalSetError, load_eval_set
+
+        try:  # read and check every item now, not after the weights have downloaded
+            load_eval_set(eval_set, eval_items)
+        except EvalSetError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--eval-set") from None
     return SearchOptions(
         quants=None if quant == "auto" else [q.strip() for q in quant.split(",") if q.strip()],
         kv_quant=kv_quant == "on", speculative=speculative == "on", prefix_cache=prefix_cache == "on",
         combine=combine == "on", budget_s=budget, ttft_percentile=ttft_percentile, confirm=confirm == "on",
         all_levels=all_levels, explore=explore == "on", quality_probe=quality_probe == "on",
+        eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
     )
 
 
@@ -305,6 +327,26 @@ QUALITY_OPT = typer.Option("off", "--quality-probe", callback=_on_off,
                                 "profile. It refuses nothing: the comparison saturates (identical weights "
                                 "differ from themselves on ~10% of answer openings, cheaper ones on 83-100%). "
                                 "Costs two short generation passes per precision.")
+
+
+def _max_loss(value: float) -> float:
+    if not 0 < value < 100:
+        raise typer.BadParameter("expected a loss in accuracy points, above 0 and below 100 (3 = three points)")
+    return value
+
+
+EVAL_SET_OPT = typer.Option(None, "--eval-set",
+                            help="Gate weight precisions on labelled accuracy: gsm8k (bundled, 1319 problems) or a "
+                                 "JSONL file of {prompt or messages, answer, grader} items. Each precision answers "
+                                 "them during calibration, and one below the most precise format that runs is "
+                                 "served only if its loss is certified to be under --max-accuracy-loss.")
+MAX_LOSS_OPT = typer.Option(3.0, "--max-accuracy-loss", callback=_max_loss,
+                            help="With --eval-set: the largest accuracy loss, in points, a cheaper precision may "
+                                 "carry. It is admitted only when the lower end of the 95% interval for its "
+                                 "difference from the reference is above minus this.")
+EVAL_ITEMS_OPT = typer.Option(300, "--eval-items", min=0,
+                              help="With --eval-set: grade the first N items (0 = all). 300 items certify at best "
+                                   "about 1.3 points, when no answer changes.")
 LAYOUT_OPT = typer.Option("single", "--layout", callback=_layout,
                           help="Multi-GPU layout: single (default), replicas (one engine per GPU behind a load "
                                "balancer), tp (tensor parallel), auto (measure both, keep the better)")
@@ -462,6 +504,9 @@ def bench(
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
     quality_probe: str = QUALITY_OPT,
+    eval_set: Optional[str] = EVAL_SET_OPT,
+    max_accuracy_loss: float = MAX_LOSS_OPT,
+    eval_items: int = EVAL_ITEMS_OPT,
 ) -> None:
     """Run calibration and print the table; do not serve."""
     from rigtune import cache as profile_cache
@@ -475,14 +520,15 @@ def bench(
     if not candidates:
         err.print("[red]no candidate backends for this machine/model[/]")
         raise typer.Exit(2)
-    opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe)
+    opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
+                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items)
     result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.quants)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
     view = _search_view(objective, cons)
-    profile = calibrate(hw, spec, objective, result, reg, workload=wl, constraints=cons, progress=view.progress,
-                        power_mode=power, options=opts)
+    profile = _calibrating(view, calibrate, hw, spec, objective, result, reg, workload=wl, constraints=cons,
+                           progress=view.progress, power_mode=power, options=opts)
     if phases != "unified":
         from rigtune.disagg import calibrate_disaggregated
 
@@ -526,6 +572,9 @@ def recalibrate(
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
     quality_probe: str = QUALITY_OPT,
+    eval_set: Optional[str] = EVAL_SET_OPT,
+    max_accuracy_loss: float = MAX_LOSS_OPT,
+    eval_items: int = EVAL_ITEMS_OPT,
 ) -> None:
     """Force a calibration rerun and overwrite the cached profile."""
     from rigtune.pipeline import resolve_profile
@@ -533,11 +582,12 @@ def recalibrate(
     wl = _workload(workload, workload_file)
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
     view = _search_view(objective, cons)
-    profile = resolve_profile(ModelSpec(hf_id=model), objective, force_backend=backend, recalibrate=True,
+    profile = _calibrating(view, resolve_profile, ModelSpec(hf_id=model), objective, force_backend=backend, recalibrate=True,
                               workload=wl, constraints=cons,
                               progress=view.progress, on_stage=view.on_stage,
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
+                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items), layout=layout)
     view.stop()
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
@@ -578,6 +628,9 @@ def compare(
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
     quality_probe: str = QUALITY_OPT,
+    eval_set: Optional[str] = EVAL_SET_OPT,
+    max_accuracy_loss: float = MAX_LOSS_OPT,
+    eval_items: int = EVAL_ITEMS_OPT,
 ) -> None:
     """Measure rigtune's pick vs stock defaults (and Ollama) on one workload; write a results JSON."""
     from rigtune.bench import compare as _compare, to_markdown
@@ -592,15 +645,17 @@ def compare(
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     view = _search_view(objective, cons)
-    profile = resolve_profile(spec, objective, force_backend=backend, workload=wl, constraints=cons,
+    profile = _calibrating(view, resolve_profile, spec, objective, force_backend=backend, workload=wl, constraints=cons,
                               progress=view.progress, hw=hw, on_stage=view.on_stage,
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
+                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items), layout=layout)
     view.stop()
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
-                               quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe).quants)
+                               quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
+                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items).quants)
 
     def _row_progress(label: str, row) -> None:
         if row is None:
@@ -816,6 +871,9 @@ def serve(
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
     quality_probe: str = QUALITY_OPT,
+    eval_set: Optional[str] = EVAL_SET_OPT,
+    max_accuracy_loss: float = MAX_LOSS_OPT,
+    eval_items: int = EVAL_ITEMS_OPT,
 ) -> None:
     """Discover hardware, calibrate once (cached), then serve an OpenAI-compatible API."""
     import uvicorn
@@ -829,11 +887,13 @@ def serve(
     spec = ModelSpec(hf_id=model)
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
     view = _search_view(objective, cons)
-    profile = resolve_profile(spec, objective, force_backend=backend, skip_calibration=skip_calibration,
+    profile = _calibrating(view, resolve_profile, spec, objective, force_backend=backend,
+                           skip_calibration=skip_calibration,
                               workload=wl, constraints=cons,
                               progress=view.progress, on_stage=view.on_stage,
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
+                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items), layout=layout)
     view.stop()
     _print_profile(profile)
     if profile.prepared is None:

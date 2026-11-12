@@ -78,6 +78,11 @@ class SearchOptions:
     # runs, and record it in the profile (quality.py). It does not gate the search: the comparison saturates,
     # so there is no threshold worth enforcing. Off by default because it costs two short passes per precision.
     quality_probe: bool = False
+    # --eval-set: grade each weight precision on labelled items and serve one below the most precise format only
+    # when its accuracy loss is certified to be under max_accuracy_loss points (accuracy_gate.py). None = off.
+    eval_set: Optional[str] = None
+    max_accuracy_loss: float = 3.0  # --max-accuracy-loss, points
+    eval_items: int = 300  # --eval-items: the first N items (0 = all)
 
     def key(self, objective: Optional[str] = None) -> Dict[str, str]:
         """Options that change the pick, recorded in the profile and in its cache path: the non-default
@@ -107,6 +112,9 @@ class SearchOptions:
             out["quality"] = "on"
         if self.budget_s is not None:  # a budgeted profile is never served where a full one was asked for
             out["budget"] = f"{int(self.budget_s)}s"
+        if self.eval_set:  # a gated profile answers a different question; ungated cache paths are untouched
+            out["eval"] = f"{Path(self.eval_set).stem}-{self.eval_items or 'all'}"
+            out["maxloss"] = f"{self.max_accuracy_loss:g}"
         if objective == "balanced" and self.ttft_percentile != 50:
             out["ttft"] = f"p{self.ttft_percentile}"
         return out
@@ -118,9 +126,16 @@ class SearchOptions:
 
 def _usable(cached: Optional[Profile], opts: SearchOptions, force_backend: Optional[str]) -> bool:
     """Serve a cached profile only if it matches the forced backend and the current --quant: a
-    profile calibrated when `auto` still picked 4-bit checkpoints must not outlive that default."""
-    return (cached is not None and (force_backend is None or cached.backend == force_backend)
-            and opts.allows(cached.config.quant))
+    profile calibrated when `auto` still picked 4-bit checkpoints must not outlive that default. A gated
+    profile must also have been graded on the same eval set: its name is in the cache path, its contents are not."""
+    if cached is None or (force_backend is not None and cached.backend != force_backend):
+        return False
+    if opts.eval_set:
+        from rigtune.evalset import eval_set_sha256
+
+        if cached.eval_set is None or cached.eval_set.sha256 != eval_set_sha256(opts.eval_set):
+            return False
+    return opts.allows(cached.config.quant)
 
 
 def level_rule(objective: str, constraints: Constraints, opts: SearchOptions,
@@ -301,6 +316,47 @@ def quality_probe_for(opts, workload):
     return QualityProbe(prompts=prompts)
 
 
+def accuracy_gate_for(opts: SearchOptions, feasible: List[Config]):
+    """The accuracy gate for a calibration, or None without --eval-set.
+
+    The set is read and every item checked here, before any engine starts, so a bad line fails in seconds rather
+    than after stage 1. Items are also checked against the context the feasible configurations offer: an engine
+    rejects a prompt that, with its answer, does not fit, and an unanswered item narrows the comparison."""
+    if not opts.eval_set:
+        return None
+    from rigtune.accuracy_gate import AccuracyGate, best_certifiable
+    from rigtune.evalset import EvalSetError, load_eval_set
+    from rigtune.models import EvalSetInfo
+
+    if not 0 < opts.max_accuracy_loss < 100:
+        raise EvalSetError(f"--max-accuracy-loss is in points and must be between 0 and 100, not "
+                           f"{opts.max_accuracy_loss:g}")
+    es = load_eval_set(opts.eval_set, opts.eval_items)
+    gate = AccuracyGate(items=es.items, max_loss=opts.max_accuracy_loss,
+                        info=EvalSetInfo(name=es.name, path=es.path, items=len(es.items), total=es.total,
+                                         sha256=es.sha256, max_accuracy_loss=opts.max_accuracy_loss))
+    if feasible:
+        # Three characters a token undercounts English (about four), so this errs towards warning.
+        longest = max(es.items, key=lambda i: i.chars)
+        need = longest.chars // 3 + (longest.max_tokens or gate.max_tokens)
+        smallest, largest = min(c.ctx for c in feasible), max(c.ctx for c in feasible)
+        where = f"item {longest.id}" if longest.id else "the longest item"
+        if need > largest:
+            raise EvalSetError(f"{es.path}: {where} needs about {need} tokens with its answer, more than the largest "
+                               f"feasible context ({largest}); shorten it or lower its max_tokens")
+        if need > smallest:
+            logger.warning("%s: %s needs about %d tokens with its answer, more than the smallest feasible context "
+                           "(%d); a precision graded at that context may leave it unanswered", es.path, where, need,
+                           smallest)
+    logger.info("accuracy gate: %d %s items, tolerance %.1f points; with no answer changed they certify down to "
+                "%.1f points", len(es.items), es.name, opts.max_accuracy_loss, best_certifiable(len(es.items)))
+    if best_certifiable(len(es.items)) >= opts.max_accuracy_loss:
+        logger.warning("accuracy gate: %d items cannot certify %.1f points even if no answer changes, so every "
+                       "precision below the most precise one will be refused; use more items", len(es.items),
+                       opts.max_accuracy_loss)
+    return gate
+
+
 def prepare_and_plan(
     hw: HardwareDescriptor,
     spec: ModelSpec,
@@ -441,6 +497,9 @@ def calibrate(
     elif power_mode != "off":
         controller, points, power_notes = setup_power(hw, power_mode, power_controller)
     probe = quality_probe_for(opts, workload)
+    gate = accuracy_gate_for(opts, feasible)
+    if runner is not None and gate is not None and getattr(runner, "gate", False) is None:
+        runner.gate = gate  # an injected runner that grades (tests) gets the same gate the search decides with
     if runner is None:
         runner = SubprocessTrialRunner(
             backends={n: reg[n] for n in plan.candidates},
@@ -452,6 +511,7 @@ def calibrate(
             enough=level_rule(objective, constraints, opts, points),
             close_call=close_call_level(objective, constraints),
             quality=probe,
+            gate=gate,
         )
     from rigtune.predict import Predictor
 
@@ -459,7 +519,7 @@ def calibrate(
                           predictor=Predictor(hw), models=plan.prepared, workload=workload,
                           power_points=points, variant_stages=stages, combine=opts.combine,
                           budget_s=opts.budget_s, confirm_top=3 if opts.confirm else 0,
-                          feasible_fn=combination_fits(hw, reg, plan), quality=probe,
+                          feasible_fn=combination_fits(hw, reg, plan), quality=probe, gate=gate,
                           explore_space=search_space(hw, plan, reg, workload, opts) if opts.explore else [],
                           spec_first=True,
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
@@ -484,6 +544,9 @@ def calibrate(
     profile.calibration_trials = len(search.results)
     profile.power_mode = power_mode
     profile.options = opts.key(objective)
+    if gate is not None:
+        profile.accuracy = gate.records()
+        profile.eval_set = gate.info
     return profile
 
 
