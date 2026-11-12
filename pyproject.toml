@@ -54,6 +54,11 @@ rigtune = "rigtune.cli:app"
 where = ["."]
 include = ["rigtune*"]
 
+# The bundled eval set and its licence. rigtune/data is not a package, so without this the wheel leaves them out,
+# and `--eval-set gsm8k` would work from a checkout and fail once installed.
+[tool.setuptools.package-data]
+rigtune = ["data/*.jsonl", "data/*.txt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

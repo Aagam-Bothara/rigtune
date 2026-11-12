@@ -22,6 +22,7 @@ jobs:
       - name: Check the wheel contains the package and runs
         run: |
           python -m zipfile -l dist/*.whl | grep -q "rigtune/cli.py"
+          python -m zipfile -l dist/*.whl | grep -q "rigtune/data/gsm8k.jsonl"
           pip install dist/*.whl
           cd "$RUNNER_TEMP" && rigtune --help
       - uses: actions/upload-artifact@v4

@@ -32,6 +32,8 @@ jobs:
       - run: pip install build twine
       - run: python -m build
       - run: twine check --strict dist/*
+      # The bundled eval set is package data, which a wheel drops unless pyproject.toml lists it.
+      - run: python -m zipfile -l dist/*.whl | grep -q "rigtune/data/gsm8k.jsonl"
 
   docker:
     runs-on: ubuntu-latest
