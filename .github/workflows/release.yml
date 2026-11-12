@@ -17,6 +17,13 @@ jobs:
       - run: pip install build twine
       - run: python -m build
       - run: twine check --strict dist/*
+      # twine check reads only the metadata: rigtune 0.2.0 reached PyPI as a wheel with no code in it, built from
+      # a commit that had deleted the old package without adding the new one. Install the wheel and run it.
+      - name: Check the wheel contains the package and runs
+        run: |
+          python -m zipfile -l dist/*.whl | grep -q "rigtune/cli.py"
+          pip install dist/*.whl
+          cd "$RUNNER_TEMP" && rigtune --help
       - uses: actions/upload-artifact@v4
         with:
           name: dist
