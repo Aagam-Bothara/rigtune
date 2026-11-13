@@ -941,6 +941,8 @@ class StagedSearch:
                 break
             if all(c.key() != x.result.config.key() for c in shortlist):
                 shortlist.append(x.result.config)
+        if self.gate is not None and shortlist:
+            self.gate.final_target = shortlist[0].key()  # grade the likely pick's own configuration on its run
         runs: Dict[str, List[TrialResult]] = {c.key(): [] for c in shortlist}
         for _ in range(max(1, self.confirm_rounds)):
             for cfg in shortlist:

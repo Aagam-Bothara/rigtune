@@ -205,8 +205,11 @@ slower engines in stage 1; and refusals go to the same `refused` set as the drif
 later stage and the final pick respect. The withdrawn drift gate taught that last one: dropping a precision from
 stage 1's kept list only stopped it being tuned, and the argmax over every trial served it anyway.
 
-What it does not grade: the KV-cache quantization and speculative decoding the later stages choose. Speculative
-decoding is designed not to change greedy answers, but an fp8 or int8 KV cache can.
+What it does not gate: the KV-cache quantization and speculative decoding the later stages choose. Speculative
+decoding is designed not to change greedy answers, but an fp8 or int8 KV cache can. With `--confirm on`, the
+confirm stage's leader answers the items once more on its own configuration, and when it is the pick its grades
+are compared with its reference's and reported; they are not gated, because by then refusing would leave
+nothing tuned to fall back to.
 
 ## Why not Bayesian optimisation?
 

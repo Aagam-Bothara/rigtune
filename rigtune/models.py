@@ -344,6 +344,8 @@ class PrecisionAccuracy(BaseModel):
     # decide again at another tolerance without a GPU.
     outcomes: str = ""
     outcomes_repeat: Optional[str] = None  # the reference's second pass
+    # Set on the record of the pick's own configuration (KV cache and speculation included), graded during confirm.
+    config: Optional[str] = None
 
 
 class Profile(BaseModel):

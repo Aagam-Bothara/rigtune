@@ -473,8 +473,12 @@ def test_a_gated_calibration_puts_the_grades_in_the_profile(hw_a100, spec, tmp_p
     assert p.config.quant == "bf16"  # fp8 is faster here, and lost 10 of 300
     assert p.eval_set.name == "mine" and p.eval_set.items == 300 and p.eval_set.total == 400
     assert p.options["eval"] == "mine-300" and p.options["maxloss"] == "3"
-    assert [(r.quant, r.reference, r.admitted) for r in p.accuracy] == [("bf16", True, None), ("fp8", False, False)]
-    assert len(p.accuracy[1].outcomes) == 300
+    precisions = [r for r in p.accuracy if r.config is None]
+    assert [(r.quant, r.reference, r.admitted) for r in precisions] == [("bf16", True, None), ("fp8", False, False)]
+    assert len(precisions[1].outcomes) == 300
+    final = p.accuracy[-1]  # the pick's own configuration, graded during confirm
+    assert final.config == p.config.key() and (final.lost, final.gained) == (0, 0)
+    assert "recorded, not gated" in final.reason
     assert Profile.model_validate_json(p.model_dump_json()).accuracy == p.accuracy
 
 
@@ -582,3 +586,59 @@ def test_a_slower_refused_precision_cost_no_speed_and_an_ungraded_one_says_so(mo
     assert "cost no measured speed" in fp8 and "no number of items would certify 3.0" in fp8
     awq = next(n for n in notes if n.startswith("accuracy gate: refusing vllm/awq"))
     assert "it could not be graded, so no tolerance would have admitted it" in awq
+
+
+# --------------------------------------------------------------------------- the pick's own configuration
+
+
+class FinalScript(Script):
+    """As Script, but the reference's engine answers `final` on a third pass: the confirm stage's re-measurement of
+    the pick, which runs with the fp8 KV cache the later stages chose."""
+
+    def __init__(self, grades, final: str):
+        super().__init__(grades)
+        self.final = final
+
+    def __call__(self, base_url, model, items, concurrency, max_tokens, wall_s):
+        key = tuple(base_url.split("//", 1)[1].split("/"))
+        if self.passes.count(key) >= 2:
+            self.passes.append(key)
+            return [None if g == "-" else f"The answer is {item.answer if g == '1' else -1}"
+                    for item, g in zip(items, self.final)]
+        return super().__call__(base_url, model, items, concurrency, max_tokens, wall_s)
+
+
+def _kv_search(script: Script, confirm_top: int):
+    gate = _gate(300, script)
+    kv = ("kv", lambda c: [c.model_copy(update={"kv_dtype": "fp8"})] if c.kv_dtype == "auto" else [])
+    search = _search(gate, GradingRunner(gate), variant_stages=[kv], confirm_top=confirm_top)
+    winner, notes = search.run(_feasible(("vllm", "bf16")))
+    return gate, winner, notes
+
+
+def test_the_pick_is_graded_once_on_its_own_configuration_during_confirm():
+    """Stage 1 grades the weights; the fp8 cache the KV stage adopted afterwards is graded only here, and a loss it
+    cannot certify is reported, not acted on."""
+    ref = "1" * 280 + "0" * 20
+    script = FinalScript({("vllm", "bf16"): ref}, final=_flip(ref, range(12), "0"))
+    gate, winner, notes = _kv_search(script, confirm_top=3)
+
+    assert winner.config.kv_dtype == "fp8" and gate.final_target == winner.config.key()
+    assert script.passes.count(("vllm", "bf16")) == 3  # twice in stage 1, once on the pick during confirm
+    final = gate.records()[-1]
+    assert final.config == winner.config.key() and (final.lost, final.gained, final.paired) == (12, 0, 300)
+    assert final.against == "vllm/bf16" and final.admitted is None
+    assert "not certified within 3.0 points" in final.reason
+    note = next(n for n in notes if n.startswith("accuracy gate: the pick's final configuration"))
+    assert "12 lost, 0 gained" in note and "its loss is not certified within 3.0 points" in note
+    assert "--kv-quant off" in note
+
+
+def test_without_confirm_the_pick_s_configuration_is_not_graded_and_the_notes_say_so():
+    ref = "1" * 300
+    script = FinalScript({("vllm", "bf16"): ref}, final=ref)
+    gate, winner, notes = _kv_search(script, confirm_top=0)
+
+    assert script.passes.count(("vllm", "bf16")) == 2 and gate.final_record is None
+    assert any("the pick's final configuration was not graded, since that happens during --confirm" in n
+               for n in notes)
