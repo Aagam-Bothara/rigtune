@@ -410,8 +410,8 @@ def _common_prefix(a: str, b: str) -> int:
     return i
 
 
-def _count(text: str, counter: TokenCounter) -> int:
-    return counter.count(text) or len(text) // CHARS_PER_TOKEN + 1
+def _count(text: str, counter: TokenCounter, chars_per_token: float = CHARS_PER_TOKEN) -> int:
+    return counter.count(text) or int(len(text) / chars_per_token) + 1
 
 
 @dataclass
@@ -441,13 +441,15 @@ class _LiveSession:
         system = [{"role": "system", "content": self.session.system}] if self.session.system else []
         return system + self.history + [{"role": "user", "content": step.user}]
 
-    def next_prompt_tokens(self, messages: Messages, counter: TokenCounter) -> int:
+    def next_prompt_tokens(self, messages: Messages, counter: TokenCounter,
+                           chars_per_token: float = CHARS_PER_TOKEN) -> int:
         """How long the next prompt will be: what the engine counted last step, plus the answer it carries and the
-        new user turn; or, before the engine has reported anything (or for an explicit step), every message."""
+        new user turn; or, before the engine has reported anything (or for an explicit step), every message, at the
+        file's own characters per token when no tokenizer counts them (Workload.chars_per_token)."""
         step = self.session.steps[self.step]
         if self.last_prompt_tokens is not None and not step.explicit:
             return self.last_prompt_tokens + self.carried_tokens + _count(step.user, counter) + 2 * TURN_OVERHEAD
-        return sum(_count(m["content"], counter) for m in messages) + TURN_OVERHEAD * len(messages)
+        return sum(_count(m["content"], counter, chars_per_token) for m in messages) + TURN_OVERHEAD * len(messages)
 
     def advance(self, sent: Messages, out: "RequestOutcome", history: str, counter: TokenCounter) -> None:
         """Take in the answer to the step just sent. With recorded history the next step carries the file's answer;
@@ -600,7 +602,7 @@ async def _drive_sessions(base_url: str, hooks: LlmtraceHooks, workload: Workloa
     url = base_url.rstrip("/") + hooks.chat_path
 
     def fits(state: _LiveSession, messages: Messages) -> bool:
-        return state.next_prompt_tokens(messages, counter) <= workload.prefill_tokens
+        return state.next_prompt_tokens(messages, counter, workload.chars_per_token) <= workload.prefill_tokens
 
     sched = _SessionScheduler(workload.session_list, concurrency, workload.pool_at(concurrency),
                               workload.turn_budget(concurrency), fits, workload.history, counter,

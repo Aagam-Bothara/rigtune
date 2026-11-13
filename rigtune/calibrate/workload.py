@@ -115,6 +115,8 @@ class Workload:
     level_turns: int = 0  # a fixed turn budget in place of turn_budget's: one load-generator process's share
     session_system: str = ""  # every session's system prompt in place of its own, when given
     session_list: List[Session] = field(default_factory=list)
+    # Characters per token where no tokenizer counts them: an explicit file's own ratio, else CHARS_PER_TOKEN.
+    chars_per_token: float = CHARS_PER_TOKEN
 
     def __post_init__(self) -> None:
         if self.shared_prefix_tokens and not self.prefix_text:
@@ -506,8 +508,14 @@ def _session_workload(p: Path, sessions: List[Session], t: Workload, session_poo
             + (f"-pool{pool}" if pool else "") + ("-recorded" if hist == "recorded" else ""))
     decode = max(t.decode_tokens, 512)
 
+    # An explicit file may say how many characters its text runs per token (a generated one does: about 6, so sizing
+    # it at 4 declared a 6000-token window as 9472 and dropped every 8k context). The smallest ratio any session gives
+    # is used; a file that gives none is sized at CHARS_PER_TOKEN, as every other file is.
+    ratios = [s.chars_per_token for s in sessions] if explicit else []
+    ratio = min(ratios) if ratios and all(ratios) else CHARS_PER_TOKEN
+
     def tokens(text: str) -> int:
-        return len(text) // CHARS_PER_TOKEN + 1
+        return int(len(text) / ratio) + 1
 
     # Any request of an explicit session can fall in a window, so all of them size the context; a level's sessions are
     # windows, here one per session at evenly spread offsets, for the mean a level's sessions hold.
@@ -560,7 +568,7 @@ def _session_workload(p: Path, sessions: List[Session], t: Workload, session_poo
                    shared_prefix_tokens=0, prefix_text="", prefix_fixed=False, prompts=[], fitted=False,
                    requests_per_slot=0, sample_offset=0, sessions=True, force_sessions=forced, turns_cap=cap,
                    history=hist, session_pool=pool, turns_per_slot=per_slot, session_system=system,
-                   session_list=[])
+                   session_list=[], chars_per_token=ratio)
 
 
 def workload_table() -> List[Dict[str, object]]:

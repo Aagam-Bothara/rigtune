@@ -142,6 +142,7 @@ class Session:
     id: str
     system: str
     steps: Tuple[Step, ...]
+    chars_per_token: Optional[float] = None  # an explicit file's own ratio ("gen" key), for sizing its prompts
 
     @property
     def turns(self) -> int:
@@ -316,6 +317,14 @@ def _explicit_session(sid: str, requests: List[Tuple[object, str]]) -> Session:
     return Session(id=sid, system=text if role == "system" else "", steps=tuple(steps))
 
 
+def _chars_per_token(item: dict) -> Optional[float]:
+    """A line's "gen" key may say how many characters its text runs per token (make_agent_trace.py writes it);
+    anything else there is ignored."""
+    gen = item.get("gen")
+    value = gen.get("chars_per_token") if isinstance(gen, dict) else None
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 else None
+
+
 def _explicit_sessions(path, items: List[Tuple[int, object]]) -> List[Session]:
     """The sessions of a file of explicit requests (see read_sessions), in the order each first appears."""
     first = next(n for n, item in items if _is_explicit_line(item))
@@ -347,7 +356,9 @@ def _explicit_sessions(path, items: List[Tuple[int, object]]) -> List[Session]:
             raise ValueError(f"{where}: session {sid!r} appears twice")
         if "messages" in item:
             raise ValueError(f"{where}: give \"requests\" or \"messages\", not both")
-        whole[sid] = _explicit_session(sid, [(r, f"{where}: request {i}") for i, r in enumerate(item["requests"], 1)])
+        whole[sid] = replace(_explicit_session(sid, [(r, f"{where}: request {i}")
+                                                     for i, r in enumerate(item["requests"], 1)]),
+                             chars_per_token=_chars_per_token(item))
         order.append(sid)
     out: List[Session] = []
     for sid in order:
@@ -359,7 +370,8 @@ def _explicit_sessions(path, items: List[Tuple[int, object]]) -> List[Session]:
             x, y = a["request"], b["request"]  # whole numbers, or the line would not be one request
             if y <= x:
                 raise ValueError(f"{path}:{n}: session {sid!r} request {y!r} does not follow request {x!r}")
-        out.append(_explicit_session(sid, [(it, f"{path}:{n}") for n, it in numbered]))
+        out.append(replace(_explicit_session(sid, [(it, f"{path}:{n}") for n, it in numbered]),
+                           chars_per_token=_chars_per_token(numbered[0][1])))
     return out
 
 

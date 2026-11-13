@@ -231,6 +231,24 @@ confirm stage's leader answers the items once more on its own configuration, and
 are compared with its reference's and reported; they are not gated, because by then refusing would leave
 nothing tuned to fall back to.
 
+## Why does the agent trace generator write a file?
+
+`benchmarks/make_agent_trace.py` writes a file of explicit requests rather than adding an `agent` preset. A file's
+hash already names the profile calibrated on it, so a change to the generator or its parameters can never serve a
+profile measured on other traffic, and no new cache-key entry is needed. The file is also what a user can open,
+diff against their own agent's requests, or replace with a recording, and every option of explicit replay applies
+to it unchanged. The generator is deterministic (one seeded stream per session, sorted keys, ASCII, Unix newlines),
+and a test pins the hash of its default output, as `make_oasst_prompts.py` rebuilds the same file every time.
+
+It models MemGPT's published design (Packer et al. 2023), not any framework's code: where an agent framework puts
+its memory, and whether it rewrites a status line every step, was not checked against a framework's source, so the
+generator exposes those placements as parameters (`retrieval_at`, `meta_refresh`, `layout`) instead of claiming one.
+The share of the queue evicted at once, 0.3 by default, is Letta's documented default (`sliding_window_percentage`);
+the paper was not checked for a figure of its own, and the generated file's `gen` key says where the number came from.
+A search result is treated as an append, a function result at the tail of the queue, as we read the paper; that
+makes retrieval bring eviction sooner rather than rewrite the prompt itself. `retrieval_at=head` models the other
+placement, the latest result in the system prompt, as frameworks that retrieve into it do.
+
 ## Why not Bayesian optimisation?
 
 At roughly 30 trials over a space this shape, the published results for SLO-aware Bayesian tuners do not separate
