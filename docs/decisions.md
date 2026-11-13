@@ -247,4 +247,9 @@ sampling visibly degrades, which is the same missing experiment named above
   ([details](benchmarks.md#qwen25-14b-where-memory-binds)). A third measurement would say which is typical.
 - Traffic that drifts after calibration: profiles are cached per machine, model, objective and workload, and
   nothing re-tunes when the prompts change shape.
+- Prefix reuse in real traffic. Every pick so far was made on prompts sent once each, while chat traffic resends
+  each conversation's history every turn; where a shared prefix was measured, prefix caching was worth +129% and
+  +409%. Session files replay conversations turn by turn, but have not yet run on hardware
+  ([prediction](benchmarks.md#not-yet-measured)); if the picks they make differ from those made on the same
+  conversations flattened, every flat calibration of chat traffic was tuned for the wrong load.
 - A second person running a calibration on hardware and traffic the author does not control.
