@@ -276,6 +276,8 @@ class RequestOutcome:
     idle_gap: Optional[int] = None  # of those, the ones dispatched after its previous step had finished
     working_set: int = 0  # tokens the live sessions' last prompts and answers held when it was dispatched
     tag: str = ""  # Step.tag
+    chained: bool = False  # sent the moment the step before it finished (Step.chain), ahead of the queue
+    primer: bool = False  # a window's primer (Step.primer): it loads the GPU like any request, but is not measured
     live: int = 0  # sessions live when it was dispatched
     request_chars: int = 0  # length of the request's messages, rendered for comparison
     reusable_chars: int = 0  # how much of that is a prefix of what the engine saw before (see _SessionScheduler)
@@ -527,7 +529,8 @@ class _SessionScheduler:
                                   distance=None if state.last_seq is None else self.dispatched - state.last_seq - 1,
                                   idle_gap=None if state.done_at is None else self.dispatched - state.done_at,
                                   live=self.live, request_chars=len(rendered), reusable_chars=reusable,
-                                  working_set=self.working_set, tag=state.session.steps[state.step].tag)
+                                  working_set=self.working_set, tag=state.session.steps[state.step].tag,
+                                  chained=state.chained, primer=state.session.steps[state.step].primer)
             self.dispatched += 1
             self.in_flight += 1
             return state, messages, meta
@@ -565,9 +568,17 @@ class _SessionScheduler:
 
 
 def _shared_system(workload: Workload) -> str:
-    """The system prompt sessions share: the override, or one that more than one session uses."""
+    """The system prompt sessions share: the override, or one that more than one session uses. For explicit
+    requests, the common start of every session's first system message: an agent's first message holds fixed
+    instructions and then its own memory, so two first messages are rarely equal although most of each is shared.
+    (The warm-up's own sessions are not explicit; they all carry the shared prompt, which the count below finds.)"""
     if workload.session_system:
         return workload.session_system
+    if workload.session_list and all(s.steps[0].explicit for s in workload.session_list):
+        firsts = [s.steps[0].messages[0] for s in workload.session_list]
+        if len(firsts) < 2 or any(role != "system" for role, _ in firsts):
+            return ""
+        return os.path.commonprefix([text for _, text in firsts])
     counts = Counter(s.system for s in workload.session_list if s.system)
     return next((text for text, n in counts.most_common(1) if n > 1), "")
 
@@ -587,7 +598,7 @@ async def _drive_sessions(base_url: str, hooks: LlmtraceHooks, workload: Workloa
     def fits(state: _LiveSession, messages: Messages) -> bool:
         return state.next_prompt_tokens(messages, counter) <= workload.prefill_tokens
 
-    sched = _SessionScheduler(workload.session_list, concurrency, workload.session_pool,
+    sched = _SessionScheduler(workload.session_list, concurrency, workload.pool_at(concurrency),
                               workload.turn_budget(concurrency), fits, workload.history, counter,
                               _shared_system(workload))
     results: List[RequestOutcome] = []
@@ -624,7 +635,7 @@ async def _drive_sessions(base_url: str, hooks: LlmtraceHooks, workload: Workloa
                 state, messages, meta = pending.pop(fut)
                 out = fut.result()
                 for name in ("session", "turn", "seq", "distance", "idle_gap", "live", "request_chars",
-                             "reusable_chars", "working_set", "tag"):
+                             "reusable_chars", "working_set", "tag", "chained", "primer"):
                     setattr(out, name, getattr(meta, name))
                 sched.done(state, messages, out)
                 out.text = ""  # the history keeps the answer; the outcome need not
@@ -649,11 +660,12 @@ def _metrics_from(outcomes: List[RequestOutcome], wall_s: float, concurrency: in
     if not ok:
         return m
     m.token_count_source = worst_source(o.token_source for o in ok)
-    ttfts = sorted(o.ttft_s * 1000 for o in ok)
+    timed = [o for o in ok if not o.primer] or ok  # a window's primer loads the engine but is not measured
+    ttfts = sorted(o.ttft_s * 1000 for o in timed)
     m.ttft_ms = statistics.median(ttfts)
     m.ttft_p95_ms = ttfts[min(len(ttfts) - 1, int(round(0.95 * (len(ttfts) - 1))))]
     m.ttft_samples_ms = [round(t, 1) for t in ttfts]
-    tpots = [(o.duration_s - o.ttft_s) * 1000 / (o.tokens - 1) for o in ok if o.tokens > 1]
+    tpots = [(o.duration_s - o.ttft_s) * 1000 / (o.tokens - 1) for o in timed if o.tokens > 1]
     m.tpot_ms = statistics.fmean(tpots) if tpots else None
     m.tok_s = m.output_tokens / wall_s if wall_s > 0 else 0.0
     return m
@@ -685,6 +697,8 @@ def _session_stats(outcomes: List[RequestOutcome], wall_s: float) -> Dict[str, A
                            "sessions_truncated": sum(o.skipped == "truncated" for o in steps)}
     if sent and wall_s > 0:
         out["mean_in_flight"] = round(sum(o.duration_s for o in sent) / wall_s, 2)  # time-weighted, by Little's law
+    sent = [o for o in sent if not o.primer] or sent  # the rest describes measured requests, not windows' primers
+    if sent and wall_s > 0:
         out["effective_pool"] = round(statistics.fmean(o.live for o in sent), 1)
         out["working_set_tokens"] = max(o.working_set for o in sent)
     for name in ("distance", "idle_gap"):

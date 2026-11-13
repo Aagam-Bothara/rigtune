@@ -32,7 +32,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from rigtune.calibrate.datasets import CHARS_PER_TOKEN, DEFAULT_TURNS_CAP, FILE_PREFIX, Session
+from rigtune.calibrate.datasets import (CHARS_PER_TOKEN, DEFAULT_TURNS_CAP, EXPLICIT_WINDOW, FILE_PREFIX, Session,
+                                        window)
 from rigtune.calibrate.tokens import TokenCounter
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ MAX_FILE_PREFILL = 32768  # a longer prompt in a --workload-file is cut to this 
 # until the budget is spent instead of thinning out as its last sessions end.
 TURNS_PER_SLOT = 6
 TURNS_PER_POOLED_SESSION = 3  # a pool's live sessions each get about this many turns before the budget ends
+POOL_CAP = 8  # explicit requests: sessions live per slot at most, whatever --session-pool asks (Workload.pool_at)
 MIN_LEVEL_SESSIONS = 2
 TURN_OVERHEAD = 16  # tokens a chat template adds per message, budgeted when sizing a session's longest prompt
 HISTORIES = ("generated", "recorded")
@@ -127,7 +129,7 @@ class Workload:
         if self.sessions:
             turns = (sum(s.turns for s in self.session_list) / len(self.session_list) if self.session_list
                      else float(self.turns_cap))
-            return min(len(self.prompts), sessions_for(self.turn_budget(concurrency), turns, self.session_pool))
+            return min(len(self.prompts), sessions_for(self.turn_budget(concurrency), turns, self.pool_at(concurrency)))
         if not self.requests_per_slot:
             return len(self.prompts)
         return min(len(self.prompts), max(MIN_LEVEL_REQUESTS, concurrency * self.requests_per_slot))
@@ -143,7 +145,16 @@ class Workload:
 
     def turn_budget(self, concurrency: int) -> int:
         """Turns a level of a session file sends: it stops issuing new ones once they are spent (see turn_budget)."""
-        return self.level_turns or turn_budget(concurrency, self.turns_per_slot, self.session_pool)
+        per_session = self.turns_per_slot if self.history == "explicit" else TURNS_PER_POOLED_SESSION
+        return self.level_turns or turn_budget(concurrency, self.turns_per_slot, self.pool_at(concurrency), per_session)
+
+    def pool_at(self, concurrency: int) -> int:
+        """Sessions live at a level of this concurrency: --session-pool, except that a file of explicit requests caps
+        it at POOL_CAP per slot. A pool asks for a window per live session, so uncapped, a pool of 64 asked a level of
+        one slot for 448 requests in a row; capped, the busiest level still gets the pool a validation asks for."""
+        if self.history == "explicit" and self.session_pool:
+            return min(self.session_pool, POOL_CAP * concurrency)
+        return self.session_pool
 
     def ensure_prompts(self) -> "Workload":
         """Generate or download the prompts if they are not there yet."""
@@ -431,11 +442,13 @@ def workload_from_file(path, template: Optional[Workload] = None, session_pool: 
                    prompts=[], fitted=False, requests_per_slot=per_slot, sample_offset=0)
 
 
-def turn_budget(concurrency: int, turns_per_slot: int = TURNS_PER_SLOT, pool: int = 0) -> int:
+def turn_budget(concurrency: int, turns_per_slot: int = TURNS_PER_SLOT, pool: int = 0,
+                per_session: int = TURNS_PER_POOLED_SESSION) -> int:
     """Turns a level of a session file sends: TURNS_PER_SLOT per concurrency slot, and with a pool enough for each
-    live session to get TURNS_PER_POOLED_SESSION. A budget of slots alone (6c) left a pool above it with no second
-    turn at all: at c = 8 with a pool of 64, all 48 turns went to first turns and nothing was reused."""
-    return max(MIN_LEVEL_REQUESTS, concurrency * turns_per_slot, TURNS_PER_POOLED_SESSION * pool)
+    live session to get TURNS_PER_POOLED_SESSION (`per_session`). A budget of slots alone (6c) left a pool above it
+    with no second turn at all: at c = 8 with a pool of 64, all 48 turns went to first turns and nothing was
+    reused."""
+    return max(MIN_LEVEL_REQUESTS, concurrency * turns_per_slot, per_session * pool)
 
 
 def sessions_for(budget: int, mean_turns: float, pool: int = 0) -> int:
@@ -461,14 +474,18 @@ def _session_workload(p: Path, sessions: List[Session], t: Workload, session_poo
     A file of explicit requests (an agent's: each request's messages given whole) has no history to choose and no
     system prompt to replace, so --history and --session-system are refused for it, its history is recorded as
     "explicit", and its name says so ("-sessions-explicit"), so it can never share a name with a file read before
-    explicit requests existed."""
+    explicit requests existed. Each of its requests is self-contained, so a level replays a window of each session
+    rather than its start (datasets.window): one primer request, unmeasured, then --session-turns measured ones
+    (EXPLICIT_WINDOW by default), from an offset spread over the session's length, so a level meets the requests an
+    agent sends once its context has filled as often as the file holds them. A level's budget is a window per slot,
+    and with a pool a window per live session, the pool capped at POOL_CAP per slot (Workload.pool_at)."""
     explicit = any(step.explicit for s in sessions for step in s.steps)
     if explicit:
         given = [name for name, v in (("--history", history), ("--session-system", session_system)) if v is not None]
         if given:
             raise ValueError(f"{p.name} gives each request's messages whole, so {', '.join(given)} cannot apply to it: "
                              "the file says what every request sends")
-    cap = DEFAULT_TURNS_CAP if turns_cap is None else int(turns_cap)
+    cap = (EXPLICIT_WINDOW if explicit else DEFAULT_TURNS_CAP) if turns_cap is None else int(turns_cap)
     hist = "explicit" if explicit else history or "generated"
     pool = int(session_pool or 0)
     system = (session_system or "").lstrip("\ufeff").strip()
@@ -483,16 +500,20 @@ def _session_workload(p: Path, sessions: List[Session], t: Workload, session_poo
                        "per slot", pool, max(t.concurrencies))
     digest = hashlib.sha256(p.read_bytes() + (b"\0system\0" + system.encode() if system else b"")).hexdigest()[:8]
     stem = re.sub(r"[^A-Za-z0-9_.-]+", "-", p.stem)[:40] or "prompts"
-    name = (f"file-{stem}-{digest}-sessions" + ("-explicit" if explicit else "")
-            + (f"-t{cap}" if cap != DEFAULT_TURNS_CAP else "")
+    cut = turns_cap is not None if explicit else cap != DEFAULT_TURNS_CAP
+    name = (f"file-{stem}-{digest}-sessions" + ("-explicit" if explicit else "") + (f"-t{cap}" if cut else "")
             + (f"-pool{pool}" if pool else "") + ("-recorded" if hist == "recorded" else ""))
     decode = max(t.decode_tokens, 512)
 
     def tokens(text: str) -> int:
         return len(text) // CHARS_PER_TOKEN + 1
 
-    capped = [s.capped(cap) for s in sessions]
-    recorded = sorted(tokens(st.answer) for s in capped for st in s.steps if st.answer)
+    # Any request of an explicit session can fall in a window, so all of them size the context; a level's sessions are
+    # windows, here one per session at evenly spread offsets, for the mean a level's sessions hold.
+    capped = sessions if explicit else [s.capped(cap) for s in sessions]
+    replayed = ([window(s, cap, (i + 0.5) / len(sessions)) for i, s in enumerate(sessions)] if explicit
+                else capped)
+    recorded =sorted(tokens(st.answer) for s in capped for st in s.steps if st.answer)
     unrecorded = min(decode, recorded[len(recorded) // 2]) if recorded else decode
 
     def answer(step) -> int:
@@ -512,10 +533,13 @@ def _session_workload(p: Path, sessions: List[Session], t: Workload, session_poo
             convo = prompt + answer(step) + TURN_OVERHEAD
         return best
 
-    mean_turns = sum(s.turns for s in capped) / len(capped)
+    mean_turns = sum(s.turns for s in replayed) / len(replayed)
+    per_slot = cap + 1 if explicit else TURNS_PER_SLOT  # explicit: the primer and the measured requests
+    per_session = per_slot if explicit else TURNS_PER_POOLED_SESSION
     levels = len(t.concurrencies)
-    budgets = [turn_budget(c, TURNS_PER_SLOT, pool) for c in t.concurrencies]
-    want = max(sessions_for(b, mean_turns, pool) for b in budgets)
+    pools = [min(pool, POOL_CAP * c) if explicit else pool for c in t.concurrencies]
+    budgets = [turn_budget(c, per_slot, pc, per_session) for c, pc in zip(t.concurrencies, pools)]
+    want = max(sessions_for(b, mean_turns, pc) for b, pc in zip(budgets, pools))
     # Every level, and every level's close-call re-measure, gets sessions of its own (measure._level_workload).
     per_level = max(1, min(want, len(sessions) // (2 * levels)))
     if per_level < want:
@@ -525,7 +549,7 @@ def _session_workload(p: Path, sessions: List[Session], t: Workload, session_poo
     if per_level * mean_turns < max(budgets):
         logger.warning("%s: the busiest level's %d sessions hold about %.0f turns, short of its turn budget of %d%s; "
                        "it will send fewer turns than asked", p.name, per_level, per_level * mean_turns, max(budgets),
-                       f" (a pool of {pool} asks for {TURNS_PER_POOLED_SESSION} turns per live session)" if pool else "")
+                       f" (a pool of {pool} asks for {per_session} turns per live session)" if pool else "")
     if len(sessions) < 2 * levels:
         logger.warning("%s has fewer sessions than concurrency levels and re-measures, so levels repeat sessions and "
                        "the prefix cache can make later levels look faster", p.name)
@@ -534,7 +558,7 @@ def _session_workload(p: Path, sessions: List[Session], t: Workload, session_poo
                    prefill_tokens=min(MAX_FILE_PREFILL, -(-worst // 256) * 256), decode_tokens=decode,
                    shared_prefix_tokens=0, prefix_text="", prefix_fixed=False, prompts=[], fitted=False,
                    requests_per_slot=0, sample_offset=0, sessions=True, force_sessions=forced, turns_cap=cap,
-                   history=hist, session_pool=pool, turns_per_slot=TURNS_PER_SLOT, session_system=system,
+                   history=hist, session_pool=pool, turns_per_slot=per_slot, session_system=system,
                    session_list=[])
 
 

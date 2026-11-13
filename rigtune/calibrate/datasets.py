@@ -123,6 +123,7 @@ class Step:
     chain: bool = False
     tag: str = ""
     max_tokens: Optional[int] = None
+    primer: bool = False  # sent to warm a window's prefix, and not measured (see window)
 
     @property
     def explicit(self) -> bool:
@@ -429,15 +430,55 @@ def session_pool(path: str, force: bool = False) -> Tuple[Session, ...]:
 def sample_sessions(source: str, n: int, offset: int, turns_cap: int = DEFAULT_TURNS_CAP,
                     system: Optional[str] = None, force: bool = False) -> List[Session]:
     """n sessions from position `offset` of the shuffled pool (wrapping around a small one), each cut to its first
-    `turns_cap` steps. `system`, when given, is every session's system prompt in place of its own."""
+    `turns_cap` steps. `system`, when given, is every session's system prompt in place of its own.
+
+    An explicit session is cut to a window of `turns_cap` measured requests instead (see window), at a point of its
+    length that steps by the golden ratio from a seeded start: any run of consecutive draws is spread evenly over
+    session length, and a level only ever replays the sessions drawn first, so its windows hold early, middle and
+    late requests in about the proportions the file does (a shuffle of n equal bands spread all n, but a level at
+    8 users ran 9 of its 16)."""
     if not source.startswith(FILE_PREFIX):
         raise ValueError(f"sessions come from a file, not {source!r}")
     items = session_pool(source[len(FILE_PREFIX):], force)
+    first = random.Random(offset * 100_003 + n).random()
     out = []
     for j in range(n):
-        s = items[(offset + j) % len(items)].capped(turns_cap)
+        s = items[(offset + j) % len(items)]
+        if s.steps[0].explicit:
+            s = window(s, turns_cap, (first + j * GOLDEN_STEP) % 1.0)
+        else:
+            s = s.capped(turns_cap)
         out.append(replace(s, system=system) if system else s)
     return out
+
+
+EXPLICIT_WINDOW = 6  # measured requests per window of an explicit session (--session-turns)
+GOLDEN_STEP = 0.6180339887498949  # (sqrt(5) - 1) / 2: successive windows' positions are spread evenly
+
+
+def window(s: Session, measured: int, where: float) -> Session:
+    """The part of an explicit session a level replays: `measured` requests around the point `where` (0 to 1) of its
+    length, after one primer, the request just before them, which is sent to put the session's prefix in the cache
+    as an agent that had been running would have it, and is not measured. Explicit requests are self-contained, so a
+    window can start anywhere a chain does not run through: the primer is neither chained to the request before it
+    nor chains to the first measured one, and a window that would end inside a chain runs to the chain's end, so
+    every chain is replayed whole. A window at the start has no primer: a session's first request is cold anyway."""
+    steps, n = s.steps, len(s.steps)
+
+    def follows(i: int) -> bool:  # step i is sent the moment step i - 1 finishes
+        return i > 0 and steps[i - 1].chain
+
+    starts = [o for o in range(n) if o == 0 or not (follows(o) or follows(o - 1))]
+    target = min(max(0, int(where * n) - measured // 2), max(0, n - measured))
+    # The start nearest the target, the earlier on a tie: always taking the one before it under-covers the ends of
+    # sessions, where an agent's context is full and it evicts.
+    start = min(starts, key=lambda o: (abs(o - target), o))
+    end = min(n, start + measured)
+    while end < n and follows(end):
+        end += 1
+    if start == 0:
+        return replace(s, steps=steps[:end])
+    return replace(s, steps=(replace(steps[start - 1], primer=True),) + steps[start:end])
 
 
 @functools.lru_cache(maxsize=None)
