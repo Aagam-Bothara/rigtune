@@ -228,6 +228,40 @@ def _attention_backend_flag() -> bool:
         return False
 
 
+@functools.lru_cache(maxsize=1)
+def _vllm_package() -> Optional[Path]:
+    """The vllm package that the launch command will run, or None when it cannot be told.
+
+    The `vllm` command can come from PATH, in another environment than this interpreter's, so a flag found in the
+    importable source here would say nothing about it: look in that command's own environment instead."""
+    cli = _serve_cli()
+    sibling = Path(sys.executable).with_name("vllm.exe" if sys.platform == "win32" else "vllm")
+    if cli is None or Path(cli) == sibling:  # the module next to this interpreter, or its own CLI
+        spec = importlib.util.find_spec("vllm")
+        locs = list(spec.submodule_search_locations or []) if spec else []
+        return Path(locs[0]) if locs else None
+    env = Path(cli).resolve().parent.parent
+    found = sorted(env.glob("lib/python3*/site-packages/vllm")) + sorted(env.glob("Lib/site-packages/vllm"))
+    return found[0] if found else None
+
+
+@functools.lru_cache(maxsize=1)
+def _prompt_tokens_details_flag() -> bool:
+    """Whether the vLLM that will run takes --enable-prompt-tokens-details, which puts cached_tokens in each reply's
+    usage. Its server arguments live in entrypoints/launchers/cli_args.py in 0.29 and entrypoints/openai/ before;
+    read from source, since importing vLLM costs seconds."""
+    root = _vllm_package()
+    if root is None:
+        return False
+    for parts in (("entrypoints", "launchers", "cli_args.py"), ("entrypoints", "openai", "cli_args.py")):
+        try:
+            if "enable_prompt_tokens_details" in root.joinpath(*parts).read_text("utf-8"):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 class VllmBackend(BaseBackend):
     name = "vllm"
     runtime_workspace_bytes = int(1.5 * GiB)  # CUDA context + CUDA graphs + activation workspace
@@ -408,6 +442,8 @@ class VllmBackend(BaseBackend):
         if cfg.tp > 1 and nvlink_between(list(range(cfg.tp))) is False:
             env["NCCL_P2P_DISABLE"] = "1"
             args += ["--disable-custom-all-reduce"]
+        if self.report_reuse and _prompt_tokens_details_flag():
+            args += ["--enable-prompt-tokens-details"]
         return LaunchSpec(args=args, env=env)
 
     # Chunked-prefill token budgets to try. Small budgets interleave prefill with decode and protect
@@ -435,4 +471,5 @@ class VllmBackend(BaseBackend):
             model_name=model.spec.hf_id,  # --served-model-name
             tokenizer_id=model.spec.hf_id,
             gpu_ids=[hw.gpu.index] if hw.gpu else [],
+            metrics_path="/metrics",  # vllm:prefix_cache_queries and vllm:prefix_cache_hits, on by default
         )

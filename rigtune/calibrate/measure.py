@@ -264,6 +264,9 @@ class RequestOutcome:
     token_source: str = "none"  # "usage" | "tokenizer" | "chunks"
     error: Optional[str] = None
     prompt_tokens: Optional[int] = None  # the engine's usage.prompt_tokens, when it reports one
+    cached_tokens: Optional[int] = None  # usage.prompt_tokens_details.cached_tokens: served from the prefix cache
+    # The cached tokens by where they came from (device, host, disk), for an engine that says; nothing fills it yet.
+    cached_by_source: Dict[str, int] = field(default_factory=dict)
     # Session replay only (_SessionScheduler): which step of which session this was, when it was dispatched, and
     # what it shared with what the engine had already seen.
     session: Optional[str] = None
@@ -302,6 +305,7 @@ async def _one_request(
     pieces: List[str] = []
     usage_tokens: Optional[int] = None
     prompt_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
     try:
         async with client.stream("POST", url, json=body, timeout=timeout) as resp:
             if resp.status_code != 200:
@@ -327,6 +331,9 @@ async def _one_request(
                     usage_tokens = int(usage["completion_tokens"])
                 if isinstance(usage, dict) and isinstance(usage.get("prompt_tokens"), int):
                     prompt_tokens = usage["prompt_tokens"]
+                    details = usage.get("prompt_tokens_details")
+                    if isinstance(details, dict) and isinstance(details.get("cached_tokens"), int):
+                        cached_tokens = details["cached_tokens"]
     except (httpx.HTTPError, asyncio.TimeoutError) as exc:
         return RequestOutcome(ok=False, error=f"{type(exc).__name__}: {exc}")
     end = time.perf_counter()
@@ -342,7 +349,8 @@ async def _one_request(
         else:
             tokens, source = chunks, "chunks"
     return RequestOutcome(ok=True, ttft_s=first - t0, duration_s=end - t0, tokens=tokens, token_source=source,
-                          prompt_tokens=prompt_tokens, text="".join(pieces) if keep_text else "")
+                          prompt_tokens=prompt_tokens, cached_tokens=cached_tokens,
+                          text="".join(pieces) if keep_text else "")
 
 
 async def _drive(
@@ -625,6 +633,7 @@ async def _drive_sessions(base_url: str, hooks: LlmtraceHooks, workload: Workloa
 
 
 def _metrics_from(outcomes: List[RequestOutcome], wall_s: float, concurrency: int) -> TrialMetrics:
+    sessions = _session_stats(outcomes, wall_s)
     outcomes = [o for o in outcomes if o.skipped is None]  # a session stopped early sent nothing for its rest
     ok = [o for o in outcomes if o.ok]
     m = TrialMetrics(
@@ -633,6 +642,7 @@ def _metrics_from(outcomes: List[RequestOutcome], wall_s: float, concurrency: in
         concurrency=concurrency,
         duration_s=wall_s,
         output_tokens=sum(o.tokens for o in ok),
+        **sessions,
     )
     # A few distinct errors, so "12/48 requests failed" says why.
     m.errors = list(dict.fromkeys((o.error or "")[:200] for o in outcomes if not o.ok and o.error))[:3]
@@ -647,6 +657,123 @@ def _metrics_from(outcomes: List[RequestOutcome], wall_s: float, concurrency: in
     m.tpot_ms = statistics.fmean(tpots) if tpots else None
     m.tok_s = m.output_tokens / wall_s if wall_s > 0 else 0.0
     return m
+
+
+def _session_stats(outcomes: List[RequestOutcome], wall_s: float) -> Dict[str, Any]:
+    """What a level of session replay achieved, from the engine's own counts, beside what its structure allowed.
+
+    Achieved: cached prompt tokens over prompt tokens. SGLang leaves the count out of a reply when nothing was
+    cached, so once any reply in the level carried one a reply without it counts as zero; when none did, the level
+    has no count at all (None), never a measured zero, and the engine's /metrics counters can stand in.
+    Expected: each step's prompt tokens, scaled by the share of its messages that is a prefix of what the engine
+    saw before (the previous step and the answer the engine generated, or for a first step a system prompt that
+    sessions share; see _SessionScheduler). It is an estimate: it measures characters of the messages, not the
+    engine's tokens, and ignores that engines cache whole blocks, so engines are better compared on the later
+    steps' achieved share than on the gap between the two. With recorded history a later step carries the file's
+    answer, which the engine never generated, so less is reusable. Both are also split into first steps (only a
+    shared system prompt is reusable) and later steps (the history). A flat level (--report-reuse) records only the
+    achieved share, from the replies that carry a count."""
+    steps = [o for o in outcomes if o.session is not None]
+    if not steps:
+        flat = [o for o in outcomes if o.ok and o.prompt_tokens is not None]
+        if not any(o.cached_tokens is not None for o in flat):
+            return {}
+        return _reuse(flat, "")
+    sent = [o for o in steps if o.skipped is None]
+    out: Dict[str, Any] = {"sessions": len({o.session for o in steps}),
+                           "sessions_cut": sum(o.skipped == "cut" for o in steps),
+                           "sessions_truncated": sum(o.skipped == "truncated" for o in steps)}
+    if sent and wall_s > 0:
+        out["mean_in_flight"] = round(sum(o.duration_s for o in sent) / wall_s, 2)  # time-weighted, by Little's law
+        out["effective_pool"] = round(statistics.fmean(o.live for o in sent), 1)
+        out["working_set_tokens"] = max(o.working_set for o in sent)
+    for name in ("distance", "idle_gap"):
+        values = [getattr(o, name) for o in sent if getattr(o, name) is not None]
+        if values:
+            out["reuse_distance" if name == "distance" else name] = statistics.median(values)
+    served = [o for o in sent if o.ok and o.prompt_tokens is not None]
+    out["prompt_tokens_total"] = 0
+    if any(o.cached_tokens is not None for o in served):  # SGLang's way of saying zero, once it says anything
+        out.update(_reuse(served, ""))
+        for part, steps_ in (("_first", [o for o in served if o.turn == 1]),
+                             ("_later", [o for o in served if o.turn > 1])):
+            if steps_:
+                out[f"prefix_reuse{part}"] = _reuse(steps_, part)[f"prefix_reuse{part}"]
+    else:
+        out["prompt_tokens_total"] = sum(o.prompt_tokens for o in served)
+    for part, steps_ in (("", served), ("_first", [o for o in served if o.turn == 1]),
+                         ("_later", [o for o in served if o.turn > 1])):
+        total = sum(o.prompt_tokens for o in steps_)
+        if total:
+            expected = sum(o.prompt_tokens * o.reusable_chars / o.request_chars for o in steps_ if o.request_chars)
+            out[f"reuse_expected{part}"] = round(expected / total, 4)
+    ttfts: Dict[int, List[float]] = {}
+    for o in sent:
+        if o.ok:
+            ttfts.setdefault(o.turn, []).append(o.ttft_s * 1000)
+    out["ttft_by_turn_ms"] = {str(t): round(statistics.median(v), 1) for t, v in sorted(ttfts.items())}
+    return out
+
+
+def _reuse(served: List[RequestOutcome], part: str) -> Dict[str, Any]:
+    """Achieved reuse over replies with a prompt count; a missing cached count is zero (see _session_stats)."""
+    total = sum(o.prompt_tokens for o in served)
+    cached = sum(o.cached_tokens or 0 for o in served)
+    if part:
+        return {f"prefix_reuse{part}": round(cached / total, 4) if total else None}
+    return {"prompt_tokens_total": total, "cached_tokens_total": cached, "reuse_source": "usage",
+            "prefix_reuse": round(cached / total, 4) if total else None}
+
+
+Counters = Dict[Tuple[str, str], float]  # (metric name without _total, its labels as exposed) -> value
+PREFIX_QUERIES, PREFIX_HITS = "vllm:prefix_cache_queries", "vllm:prefix_cache_hits"
+
+
+def _prefix_counters(base_url: str, hooks: LlmtraceHooks) -> Optional[Counters]:
+    """Every counter on the engine's /metrics, keyed by name and labels (a KV-tier experiment can read the ones by
+    source), or None when there is no endpoint or it cannot be read."""
+    if not hooks.metrics_path:
+        return None
+    try:
+        text = httpx.get(base_url.rstrip("/") + hooks.metrics_path, timeout=10.0).text
+    except httpx.HTTPError:
+        return None
+    out: Counters = {}
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        # prometheus_client exposes a counter as <name>_total, with labels in braces before the value
+        head, _, value = line.rpartition(" ")
+        name, _, labels = head.partition("{")
+        try:
+            out[(name.strip().removesuffix("_total"), labels.rstrip("}"))] = float(value)
+        except ValueError:
+            continue
+    return out
+
+
+def _counter_sum(counters: Counters, name: str) -> Optional[float]:
+    """One counter summed over its label sets (engines), or None when the engine does not expose it."""
+    values = [v for (n, _), v in counters.items() if n == name]
+    return sum(values) if values else None
+
+
+def _engine_reuse(m: TrialMetrics, before: Optional[Counters], after: Optional[Counters]) -> None:
+    """Fall back to vLLM's prefix-cache counters for a level whose replies reported no cached tokens."""
+    if m.reuse_source != "none" or before is None or after is None:
+        return
+    sums = [_counter_sum(c, n) for c in (before, after) for n in (PREFIX_QUERIES, PREFIX_HITS)]
+    if any(s is None for s in sums):
+        return
+    queries, hits = sums[2] - sums[0], sums[3] - sums[1]
+    if queries > 0 and hits >= 0:
+        m.prefix_reuse, m.reuse_source = round(hits / queries, 4), "metrics"
+
+
+_REUSE_FIELDS = ("prompt_tokens_total", "cached_tokens_total", "prefix_reuse", "prefix_reuse_first",
+                 "prefix_reuse_later", "reuse_expected", "reuse_expected_first", "reuse_expected_later",
+                 "reuse_source", "sessions", "sessions_cut", "sessions_truncated", "mean_in_flight", "effective_pool",
+                 "reuse_distance", "idle_gap", "working_set_tokens", "ttft_by_turn_ms")
 
 
 def _level_workload(workload: Workload, k: int, counter: TokenCounter) -> Workload:
@@ -833,6 +960,7 @@ def run_trial(
             return got, time.perf_counter() - t0
 
         resampled = False
+        counters = _prefix_counters(base_url, hooks) if workload.sessions else None  # outside the measured window
         with Telemetry(hooks, pid=pid) as tel:
             outcomes, wall = drive(level)
             if close_call is not None and close_call(_metrics_from(outcomes, wall, c)):
@@ -843,6 +971,8 @@ def run_trial(
                 more, more_wall = drive(extra)
                 outcomes, wall, resampled = outcomes + more, wall + more_wall, True
         m = _metrics_from(outcomes, wall, c)
+        if counters is not None:
+            _engine_reuse(m, counters, _prefix_counters(base_url, hooks))
         m.resampled = resampled
         s = tel.summary
         source = s.source if s.source != "none" else source
@@ -891,4 +1021,6 @@ def run_trial(
         prompt_tokens=prompt_tokens,
         by_concurrency=per_level,
     )
+    if workload.sessions or best.reuse_source != "none":  # the reuse of the level the summary reports, like its speed
+        summary = summary.model_copy(update={f: getattr(best, f) for f in _REUSE_FIELDS})
     return summary

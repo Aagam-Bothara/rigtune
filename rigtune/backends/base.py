@@ -36,6 +36,9 @@ class LlmtraceHooks:
     tokenizer_id: Optional[str] = None  # HF id whose tokenizer counts tokens when usage is absent
     gpu_ids: List[int] = field(default_factory=list)  # NVML indices llmtrace should sample
     process_memory: bool = False  # sample RSS of the backend process (CPU backends)
+    # Prometheus endpoint with prefix-cache counters (vLLM), read around each level of a session file whose replies
+    # carry no cached-token counts.
+    metrics_path: Optional[str] = None
 
 
 @dataclass
@@ -229,6 +232,9 @@ class BaseBackend:
 
     name: str = "base"
     runtime_workspace_bytes: int = 1024 * 1024 * 1024
+    # Launch with the engine's flag for per-request cached-token counts. Fixed when the registry is built, from the
+    # workload (registry(report_reuse=...)): only session files ask for it, so no other launch arguments change.
+    report_reuse: bool = False
 
     def available(self, hw: HardwareDescriptor) -> bool:
         return hw.backend_available(self.name)

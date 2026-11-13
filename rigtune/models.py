@@ -280,6 +280,31 @@ class TrialMetrics(BaseModel):
     # needs (calibrate/tail.py). Kept per concurrency level.
     ttft_samples_ms: List[float] = Field(default_factory=list)
     resampled: bool = False  # the level was too close to its ceiling to call and was measured again
+    # Session files, and flat files with --report-reuse (calibrate/measure.py _session_stats). Prompt tokens the
+    # engine counted, and how many it said it served from its prefix cache; prefix_reuse is their ratio, from the
+    # replies' usage or, when no reply in the level carried a count, from the engine's /metrics counters
+    # (reuse_source says which, or "none"), split into first steps (a shared system prompt) and later steps (the
+    # history). reuse_expected is an estimate of what the conversations allowed, counted in characters and blind to
+    # the engines' cache blocks: compare engines on prefix_reuse_later, not on the gap. Achieved far below expected
+    # means eviction, or a chat template that does not re-render an earlier step identically.
+    prompt_tokens_total: int = 0
+    cached_tokens_total: int = 0
+    prefix_reuse: Optional[float] = None
+    prefix_reuse_first: Optional[float] = None
+    prefix_reuse_later: Optional[float] = None
+    reuse_expected: Optional[float] = None
+    reuse_expected_first: Optional[float] = None
+    reuse_expected_later: Optional[float] = None
+    reuse_source: str = "none"  # "usage" | "metrics" | "none"
+    sessions: int = 0
+    sessions_cut: int = 0  # stopped before a step whose prompt would not fit
+    sessions_truncated: int = 0  # stopped with steps left because the level's turn budget was spent
+    mean_in_flight: Optional[float] = None  # time-weighted requests in flight: below the concurrency, a thinned level
+    effective_pool: Optional[float] = None  # mean sessions live at dispatch: what a --session-pool actually reached
+    reuse_distance: Optional[float] = None  # median requests dispatched between two steps of one session (P - 1)
+    idle_gap: Optional[float] = None  # median of those dispatched after its previous step finished (P - c)
+    working_set_tokens: Optional[int] = None  # peak of the live sessions' last prompts and answers, in tokens
+    ttft_by_turn_ms: Dict[str, float] = Field(default_factory=dict)  # median time to first token, by step number
 
     # A trial is not invalidated by a couple of degenerate requests. Small models sometimes emit
     # end-of-sequence immediately, producing no tokens; a backend that is actually broken fails

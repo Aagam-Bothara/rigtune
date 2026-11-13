@@ -203,6 +203,15 @@ def sglang_spec_methods() -> FrozenSet[str]:
     return spec_methods_in(_server_args_source(pkg)) if pkg else frozenset()
 
 
+@functools.lru_cache(maxsize=1)
+def _cache_report_flag() -> bool:
+    """Whether the SGLang that would be launched takes --enable-cache-report, which puts cached_tokens in each
+    reply's usage (0.5.19 has it in srt/server_args.py); read from that interpreter's source, as above."""
+    python = sglang_python()
+    pkg = _sglang_package_dir(python) if python else None
+    return bool(pkg) and "enable_cache_report" in _server_args_source(pkg)
+
+
 class SglangBackend(BaseBackend):
     name = "sglang"
     runtime_workspace_bytes = int(2.0 * GiB)  # CUDA graphs for many batch sizes + radix cache metadata
@@ -347,6 +356,9 @@ class SglangBackend(BaseBackend):
         if cfg.tp > 1 and nvlink_between(list(range(cfg.tp))) is False:
             env["NCCL_P2P_DISABLE"] = "1"
             args += ["--disable-custom-all-reduce"]
+        # SGLang's own counter, sglang:cached_tokens_total, needs --enable-metrics too, so only the per-reply count.
+        if self.report_reuse and _cache_report_flag():
+            args += ["--enable-cache-report"]
         return LaunchSpec(args=args, env=env)
 
     # A start-up out-of-memory failure with a second model steps down from the lowered fraction, this far at most

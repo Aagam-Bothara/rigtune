@@ -297,7 +297,7 @@ def _percentile(value: int) -> int:
 def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combine: str = "on",
           budget: Optional[float] = None, ttft_percentile: int = 95, confirm: str = "on", all_levels: bool = False,
           explore: str = "off", quality_probe: str = "off", eval_set: Optional[str] = None,
-          max_accuracy_loss: float = 3.0, eval_items: int = 300):
+          max_accuracy_loss: float = 3.0, eval_items: int = 300, report_reuse: bool = False):
     from rigtune.pipeline import SearchOptions
 
     if eval_set:
@@ -312,10 +312,15 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
         kv_quant=kv_quant == "on", speculative=speculative != "off", speculative_all=speculative == "all",
         prefix_cache=prefix_cache == "on", combine=combine == "on", budget_s=budget, ttft_percentile=ttft_percentile, confirm=confirm == "on",
         all_levels=all_levels, explore=explore == "on", quality_probe=quality_probe == "on",
-        eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
+        eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items, report_reuse=report_reuse,
     )
 
 
+REPORT_REUSE_OPT = typer.Option(
+    False, "--report-reuse",
+    help="Launch the engines with their per-request cached-token reports for a flat file or a preset too (a session "
+         "file always has them), so each level records how much of its prompts the prefix cache served. The profile "
+         "is cached under its own name.")
 QUANT_OPT = typer.Option("auto", "--quant", callback=_quant_list,
                          help="Weight precisions calibration may choose. auto: everything supported except the "
                               "Hub's pre-quantized checkpoints, 4-bit AWQ/GPTQ and 8-bit W8A8, which can cost quality "
@@ -523,6 +528,7 @@ def bench(
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
     quality_probe: str = QUALITY_OPT,
+    report_reuse: bool = REPORT_REUSE_OPT,
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
@@ -535,12 +541,13 @@ def bench(
     wl = _workload(workload, workload_file)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
-    candidates, reg = select(hw, spec, force=backend)
+    candidates, reg = select(hw, spec, force=backend, workload=wl, report_reuse=report_reuse)
     if not candidates:
         err.print("[red]no candidate backends for this machine/model[/]")
         raise typer.Exit(2)
     opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
-                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items)
+                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
+                 report_reuse=report_reuse)
     result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.search_quants(),
                               speculative_all=opts.speculative_all)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
@@ -592,6 +599,7 @@ def recalibrate(
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
     quality_probe: str = QUALITY_OPT,
+    report_reuse: bool = REPORT_REUSE_OPT,
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
@@ -607,7 +615,8 @@ def recalibrate(
                               progress=view.progress, on_stage=view.on_stage,
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
-                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items), layout=layout)
+                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
+                 report_reuse=report_reuse), layout=layout)
     view.stop()
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
@@ -648,6 +657,7 @@ def compare(
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
     quality_probe: str = QUALITY_OPT,
+    report_reuse: bool = REPORT_REUSE_OPT,
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
@@ -669,13 +679,15 @@ def compare(
                               progress=view.progress, hw=hw, on_stage=view.on_stage,
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
-                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items), layout=layout)
+                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
+                 report_reuse=report_reuse), layout=layout)
     view.stop()
     _print_profile(profile)
-    candidates, reg = select(hw, spec, force=backend)
+    candidates, reg = select(hw, spec, force=backend, workload=eval_wl, report_reuse=report_reuse)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
                                quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
-                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items).search_quants())
+                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
+                 report_reuse=report_reuse).search_quants())
 
     def _row_progress(label: str, row) -> None:
         if row is None:
@@ -891,6 +903,7 @@ def serve(
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
     quality_probe: str = QUALITY_OPT,
+    report_reuse: bool = REPORT_REUSE_OPT,
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
@@ -913,13 +926,16 @@ def serve(
                               progress=view.progress, on_stage=view.on_stage,
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
-                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items), layout=layout)
+                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
+                 report_reuse=report_reuse), layout=layout)
     view.stop()
     _print_profile(profile)
     if profile.prepared is None:
         err.print("[red]profile has no prepared model; run `rigtune recalibrate`[/]")
         raise typer.Exit(2)
-    be = get_backend(profile.backend)
+    # A session profile was calibrated, and its launch_args recorded, with the engine reporting cached tokens.
+    be = get_backend(profile.backend, report_reuse=bool(profile.workload_spec.get("sessions"))
+                     or profile.options.get("reuse") == "on")
     be.materialize(profile.prepared, [profile.config.quant])  # no-op if already on disk
     if profile.disagg is not None:
         from rigtune.disagg import DisaggSupervisor, create_pd_app

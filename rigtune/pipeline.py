@@ -87,6 +87,10 @@ class SearchOptions:
     eval_set: Optional[str] = None
     max_accuracy_loss: float = 3.0  # --max-accuracy-loss, points
     eval_items: int = 300  # --eval-items: the first N items (0 = all)
+    # --report-reuse: launch engines with their per-request cached-token reports for a flat workload too (a session
+    # file always has them), so a flattened control records the reuse it got. It adds a launch flag, so a profile
+    # calibrated with it is cached under its own name.
+    report_reuse: bool = False
 
     def key(self, objective: Optional[str] = None) -> Dict[str, str]:
         """Options that change the pick, recorded in the profile and in its cache path: the non-default
@@ -121,6 +125,8 @@ class SearchOptions:
         if self.eval_set:  # a gated profile answers a different question; ungated cache paths are untouched
             out["eval"] = f"{Path(self.eval_set).stem}-{self.eval_items or 'all'}"
             out["maxloss"] = f"{self.max_accuracy_loss:g}"
+        if self.report_reuse:
+            out["reuse"] = "on"
         if objective == "balanced" and self.ttft_percentile != 50:
             out["ttft"] = f"p{self.ttft_percentile}"
         return out
@@ -297,9 +303,13 @@ def search_space(hw: HardwareDescriptor, plan: "PlanResult", reg: Dict[str, Base
 
 
 def select(
-    hw: HardwareDescriptor, spec: ModelSpec, force: Optional[str] = None
+    hw: HardwareDescriptor, spec: ModelSpec, force: Optional[str] = None, workload: Optional[Workload] = None,
+    report_reuse: bool = False,
 ) -> Tuple[List[str], Dict[str, BaseBackend]]:
-    reg = backend_registry()
+    """The candidate backends. A session `workload`, or `report_reuse` (--report-reuse), builds them to report
+    per-request cached tokens, so what prefix reuse each trial achieved is measured; no other launch arguments
+    change."""
+    reg = backend_registry(report_reuse=report_reuse or bool(workload is not None and workload.sessions))
     return select_backends(hw, spec, reg, force=force), reg
 
 
@@ -678,7 +688,7 @@ def resolve_profile(
             say("cache hit")
             return cached
     say("select")
-    candidates, reg = select(hw, spec, force=force_backend)
+    candidates, reg = select(hw, spec, force=force_backend, workload=workload, report_reuse=opts.report_reuse)
     if not candidates:
         raise RuntimeError("no backend supports this machine/model; run `rigtune probe` for details")
     say("prepare + plan")
@@ -719,7 +729,8 @@ def _resolve_phased(spec: ModelSpec, objective: str, force_backend: Optional[str
                            recalibrate=recalibrate, workload=workload, constraints=constraints, progress=progress,
                            hw=hw, on_stage=on_stage, power_mode=power_mode if phases == "auto" else "off",
                            options=options)
-    _, reg = select(hw, spec, force=base.backend)
+    _, reg = select(hw, spec, force=base.backend, workload=workload,
+                    report_reuse=bool(options is not None and options.report_reuse))
     say("disaggregate")
     profile = calibrate_disaggregated(hw, spec, objective, base, reg, workload=workload, constraints=constraints,
                                       phases=phases, connector=kv_connector, progress=progress, power_mode=power_mode,
@@ -748,7 +759,7 @@ def _resolve_layout(spec: ModelSpec, objective: str, force_backend: Optional[str
     base = resolve_profile(spec, objective, force_backend=force_backend, recalibrate=recalibrate, workload=workload,
                            constraints=constraints, progress=progress, hw=hw, on_stage=on_stage,
                            power_mode=power_mode, options=options)
-    _, reg = select(hw, spec, force=base.backend)
+    _, reg = select(hw, spec, force=base.backend, workload=workload, report_reuse=options.report_reuse)
     say("layout")
     profile = calibrate_layout(hw, objective, base, reg, layout, workload=workload, constraints=constraints,
                                progress=progress, log_dir=profile_cache.logs_dir() / spec.safe_id)

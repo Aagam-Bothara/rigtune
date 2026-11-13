@@ -91,7 +91,7 @@ def main() -> int:
             print(f"[{wl_name}] no rigtune row in {args.results}; run `rigtune compare` first", file=sys.stderr)
             failures += 1
             continue
-        candidates, reg = select(hw, spec, force=pick.backend)
+        candidates, reg = select(hw, spec, force=pick.backend, workload=wl)  # a session file reports reuse
         if not candidates:
             print(f"[{wl_name}] {pick.backend} is not usable here", file=sys.stderr)
             failures += 1
