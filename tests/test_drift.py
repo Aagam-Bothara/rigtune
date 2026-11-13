@@ -224,6 +224,53 @@ def test_requests_that_should_not_be_touched_are_not():
     assert _ask_for_usage(chosen) == chosen  # a caller who already decided keeps their decision
 
 
+class _Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def _arrive(watch: TrafficWatch, clock: _Clock, n: int, gap_s: float) -> None:
+    for _ in range(n):
+        watch.began()
+        watch.record_response(_body(500, 120), "application/json")
+        watch.ended()
+        clock.t += gap_s
+
+
+def test_the_live_arrival_rate_is_reported():
+    clock = _Clock()
+    watch = TrafficWatch(CHAT, clock=clock)
+    _arrive(watch, clock, 60, 0.5)
+
+    rate = watch.report()["arrival_rate"]
+    assert rate == {"live_rps": 2.0}  # a profile scored without a rate reports only the live number
+    assert watch.findings() == []
+
+
+def test_traffic_far_from_the_rate_a_profile_was_scored_for_is_drift():
+    clock = _Clock()
+    watch = TrafficWatch({**CHAT, "arrival_rate_rps": 0.5}, clock=clock)
+    _arrive(watch, clock, 60, 0.5)
+
+    assert watch.report()["arrival_rate"] == {"live_rps": 2.0, "calibrated_rps": 0.5}
+    found = watch.findings()
+    assert len(found) == 1 and "requests arrive at 2/s" in found[0] and "4.0x more" in found[0]
+    assert watch.should_warn() is True
+
+
+def test_a_rate_within_a_factor_of_two_is_not_drift():
+    clock = _Clock()
+    watch = TrafficWatch({**CHAT, "arrival_rate_rps": 0.5}, clock=clock)
+    _arrive(watch, clock, 60, 1.5)  # 0.67 req/s
+    assert watch.findings() == []
+    slow = TrafficWatch({**CHAT, "arrival_rate_rps": 0.5}, clock=(c := _Clock()))
+    _arrive(slow, c, 60, 5.0)  # 0.2 req/s: 2.5x fewer
+    assert any("fewer" in f for f in slow.findings())
+
+
 def test_token_counts_are_taken_from_a_streamed_usage_chunk():
     watch = TrafficWatch(CHAT)
     watch.began()

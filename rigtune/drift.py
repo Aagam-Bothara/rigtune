@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections import deque
-from typing import Any, Deque, Dict, List, Optional, Sequence
+from typing import Any, Callable, Deque, Dict, List, Optional, Sequence
 
 WINDOW = 512  # requests kept for the rolling picture
 MIN_REQUESTS = 50  # below this, say "not enough traffic yet" rather than cry drift
@@ -29,6 +30,7 @@ MIN_LATENCY_SAMPLES = 20  # streamed replies needed before a ceiling breach is w
 # The proxy sees queueing and its own hop on top of the engine's own time to first token, so a breach is
 # called only when the ceiling is clearly passed rather than grazed.
 BREACH_MARGIN = 1.2
+RATE_OFF_BY = 2.0  # live arrivals outside [1/2, 2]x the rate a profile was scored for count as drift
 
 
 def _median(values: Sequence[int]) -> Optional[float]:
@@ -51,8 +53,12 @@ class TrafficWatch:
     """Rolling picture of served traffic, against the workload the profile was calibrated on."""
 
     def __init__(self, workload_spec: Optional[Dict[str, Any]] = None, window: int = WINDOW,
-                 min_requests: int = MIN_REQUESTS) -> None:
+                 min_requests: int = MIN_REQUESTS, clock: Callable[[], float] = time.monotonic) -> None:
         spec = workload_spec or {}
+        # The rate an `efficiency --arrival-rate` profile was scored for; None for every other profile.
+        self.calibrated_rate = spec.get("arrival_rate_rps")
+        self._clock = clock
+        self.arrivals: Deque[float] = deque(maxlen=window)
         self.workload_name = spec.get("name")
         # Prompts a tokenizer actually measured describe the calibration set better than the nominal
         # prefill, which is only a cap for a --workload-file and a mean at best. Older profiles carry none.
@@ -84,6 +90,7 @@ class TrafficWatch:
 
     def began(self) -> None:
         with self._lock:
+            self.arrivals.append(self._clock())
             self.requests += 1
             self.in_flight += 1
             self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
@@ -175,6 +182,13 @@ class TrafficWatch:
     def enough_data(self) -> bool:
         return self.requests >= self.min_requests
 
+    def live_rate(self) -> Optional[float]:
+        """Requests per second over the arrivals in the window: the gaps between them, not the time since."""
+        if len(self.arrivals) < 2:
+            return None
+        span = self.arrivals[-1] - self.arrivals[0]
+        return (len(self.arrivals) - 1) / span if span > 0 else None
+
     def findings(self) -> List[str]:
         """Plain sentences about how live traffic differs from the calibrated workload; empty when it matches."""
         out: List[str] = []
@@ -206,6 +220,15 @@ class TrafficWatch:
             if typical > top:
                 levels = "/".join(str(c) for c in self.calibrated_concurrency)
                 out.append(f"traffic runs at {typical:.0f} concurrent requests; the profile was measured at {levels}")
+        # A profile scored for an arrival rate chose by energy per request at that rate, and the idle share of each
+        # request scales with the gap between them: past a factor of two the choice may no longer hold.
+        live = self.live_rate()
+        if self.calibrated_rate and live:
+            ratio = live / self.calibrated_rate
+            if ratio > RATE_OFF_BY or ratio < 1 / RATE_OFF_BY:
+                more = "more" if ratio > 1 else "fewer"
+                out.append(f"requests arrive at {live:.2g}/s, {max(ratio, 1 / ratio):.1f}x {more} than the "
+                           f"{self.calibrated_rate:g}/s this profile's energy was scored for")
         return out
 
     def latency_findings(self) -> List[str]:
@@ -259,6 +282,8 @@ class TrafficWatch:
                                   "calibrated": self.calibrated_completion},
             "concurrency": {"median": _median(self.concurrency), "peak": self.peak_in_flight,
                             "calibrated": self.calibrated_concurrency},
+            "arrival_rate": {"live_rps": self.live_rate(),
+                             **({"calibrated_rps": self.calibrated_rate} if self.calibrated_rate else {})},
             "latency": {"ttft_ms": {"median": _percentile(self.ttft_ms, 50),
                                     "p95": _percentile(self.ttft_ms, 95)},
                         "ceiling_ms": self.ttft_ceiling_ms,
