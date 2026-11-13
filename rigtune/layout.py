@@ -45,7 +45,8 @@ LAYOUTS = ("single", "replicas", "tp", "auto")
 
 
 def _strip(cfg: Config) -> Config:
-    return cfg.model_copy(update={"power_limit_w": None, "sm_clock_mhz": None, "tp": 1})
+    # No KV-cache tier either: its host RAM was budgeted for one engine on one GPU (pipeline.tier_variants_fn)
+    return cfg.model_copy(update={"power_limit_w": None, "sm_clock_mhz": None, "tp": 1, "kv_tier": None})
 
 
 # --------------------------------------------------------------------------- load balancer
@@ -330,6 +331,9 @@ def calibrate_layout(
 
     results: List[TrialResult] = []
     t0 = time.monotonic()
+    tier_note = ([f"multi-GPU layouts are measured without the single-GPU pick's KV-cache tier "
+                  f"({base.config.kv_tier}): its host RAM was budgeted for one engine"]
+                 if base.config.kv_tier is not None else [])
 
     def _record(res: TrialResult) -> None:
         results.append(res)
@@ -383,5 +387,5 @@ def calibrate_layout(
         out.launch_args = backend.launch_spec(chosen.config, model, 0).args
     else:
         notes.append("auto: serving on one GPU, which measured better")
-    out.notes = list(base.notes) + notes
+    out.notes = list(base.notes) + tier_note + notes
     return out

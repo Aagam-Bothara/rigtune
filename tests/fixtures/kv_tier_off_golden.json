@@ -1,0 +1,62 @@
+{
+ "keys": {
+  "n": 5,
+  "sha256": "796c29c84c93500baaadeb084c3e6b1004d6548e223b8cae5a8b2814da0f6c9a"
+ },
+ "pick": {
+  "n": 4,
+  "sha256": "7cf82b79d311bc6d0b29e98876a34c1d782c2d6eafadd0b7134f7f86101f6394"
+ },
+ "sequence": {
+  "n": 39,
+  "sha256": "2765ae51cfbe1ed37b0c511e7528ccf9f4238dfd41f36336235435e9fc85451c"
+ },
+ "sglang/gemma-4/launch": {
+  "n": 298,
+  "sha256": "e0d8c8d302069a53c93bd7dc3593c5caf69c2c453e5caf48280a15e85ac85736"
+ },
+ "sglang/gemma-4/plan": {
+  "n": 648,
+  "sha256": "420745f4a59874f30df555715282b061f9bfd0bd78d9578d472e63d00af5cb5e"
+ },
+ "sglang/qwen2.5-7b/launch": {
+  "n": 696,
+  "sha256": "a436d114e236fdb162a648512d0ef2f190bf6f3deca31c0855d9b4191ff0571d"
+ },
+ "sglang/qwen2.5-7b/plan": {
+  "n": 540,
+  "sha256": "51e859fae877b4f99d12fad9c13dc6347f71a0516c992b95255c3b4ab496ee74"
+ },
+ "sglang/qwen3.5-9b/launch": {
+  "n": 372,
+  "sha256": "4950d715dbae2d4464b28c6cd19a6f9f21d803d8bef2392408593043b3af125a"
+ },
+ "sglang/qwen3.5-9b/plan": {
+  "n": 648,
+  "sha256": "424082c5568e7cea66d7502f07fdac062578ff90fc71db753aca25a602cd2391"
+ },
+ "vllm/gemma-4/launch": {
+  "n": 494,
+  "sha256": "e2c0d7283e67d8ce7b2213ab5dff9bf6f5aa54e16338ad360824c0b872450358"
+ },
+ "vllm/gemma-4/plan": {
+  "n": 756,
+  "sha256": "32082cd64754cb84a6452f5c59023778920c0da305471b9553145705b54ca0f6"
+ },
+ "vllm/qwen2.5-7b/launch": {
+  "n": 860,
+  "sha256": "42b583b56ef7915c79bd9946376fcf0673dd1c6a5348122b46cd0f0bbd721684"
+ },
+ "vllm/qwen2.5-7b/plan": {
+  "n": 630,
+  "sha256": "25fb0512e4af4c950ab728508ef263efa04c793382c89e79185069a2c4888729"
+ },
+ "vllm/qwen3.5-9b/launch": {
+  "n": 812,
+  "sha256": "411604c4954d7f188749eae20fc6510b9f94c27d76cb54bf71fa6c1b661c1e81"
+ },
+ "vllm/qwen3.5-9b/plan": {
+  "n": 756,
+  "sha256": "1ac368511518fde769bc56a96c0bdc39fbe6d85b44600f047b40f8ed0e3fa48e"
+ }
+}

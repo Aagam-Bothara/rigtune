@@ -16,7 +16,17 @@ from rigtune.calibrate.search import ProgressFn, StagedSearch, SubprocessTrialRu
 from rigtune.calibrate.workload import Workload, get_workload
 from rigtune.hardware import hardware_hash, llmtrace_version, probe
 from rigtune.memory import plan as memory_plan
-from rigtune.models import Config, HardwareDescriptor, MemoryEstimate, ModelSpec, PreparedModel, Profile
+from rigtune.models import (
+    Config,
+    GiB,
+    HardwareDescriptor,
+    MemoryEstimate,
+    MiB,
+    ModelSpec,
+    PreparedModel,
+    Profile,
+    TrialResult,
+)
 from rigtune.quantized import PREQUANTIZED
 from rigtune.selector import select_backends
 
@@ -91,6 +101,10 @@ class SearchOptions:
     # file always has them), so a flattened control records the reuse it got. It adds a launch flag, so a profile
     # calibrated with it is cached under its own name.
     report_reuse: bool = False
+    # --kv-tier auto: after the variant stages, try a host-RAM (and perhaps disk) KV-cache tier on each tuned
+    # engine's leader when its session trial shows the working set outgrowing the GPU pool (tier_variants_fn).
+    # Session files only. "off" (the default) changes nothing: no trial, no launch flag, no cache-key entry.
+    kv_tier: str = "off"
 
     def key(self, objective: Optional[str] = None) -> Dict[str, str]:
         """Options that change the pick, recorded in the profile and in its cache path: the non-default
@@ -127,6 +141,8 @@ class SearchOptions:
             out["maxloss"] = f"{self.max_accuracy_loss:g}"
         if self.report_reuse:
             out["reuse"] = "on"
+        if self.kv_tier != "off":
+            out["tier"] = self.kv_tier
         if objective == "balanced" and self.ttft_percentile != 50:
             out["ttft"] = f"p{self.ttft_percentile}"
         return out
@@ -207,6 +223,8 @@ def combination_fits(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: 
         pm = plan.prepared.get(c.backend)
         if pm is None or reg[c.backend].known_failure(c):
             return False
+        if c.kv_tier is not None and tier_refusal(hw, reg[c.backend], pm, c) is not None:
+            return False  # a combination may carry a tier to a config its engine or the host cannot give one
         # SGLang: a draft or EAGLE3 head needs its weights' room outside the reservation (SglangBackend.spec_fraction);
         # a second model of unknown size gets a limit of 0, so it is never combined in.
         cap = getattr(reg[c.backend], "spec_fraction", None)
@@ -219,6 +237,160 @@ def combination_fits(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: 
             return estimate(hw, pm, c, reg[c.backend].memory_model(hw)).feasible
         except Exception:
             return False
+
+    return fn
+
+
+# --------------------------------------------------------------------------- KV-cache tiers (--kv-tier auto)
+
+# The gate and the sizing, from the design reviewed for this stage (docs/decisions.md). Starting points, not
+# measurements: the GPU validation in docs/benchmarks.md is what would confirm or move them.
+TIER_WORKING_SET_GATE = 0.8  # try a tier once the working set is over 0.8x the GPU pool
+TIER_HEADROOM = 1.25  # a tier sized at 1.25x the working set
+TIER_OVER_POOL = 1.2  # and offered only above 1.2x the GPU pool: offloading is immediate, so a smaller tier
+#                       only mirrors the pool (vLLM 0.29 docs/features/kv_offloading_usage.md)
+# The gate is the working set against the pool alone. A reuse shortfall cannot open it on its own: below
+# 0.8x the pool, 1.25x the working set is under 1.0x the pool, never the 1.2x a tier needs.
+
+
+def _host_room(hw: HardwareDescriptor, be: BaseBackend) -> Tuple[int, str]:
+    """Host bytes a tier may take on `be`, and what binds: the planner's budget with the engine's reserve
+    ("host RAM"), or the engine's own cap where that is lower (vLLM: "/dev/shm")."""
+    from rigtune.memory import host_tier_budget
+
+    room = host_tier_budget(hw, be.tier_host_reserve())
+    cap = be.tier_host_cap()
+    if cap is not None and cap < room:
+        return cap, "/dev/shm, where vLLM keeps its CPU tier,"
+    return room, "host RAM"
+
+
+def tier_refusal(hw: HardwareDescriptor, be: BaseBackend, pm: PreparedModel, c: Config) -> Optional[str]:
+    """Why `c`, which carries a KV-cache tier, cannot run here, or None when it can: the engine's own rules,
+    the host RAM it would take, and for a disk tier the engine's file tier, the directory rule and disk."""
+    from rigtune import kvtier
+    from rigtune.memory import disk_tier_budget
+
+    reason = be.tier_refusal(c, pm)
+    if reason:
+        return reason
+    host_gib, disk_gib = c.tier_gib
+    need = be.tier_host_need(c, host_gib * GiB)
+    room, binding = _host_room(hw, be)
+    if need > room:
+        return (f"the tier takes {need / GiB:.0f} GiB of host RAM and {room / GiB:.0f} GiB of {binding} is "
+                "free")
+    if disk_gib:
+        reason = be.tier_disk_refusal()
+        if reason:
+            return reason
+        root = kvtier.tier_root()
+        reason = kvtier.refusal(root)
+        if reason:
+            return reason
+        if disk_gib * GiB > disk_tier_budget(root):
+            return f"{disk_gib} GiB of disk is not free under {root}"
+    return None
+
+
+def gpu_pool_bytes(leader: TrialResult, hw: HardwareDescriptor, pm: PreparedModel, mm) -> Tuple[int, str]:
+    """The GPU KV-cache pool `leader` ran with, in bytes, and where the figure came from. "measured": what the
+    engine logged it allocated (rigtune.memlog: vLLM's "Available KV cache memory", which is num_blocks x the
+    page size of every KV cache group, recurrent state included; SGLang's pools summed). Not vLLM's "GPU KV
+    cache size" line: that is max_concurrency x max_model_len (v1/core/kv_cache_utils
+    .update_kv_cache_capacity), not tokens per pool, for a hybrid model. "planned": the memory fraction less
+    weights and workspace."""
+    measured = leader.memory.measured if leader.memory is not None else None
+    if measured is not None and measured.kv_mb:
+        return int(measured.kv_mb * MiB), "measured"
+    c = leader.config
+    if hw.gpu is None or c.gpu_memory_utilization is None:
+        return 0, "unknown"
+    reserved = int(c.gpu_memory_utilization * hw.gpu.vram_total_bytes)
+    return max(0, reserved - pm.weights_for(c.quant) - mm.runtime_workspace), "planned"
+
+
+def tier_variants_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult", objective: str,
+                     constraints: Constraints, workload: Optional[Workload] = None, counter=None):
+    """--kv-tier auto: (leader trial) -> (configs to try, a note saying what was tried or why nothing was).
+
+    Gate, on the leader's own session trial at the level the objective scored it: its working set W (the live
+    sessions' last prompts and answers, in the GPU pool's units: memory.working_set_bytes) is over 0.8x the
+    GPU pool G (gpu_pool_bytes). Otherwise no trial at all. A system prompt the sessions share (`workload`'s,
+    as session replay finds it) is one prefix in the cache, not one per session, so the working set counts it
+    once. Sizing: one host point S = min(1.25 W, the host budget), offered only when S >= 1.2 G, and one
+    host + disk point (disk 1.25 W) only when the host budget cannot hold W and the engine bounds its disk
+    tier."""
+    import math
+
+    from rigtune import kvtier
+    from rigtune.calibrate.measure import _count, _shared_system
+    from rigtune.calibrate.workload import TURN_OVERHEAD
+    from rigtune.memory import disk_tier_budget, working_set_bytes
+    from rigtune.models import format_kv_tier
+
+    shared = _shared_system(workload) if workload is not None and workload.sessions else ""
+
+    def shared_tokens(pm: PreparedModel) -> int:
+        if not shared:
+            return 0
+        from rigtune.calibrate.tokens import TokenCounter
+
+        return _count(shared, counter or TokenCounter.for_model(pm.spec.hf_id)) + TURN_OVERHEAD
+
+    def fn(leader: TrialResult) -> Tuple[List[Config], Optional[str]]:
+        c = leader.config
+        be, pm = reg[c.backend], plan.prepared.get(c.backend)
+        if c.kv_tier is not None or pm is None:
+            return [], None
+        lead = f"no KV-cache tier tried on {c.backend}"
+        reason = be.tier_refusal(c, pm)
+        if reason:
+            return [], f"{lead}: {reason}"
+        m = scored_level(leader, [leader], objective, constraints)
+        if not m.working_set_tokens:
+            return [], f"{lead}: its trial recorded no working set"
+        mm = be.memory_model(hw)
+        sessions = math.ceil(m.effective_pool or m.concurrency or 1)
+        once = shared_tokens(pm)
+        tokens = max(once, m.working_set_tokens - (sessions - 1) * once)
+        w = working_set_bytes(pm, c, tokens, sessions, mm)
+        g, source = gpu_pool_bytes(leader, hw, pm, mm)
+        if g <= 0:
+            return [], f"{lead}: the GPU pool's size is not known"
+        seen = (f"working set {tokens:,} tokens ({w / GiB:.1f} GiB, {sessions} sessions"
+                + (f", a {once:,}-token shared prefix counted once" if once else "")
+                + f") is {w / g:.2f}x the GPU pool ({g / GiB:.1f} GiB, {source})"
+                + (f", reuse {m.prefix_reuse:.2f} of {m.reuse_expected:.2f} expected"
+                   if m.reuse_expected is not None and m.prefix_reuse is not None else ""))
+        if w <= TIER_WORKING_SET_GATE * g:
+            return [], f"{lead}: {seen}"
+        room, binding = _host_room(hw, be)
+        per_byte = be.tier_host_need(c, GiB) / GiB  # SGLang adds a second model's host pool
+        host = min(TIER_HEADROOM * w, room / per_byte)
+        if host < TIER_OVER_POOL * g:
+            short = (f"{TIER_HEADROOM}x the working set ({TIER_HEADROOM * w / GiB:.1f} GiB)"
+                     if TIER_HEADROOM * w < TIER_OVER_POOL * g
+                     else f"the {room / GiB:.0f} GiB of {binding} free for a tier")
+            return [], (f"{lead}: {seen}; {short} is under {TIER_OVER_POOL}x the GPU pool, and a tier that "
+                        "small only mirrors the pool")
+        host_gib = int(host // GiB)
+        if host_gib < 1:  # tiers are sized in whole GiB
+            return [], f"{lead}: {seen}; a tier of {host / GiB:.2f} GiB is under the 1 GiB step tiers come in"
+        out = [c.model_copy(update={"kv_tier": format_kv_tier(host_gib)})]
+        disk_note = ""
+        if room / per_byte < w:  # the host cannot hold the working set: a disk tier behind it
+            root = kvtier.tier_root()
+            disk_gib = math.ceil(TIER_HEADROOM * w / GiB)
+            why = be.tier_disk_refusal() or kvtier.refusal(root)
+            if why is None and disk_tier_budget(root) < disk_gib * GiB:
+                why = f"{disk_gib} GiB of disk is not free under {root}"
+            if why is None:
+                out.append(c.model_copy(update={"kv_tier": format_kv_tier(host_gib, disk_gib)}))
+            else:
+                disk_note = f"; no disk tier: {why}"
+        tried = ", ".join(v.kv_tier for v in out)
+        return out, f"KV-cache tier tried on {c.backend} ({tried}): {seen}{disk_note}"
 
     return fn
 
@@ -575,6 +747,16 @@ def calibrate(
         controller, points = power_controller, list(power_points)
     elif power_mode != "off":
         controller, points, power_notes = setup_power(hw, power_mode, power_controller)
+    from rigtune import kvtier
+
+    kvtier.sweep()  # disk tiers a killed rigtune left behind, whatever this calibration asks for
+    tier_fn, tier_notes = None, []
+    if opts.kv_tier == "auto":
+        if workload.sessions:
+            tier_fn = tier_variants_fn(hw, reg, plan, objective, constraints, workload)
+        else:  # the CLI refuses this; a caller of the API gets the note
+            tier_notes.append("--kv-tier auto needs a session file (the working set it is sized from); no "
+                              "KV-cache tier was tried")
     probe = quality_probe_for(opts, workload)
     gate = accuracy_gate_for(opts, feasible)
     if runner is not None and gate is not None and getattr(runner, "gate", False) is None:
@@ -604,7 +786,8 @@ def calibrate(
                           decide_after_spec=opts.speculative_all,
                           retry_floor=retry_floor_fn(hw, reg, plan) if opts.speculative_all else None,
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
-                                            if phase_tuning and opts.phase_tuning else None))
+                                            if phase_tuning and opts.phase_tuning else None),
+                          tier_variants=tier_fn)
     t0 = time.monotonic()
     try:
         winner, notes = search.run(feasible)
@@ -614,7 +797,7 @@ def calibrate(
     if winner is None:
         raise RuntimeError("calibration failed: " + "; ".join(notes))
     elapsed = time.monotonic() - t0
-    notes = power_notes + list(plan.notes) + notes
+    notes = power_notes + list(plan.notes) + tier_notes + notes
     notes += spec_state_notes_for(hw, reg, plan, winner.config, opts)
     notes.append(f"calibration took {elapsed:.0f}s over {len(search.results)} trials")
     notes.append(f"workload: {workload.describe()}")
@@ -767,12 +950,21 @@ def _resolve_layout(spec: ModelSpec, objective: str, force_backend: Optional[str
     if layout != "auto" and len(gpus) < 2:
         raise RuntimeError(f"--layout {layout} is not possible here: multi-GPU layouts need two NVIDIA GPUs; "
                            f"{len(gpus)} visible")
+    single = options
+    if options.kv_tier != "off":  # a tier is budgeted for one engine on one GPU: no tier stage under a layout
+        import dataclasses
+
+        single = dataclasses.replace(options, kv_tier="off")
     base = resolve_profile(spec, objective, force_backend=force_backend, recalibrate=recalibrate, workload=workload,
                            constraints=constraints, progress=progress, hw=hw, on_stage=on_stage,
-                           power_mode=power_mode, options=options)
+                           power_mode=power_mode, options=single)
     _, reg = select(hw, spec, force=base.backend, workload=workload, report_reuse=options.report_reuse)
     say("layout")
     profile = calibrate_layout(hw, objective, base, reg, layout, workload=workload, constraints=constraints,
                                progress=progress, log_dir=profile_cache.logs_dir() / spec.safe_id)
+    if single is not options:
+        profile.options = {**profile.options, "tier": options.kv_tier}  # cached where it is looked up
+        profile.notes.append(f"--kv-tier {options.kv_tier} was not tried under --layout {layout}: a KV-cache "
+                             "tier's host RAM is budgeted for one engine on one GPU")
     profile_cache.save(profile)
     return profile

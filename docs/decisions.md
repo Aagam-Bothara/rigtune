@@ -249,6 +249,45 @@ A search result is treated as an append, a function result at the tail of the qu
 makes retrieval bring eviction sooner rather than rewrite the prompt itself. `retrieval_at=head` models the other
 placement, the latest result in the system prompt, as frameworks that retrieve into it do.
 
+## Why try a KV-cache tier only when the working set outgrows the GPU pool?
+
+A host-RAM tier can only help a request whose prefix the GPU pool has already evicted. While the live sessions'
+prompts and answers fit in the pool, a tier adds a copy of every block to host memory and recovers nothing: both
+engines write blocks to the tier as they are produced (vLLM 0.29's offloading connector offers every finished
+chunk; SGLang's default write policy is write-through), and vLLM's own guide says a tier smaller than the pool
+just mirrors it. So `--kv-tier auto` looks first at what the leader's own session trial measured: its working set
+against the pool the engine logged, in the same units. Only a working set above 0.8× the pool earns a trial; the tier
+is sized from the working set (1.25×) rather than swept, and a disk tier is tried only when host RAM cannot hold the
+working set. That is at most two trials per engine, and none on traffic that fits. The thresholds are starting
+points, not measurements; the GPU run in [Not yet measured](benchmarks.md#not-yet-measured) is what would move them.
+
+Reuse short of what the conversations allowed is recorded but is not a gate. An earlier draft also opened the gate
+when reuse fell 10 points short, but that arm could never produce a trial: below 0.8× the pool, 1.25× the working set
+is under the pool itself, and a tier must be 1.2× the pool to hold more than the pool does. The working set counts a
+system prompt the sessions share once, since the cache holds it once; counted per session, 64 sessions sharing a
+5.5k-token preamble looked ten times larger than they are.
+
+The pool is the bytes the engine says it allocated ("Available KV cache memory" on vLLM, the pools SGLang logs),
+not vLLM's "GPU KV cache size" line: that is maximum concurrency times `max_model_len`, which for a hybrid model
+is not a token count of any pool. The working set is converted with the hybrid planner's rules for the same
+reason: on Qwen3.5 or Gemma 4 most layers hold a window or a fixed state, not every token.
+
+Only SGLang's disk tier is offered. vLLM 0.29 cascades every block it stores to its filesystem tier, which takes
+no size limit and never deletes, so one session trial at a pool of 64 could write the whole replay to disk; SGLang's
+file backend takes a cap, and rigtune always sets it.
+
+It is off by default because it has never run on hardware, and because the tier holds host RAM, and perhaps disk
+holding the served prompts' KV cache, that the machine may want for something else.
+
+## Why native tiers rather than LMCache?
+
+Both engines now ship a tier of their own: vLLM 0.29's `OffloadingConnector` (CPU, with an unbounded filesystem
+tier behind it) and SGLang's hierarchical cache (host memory, with a file backend). LMCache through vLLM needs a separate
+`lmcache server` process, the hybrid KV cache manager turned off (which changes how every hybrid model's cache is
+laid out, so the A/B would compare two cache layouts as well as a tier), and a size that vLLM does not pass on;
+its current PyPI release depends on a CUDA 13 build of cupy. Each of those is a confound or a failure mode the
+native tiers do not have, so LMCache is not searched.
+
 ## Why not Bayesian optimisation?
 
 At roughly 30 trials over a space this shape, the published results for SLO-aware Bayesian tuners do not separate

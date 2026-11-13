@@ -9,6 +9,8 @@
 3c. kv                - quantized KV caches, including the batch step a smaller cache admits.
 3d. prefix            - prefix-cache settings, when the workload's prompts share a prefix.
 3e. spec              - speculative decoding (n-gram lookup, a small draft model).
+3e+. tier             - a host-RAM or disk KV-cache tier, with --kv-tier auto and a session file, only when
+                        the leader's working set outgrows the GPU pool.
 3f. combine           - combinations of the changes from 3b-3e that were promising on their own.
 3g. explore           - random configurations of the leading engine and precision, for settings that
                         only pay together.
@@ -422,6 +424,11 @@ class StagedSearch:
     # strategy: on an RTX 4090 with Llama 3.1 8B, SGLang led vLLM by 14% there (776 against 669 tok/s), and vLLM led
     # only once it had speculated; it got that far only because SGLang was offered no speculation.
     decide_after_spec: bool = False
+    # Stage 3e+: a KV-cache tier (--kv-tier auto). (leader trial) -> (configs, note), from
+    # pipeline.tier_variants_fn, which needs the leader's measured working set and GPU pool, not just its
+    # config. Run once per tuned engine, after its variant stages and before its combinations, so a tier can
+    # be combined. None = off.
+    tier_variants: Optional[Callable[[TrialResult], Tuple[List[Config], Optional[str]]]] = None
     _variant_log: List[Tuple[str, Config, Config]] = field(default_factory=list)  # (dimension, leader, variant)
     results: List[TrialResult] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -431,6 +438,7 @@ class StagedSearch:
     _skipped: List[str] = field(default_factory=list)
     _noted_contenders: set = field(default_factory=set)
     _spec_tried: set = field(default_factory=set)  # engines whose speculation stage has run (decide_after_spec)
+    _tier_tried: set = field(default_factory=set)  # engines whose tier stage has run
 
     # ---- predictor helpers
 
@@ -472,6 +480,12 @@ class StagedSearch:
         """The same config with less GPU memory reserved, after an out-of-memory start-up failure."""
         gmu = cfg.gpu_memory_utilization
         if res.launched or not (res.error or "").startswith("out of memory at start-up") or gmu is None:
+            return None
+        if cfg.kv_tier is not None:
+            # A tier was sized against the GPU pool this fraction gives, and its failure may be host memory
+            # (pinned or /dev/shm), which less GPU memory would not fix: recorded, not retried.
+            self.notes.append(f"{cfg.key()} ran out of memory at start-up; a KV-cache tier trial is not "
+                              "retried with less GPU memory reserved")
             return None
         lower = round(gmu - self.RETRY_GMU_STEP, 2)
         floor = self.MIN_RETRY_GMU
@@ -932,6 +946,7 @@ class StagedSearch:
                 self.stage_prefill(base)
             for name, fn in self.variant_stages:
                 self.stage_variants(name, fn, backend=base.backend)
+            self.stage_tier(base.backend)
             if self.combine:
                 self.stage_combinations(base)
             return
@@ -949,6 +964,7 @@ class StagedSearch:
             for name, fn in self.variant_stages:
                 if name != "spec":
                     self.stage_variants(name, fn, backend=base.backend, spec=spec)
+            self.stage_tier(base.backend)  # once per engine: on its best speculation setting's leader
             if self.combine:
                 self.stage_combinations(start.config, spec=spec, limit=limit)
 
@@ -979,6 +995,29 @@ class StagedSearch:
         for v in variants:
             self._run(v, name)
             self._variant_log.append((name, leader.config, v))
+
+    def stage_tier(self, backend: str) -> None:
+        """Stage 3e+: a KV-cache tier on the engine's leader, once per engine. tier_variants decides from the
+        leader's own trial whether its working set outgrows the GPU pool, and says why when it offers nothing;
+        the objective then judges the tier like any other change, and a tier that only ties loses
+        (objectives._strategies)."""
+        if self.tier_variants is None or backend in self._tier_tried:
+            return
+        self._tier_tried.add(backend)
+        leader = self._leader(backend)
+        if leader is None:
+            return
+        try:
+            variants, note = self.tier_variants(leader)
+        except Exception as exc:
+            logger.warning("no KV-cache tier variants for %s: %s", leader.config.key(), exc)
+            self.notes.append(f"no KV-cache tier tried on {backend}: {exc}")
+            return
+        if note:
+            self.notes.append(note)
+        for v in variants:
+            self._run(v, "tier")
+            self._variant_log.append(("tier", leader.config, v))
 
     def stage_explore(self) -> None:
         """Stage 3g: configurations of the leading engine and precision drawn at random from explore_space,

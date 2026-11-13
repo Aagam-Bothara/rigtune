@@ -322,10 +322,24 @@ def _percentile(value: int) -> int:
     return value
 
 
+def _kv_tier(value: str) -> str:
+    if value not in ("off", "auto"):
+        raise typer.BadParameter("expected off or auto")
+    return value
+
+
+def _check_kv_tier(kv_tier: str, wl) -> None:
+    """--kv-tier auto sizes a tier from the working set session replay measures: it needs a session file."""
+    if kv_tier != "off" and not wl.sessions:
+        raise typer.BadParameter("needs a session file (--workload-file with sessions): a tier is sized from "
+                                 "the working set session replay measures", param_hint="--kv-tier")
+
+
 def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combine: str = "on",
           budget: Optional[float] = None, ttft_percentile: int = 95, confirm: str = "on", all_levels: bool = False,
           explore: str = "off", quality_probe: str = "off", eval_set: Optional[str] = None,
-          max_accuracy_loss: float = 3.0, eval_items: int = 300, report_reuse: bool = False):
+          max_accuracy_loss: float = 3.0, eval_items: int = 300, report_reuse: bool = False,
+          kv_tier: str = "off"):
     from rigtune.pipeline import SearchOptions
 
     if eval_set:
@@ -341,9 +355,16 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
         prefix_cache=prefix_cache == "on", combine=combine == "on", budget_s=budget, ttft_percentile=ttft_percentile, confirm=confirm == "on",
         all_levels=all_levels, explore=explore == "on", quality_probe=quality_probe == "on",
         eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items, report_reuse=report_reuse,
+        kv_tier=kv_tier,
     )
 
 
+KV_TIER_OPT = typer.Option(
+    "off", "--kv-tier", callback=_kv_tier,
+    help="Session files: auto tries a host-RAM KV-cache tier (vLLM's offloading connector, SGLang's "
+         "hierarchical cache), and a disk tier under rigtune's cache dir when host RAM cannot hold the "
+         "working set, only when the leader's working set outgrows the GPU pool. Exercised by tests only; "
+         "has not run on hardware. off (default): no tier is ever tried.")
 REPORT_REUSE_OPT = typer.Option(
     False, "--report-reuse",
     help="Launch the engines with their per-request cached-token reports for a flat file or a preset too (a session "
@@ -567,6 +588,7 @@ def bench(
     budget: Optional[str] = BUDGET_OPT,
     quality_probe: str = QUALITY_OPT,
     report_reuse: bool = REPORT_REUSE_OPT,
+    kv_tier: str = KV_TIER_OPT,
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
@@ -577,6 +599,7 @@ def bench(
     from rigtune.pipeline import calibrate, prepare_and_plan, select
 
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
+    _check_kv_tier(kv_tier, wl)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     candidates, reg = select(hw, spec, force=backend, workload=wl, report_reuse=report_reuse)
@@ -585,7 +608,11 @@ def bench(
         raise typer.Exit(2)
     opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse)
+                 report_reuse=report_reuse, kv_tier=kv_tier)
+    if layout != "single" and opts.kv_tier != "off":  # as pipeline._resolve_layout does
+        err.print(f"[yellow]--kv-tier {opts.kv_tier} is not tried under --layout {layout}: a KV-cache tier's "
+                  "host RAM is budgeted for one engine on one GPU[/]")
+        opts.kv_tier = "off"
     result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.search_quants(),
                               speculative_all=opts.speculative_all)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
@@ -643,6 +670,7 @@ def recalibrate(
     budget: Optional[str] = BUDGET_OPT,
     quality_probe: str = QUALITY_OPT,
     report_reuse: bool = REPORT_REUSE_OPT,
+    kv_tier: str = KV_TIER_OPT,
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
@@ -651,6 +679,7 @@ def recalibrate(
     from rigtune.pipeline import resolve_profile
 
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
+    _check_kv_tier(kv_tier, wl)
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
     view = _search_view(objective, cons)
     profile = _calibrating(view, resolve_profile, ModelSpec(hf_id=model), objective, force_backend=backend, recalibrate=True,
@@ -659,7 +688,7 @@ def recalibrate(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse), layout=layout)
+                 report_reuse=report_reuse, kv_tier=kv_tier), layout=layout)
     view.stop()
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
@@ -706,6 +735,7 @@ def compare(
     budget: Optional[str] = BUDGET_OPT,
     quality_probe: str = QUALITY_OPT,
     report_reuse: bool = REPORT_REUSE_OPT,
+    kv_tier: str = KV_TIER_OPT,
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
@@ -717,6 +747,7 @@ def compare(
     from rigtune.pipeline import prepare_and_plan, resolve_profile, select
 
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
+    _check_kv_tier(kv_tier, wl)
     # Held-out prompts are read before calibrating, so a bad file fails in seconds rather than after the search.
     eval_wl = _workload(workload, eval_workload_file, sessions, session_pool, session_turns, history, session_system) if eval_workload_file else wl
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
@@ -728,7 +759,7 @@ def compare(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse), layout=layout)
+                 report_reuse=report_reuse, kv_tier=kv_tier), layout=layout)
     view.stop()
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend, workload=eval_wl, report_reuse=report_reuse)
@@ -962,6 +993,7 @@ def serve(
     budget: Optional[str] = BUDGET_OPT,
     quality_probe: str = QUALITY_OPT,
     report_reuse: bool = REPORT_REUSE_OPT,
+    kv_tier: str = KV_TIER_OPT,
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
@@ -975,6 +1007,7 @@ def serve(
     from rigtune.serve import Supervisor, create_app
 
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
+    _check_kv_tier(kv_tier, wl)
     spec = ModelSpec(hf_id=model)
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
     view = _search_view(objective, cons)
@@ -985,7 +1018,7 @@ def serve(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse), layout=layout)
+                 report_reuse=report_reuse, kv_tier=kv_tier), layout=layout)
     view.stop()
     _print_profile(profile)
     if profile.prepared is None:
