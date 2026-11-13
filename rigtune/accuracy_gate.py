@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
@@ -416,10 +417,60 @@ class AccuracyGate:
                 f"{self.seconds_total:.0f}s, of which {self.seconds_repeat:.0f}s was the second pass that measures "
                 f"each reference's own noise ({twice} reference{'' if twice == 1 else 's'})")
 
+    def admitting_tolerance(self, key: Key) -> Optional[float]:
+        """The smallest tolerance, to a tenth of a point, that would have admitted `key` on this evidence: just
+        above minus its lower bound. None when it was never compared."""
+        rec = self._records.get(key)
+        if rec is None or rec.delta_ci95 is None or not rec.paired:
+            return None
+        return (math.floor(-rec.delta_ci95[0] * 10 + 1e-9) + 1) / 10
+
+    def price_notes(self, winner: Optional[object], results: Sequence[object], objective: str,
+                    constraints: object) -> List[str]:
+        """What each refusal cost in speed, against the pick, and what would have changed the answer.
+
+        A refusal that cost 3.9x is a different decision from one that cost 2%, and the operator can only weigh
+        it with both the speed and the evidence in view: the tolerance that would have admitted the precision on
+        these grades, and how many items would certify the tolerance asked for at its observed rate of loss. The
+        refused precision was measured only in stage 1, never tuned, so its ratio is a floor."""
+        from rigtune.calibrate.objectives import rank
+
+        if winner is None or not self.refused:
+            return []
+        scored = rank([winner], objective, constraints)  # type: ignore[list-item, arg-type]
+        if not scored:
+            return []
+        pick_tok = scored[0].metrics.tok_s
+        notes: List[str] = []
+        for key in sorted(self.refused):
+            mine = [r for r in results if getattr(r, "ok", False)
+                    and (r.config.backend, r.config.quant) == key]  # type: ignore[attr-defined]
+            best = rank(mine, objective, constraints)  # type: ignore[arg-type]
+            if not best:
+                continue
+            tok = best[0].metrics.tok_s
+            ratio = tok / pick_tok if pick_tok else 0.0
+            measured = f"its stage-1 trial measured {tok:.0f} tok/s against the pick's {pick_tok:.0f}"
+            text = (f"accuracy gate: refusing {_label(key)} cost at least {ratio:.2f}x: {measured}, and it was never "
+                    "tuned, so that ratio is a floor" if ratio > 1 else
+                    f"accuracy gate: refusing {_label(key)} cost no measured speed: {measured}, untuned")
+            admit = self.admitting_tolerance(key)
+            rec = self._records.get(key)
+            if admit is None or rec is None:
+                text += "; it could not be graded, so no tolerance would have admitted it"
+            else:
+                text += f"; --max-accuracy-loss {admit:.1f} would have admitted it on this evidence"
+                need = items_needed(rec.lost or 0, rec.gained or 0, rec.paired or 0, self.tolerance)
+                text += (f", or about {need} items at its rate of loss would certify {self.max_loss:.1f} points"
+                         if need is not None else
+                         f", and no number of items would certify {self.max_loss:.1f} at its rate of loss")
+            notes.append(text)
+        return notes
+
     def final_notes(self, winner: Optional[object], results: Sequence[object], objective: str,
                     constraints: object) -> List[str]:
-        """Notes for the end of the search."""
-        return [self.summary()]
+        """Notes for the end of the search: the summary, then what each refusal cost."""
+        return [self.summary()] + self.price_notes(winner, results, objective, constraints)
 
 
 def best_certifiable(n: int) -> float:

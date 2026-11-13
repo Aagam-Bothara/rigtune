@@ -544,3 +544,41 @@ def test_chat_answers_talks_to_the_chat_endpoint_and_caps_the_wall_time():
         srv.shutdown()
     assert out[0] == "The answer is 0" and out[5] == "The answer is 5"
     assert out[2] is None and out[3] is None  # an error and a request past the wall cap are unanswered
+
+
+# --------------------------------------------------------------------------- what a refusal cost
+
+
+def test_a_refusal_reports_its_speed_and_what_would_have_admitted_it():
+    """awq measured 2.5x the pick in stage 1 and lost 6 of 300: its bound is -4.29 points, so 4.3 would have
+    admitted it, and certifying 3 points at that rate would take about 2045 items."""
+    from rigtune.calibrate.paired import certifies
+
+    ref = "1" * 270 + "0" * 30
+    script = Script({("vllm", "bf16"): ref, ("vllm", "awq"): _flip(ref, range(6), "0")})
+    gate = _gate(300, script)
+    search = _search(gate, GradingRunner(gate))
+
+    winner, notes = search.run(_feasible(("vllm", "bf16"), ("vllm", "awq")))
+
+    price = next(n for n in notes if n.startswith("accuracy gate: refusing vllm/awq"))
+    assert "cost at least 2.50x: its stage-1 trial measured 266 tok/s against the pick's 106" in price
+    assert "it was never tuned, so that ratio is a floor" in price
+    assert "--max-accuracy-loss 4.3 would have admitted it on this evidence" in price
+    assert "about 2045 items at its rate of loss would certify 3.0 points" in price
+    assert gate.admitting_tolerance(("vllm", "awq")) == 4.3
+    assert certifies(6, 0, 300, 0.043) and not certifies(6, 0, 300, 0.042)  # 4.3 is the smallest tenth that admits
+
+
+def test_a_slower_refused_precision_cost_no_speed_and_an_ungraded_one_says_so(monkeypatch):
+    monkeypatch.setitem(SPEED, "fp8", 50.0)  # slower than bf16 here, and every answer wrong
+    script = Script({("vllm", "bf16"): "1" * 300, ("vllm", "fp8"): "0" * 300, ("vllm", "awq"): "-" * 300})
+    gate = _gate(300, script)
+    search = _search(gate, GradingRunner(gate))
+
+    _, notes = search.run(_feasible(("vllm", "bf16"), ("vllm", "fp8"), ("vllm", "awq")))
+
+    fp8 = next(n for n in notes if n.startswith("accuracy gate: refusing vllm/fp8"))
+    assert "cost no measured speed" in fp8 and "no number of items would certify 3.0" in fp8
+    awq = next(n for n in notes if n.startswith("accuracy gate: refusing vllm/awq"))
+    assert "it could not be graded, so no tolerance would have admitted it" in awq
