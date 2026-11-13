@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import queue
+import re
 import statistics
 import threading
 import time
@@ -265,7 +266,8 @@ class RequestOutcome:
     error: Optional[str] = None
     prompt_tokens: Optional[int] = None  # the engine's usage.prompt_tokens, when it reports one
     cached_tokens: Optional[int] = None  # usage.prompt_tokens_details.cached_tokens: served from the prefix cache
-    # The cached tokens by where they came from (device, host, disk), for an engine that says; nothing fills it yet.
+    # The cached tokens by where they came from (device, host, storage), for an engine that says so
+    # (_cached_by_source; on tier trials only).
     cached_by_source: Dict[str, int] = field(default_factory=dict)
     # Session replay only (_SessionScheduler): which step of which session this was, when it was dispatched, and
     # what it shared with what the engine had already seen.
@@ -311,6 +313,7 @@ async def _one_request(
     usage_tokens: Optional[int] = None
     prompt_tokens: Optional[int] = None
     cached_tokens: Optional[int] = None
+    by_source: Dict[str, int] = {}
     try:
         async with client.stream("POST", url, json=body, timeout=timeout) as resp:
             if resp.status_code != 200:
@@ -339,6 +342,7 @@ async def _one_request(
                     details = usage.get("prompt_tokens_details")
                     if isinstance(details, dict) and isinstance(details.get("cached_tokens"), int):
                         cached_tokens = details["cached_tokens"]
+                by_source = _cached_by_source(obj) or by_source
     except (httpx.HTTPError, asyncio.TimeoutError) as exc:
         return RequestOutcome(ok=False, error=f"{type(exc).__name__}: {exc}")
     end = time.perf_counter()
@@ -355,7 +359,22 @@ async def _one_request(
             tokens, source = chunks, "chunks"
     return RequestOutcome(ok=True, ttft_s=first - t0, duration_s=end - t0, tokens=tokens, token_source=source,
                           prompt_tokens=prompt_tokens, cached_tokens=cached_tokens,
-                          text="".join(pieces) if keep_text else "")
+                          cached_by_source=by_source, text="".join(pieces) if keep_text else "")
+
+
+TIER_SOURCES = ("device", "host", "storage")
+
+
+def _cached_by_source(chunk: Dict[str, Any]) -> Dict[str, int]:
+    """SGLang's split of a reply's cached tokens by tier, asked for with return_cached_tokens_details:
+    0.5.19's serving_chat.py streams it in a chunk of its own, with no choices, as
+    sglext.cached_tokens_details {device, host[, storage, storage_backend]} (entrypoints/openai/protocol.py
+    CachedTokensDetails). Empty for any other chunk, and for every engine that does not send one."""
+    ext = chunk.get("sglext")
+    details = ext.get("cached_tokens_details") if isinstance(ext, dict) else None
+    if not isinstance(details, dict):
+        return {}
+    return {k: int(details[k]) for k in TIER_SOURCES if isinstance(details.get(k), int)}
 
 
 async def _drive(
@@ -368,7 +387,8 @@ async def _drive(
 ) -> List[RequestOutcome]:
     counter = counter or TokenCounter()
     if workload.sessions:
-        return await _drive_sessions(base_url, hooks, workload, concurrency, timeout, counter)
+        return await _drive_sessions(base_url, hooks, workload, concurrency, timeout, counter,
+                                     body_hook=_tier_body_hook(hooks))
     sem = asyncio.Semaphore(concurrency)
     url = base_url.rstrip("/") + hooks.completions_path
     results: List[RequestOutcome] = []
@@ -592,6 +612,19 @@ def _shared_system(workload: Workload) -> str:
 BodyHook = Callable[[Dict[str, Any], "_LiveSession", Messages], None]
 
 
+def _tier_body_hook(hooks: LlmtraceHooks) -> Optional[BodyHook]:
+    """On a tier trial, ask each request's reply for its cached tokens by tier (hooks.tier_details_field);
+    None otherwise, so no other trial's requests change."""
+    name = hooks.tier_details_field if hooks.tier_report else None
+    if not name:
+        return None
+
+    def hook(body: Dict[str, Any], state: "_LiveSession", messages: Messages) -> None:
+        body[name] = True
+
+    return hook
+
+
 async def _drive_sessions(base_url: str, hooks: LlmtraceHooks, workload: Workload, concurrency: int,
                           timeout: float, counter: TokenCounter,
                           body_hook: Optional[BodyHook] = None) -> List[RequestOutcome]:
@@ -652,8 +685,10 @@ async def _drive_sessions(base_url: str, hooks: LlmtraceHooks, workload: Workloa
     return results + sched.close()
 
 
-def _metrics_from(outcomes: List[RequestOutcome], wall_s: float, concurrency: int) -> TrialMetrics:
+def _metrics_from(outcomes: List[RequestOutcome], wall_s: float, concurrency: int,
+                  tier: bool = False) -> TrialMetrics:
     sessions = _session_stats(outcomes, wall_s)
+    tiers = _tier_stats(outcomes) if tier else {}  # a tier trial only (LlmtraceHooks.tier_report)
     outcomes = [o for o in outcomes if o.skipped is None]  # a session stopped early sent nothing for its rest
     ok = [o for o in outcomes if o.ok]
     m = TrialMetrics(
@@ -663,6 +698,7 @@ def _metrics_from(outcomes: List[RequestOutcome], wall_s: float, concurrency: in
         duration_s=wall_s,
         output_tokens=sum(o.tokens for o in ok),
         **sessions,
+        **tiers,
     )
     # A few distinct errors, so "12/48 requests failed" says why.
     m.errors = list(dict.fromkeys((o.error or "")[:200] for o in outcomes if not o.ok and o.error))[:3]
@@ -812,6 +848,40 @@ def _by_kind(sent: List[RequestOutcome]) -> Dict[str, Any]:
     return out
 
 
+def _tier_stats(outcomes: List[RequestOutcome]) -> Dict[str, Any]:
+    """What a level of a tier trial adds (TrialMetrics.cached_by_source, ttft_returning_ms, ttft_by_hit_ms):
+    the replies' cached tokens by tier where the engine split them, and time to first token on returning steps
+    (a session's second step on), overall and by where each one's cache hit came from. Returning steps are
+    the ones a tier can speed up: a first step can reuse at most a shared system prompt."""
+    served = [o for o in outcomes if o.ok and o.skipped is None and o.session is not None]
+    out: Dict[str, Any] = {}
+    split = [o for o in served if o.cached_by_source]
+    if split:
+        out["cached_by_source"] = {s: sum(o.cached_by_source.get(s, 0) for o in split) for s in TIER_SOURCES
+                                   if any(s in o.cached_by_source for o in split)}
+    returning = sorted(o.ttft_s * 1000 for o in served if o.turn > 1)
+    if not returning:
+        return out
+    out["ttft_returning_ms"] = round(statistics.median(returning), 1)
+    out["ttft_returning_p95_ms"] = round(returning[min(len(returning) - 1,
+                                                       int(round(0.95 * (len(returning) - 1))))], 1)
+    if split or any(o.cached_tokens is not None for o in served):  # SGLang leaves a zero out (_session_stats)
+        kinds: Dict[str, List[float]] = {}
+        for o in served:
+            if o.turn > 1:
+                kinds.setdefault(_hit_kind(o), []).append(o.ttft_s * 1000)
+        out["ttft_by_hit_ms"] = {k: round(statistics.median(v), 1) for k, v in sorted(kinds.items())}
+    return out
+
+
+def _hit_kind(o: RequestOutcome) -> str:
+    """Where a step's cache hit came from: the slowest tier any of its cached tokens came from, "hit" when the
+    engine gives only the total, or "miss"."""
+    if o.cached_by_source:
+        return next((s for s in ("storage", "host", "device") if o.cached_by_source.get(s)), "miss")
+    return "hit" if o.cached_tokens else "miss"
+
+
 def _nearest_rank(ordered: List[int], pct: float) -> int:
     return int(ordered[min(len(ordered) - 1, max(0, int(round(pct / 100 * (len(ordered) - 1)))))])
 
@@ -871,6 +941,33 @@ def _engine_reuse(m: TrialMetrics, before: Optional[Counters], after: Optional[C
         m.prefix_reuse, m.reuse_source = round(hits / queries, 4), "metrics"
 
 
+PROMPT_BY_SOURCE = "vllm:prompt_tokens_by_source"
+# vLLM 0.29 v1/metrics/stats.py PromptTokenStats.ALL_SOURCES, as rigtune names them: what came from the GPU's
+# own prefix cache, and what a KV connector loaded (the offloading connector: host and disk tiers together).
+VLLM_SOURCES = {"local_cache_hit": "device", "external_kv_transfer": "tier"}
+
+
+def _engine_sources(m: TrialMetrics, before: Optional[Counters], after: Optional[Counters]) -> None:
+    """A tier trial's cached tokens by source from vLLM's /metrics, for a level whose replies did not split
+    them: the change over the level in vllm:prompt_tokens_by_source (v1/metrics/loggers.py, by source)."""
+    if m.cached_by_source or before is None or after is None:
+        return
+
+    def by_source(counters: Counters) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for (name, labels), value in counters.items():
+            source = re.search(r'source="([^"]*)"', labels) if name == PROMPT_BY_SOURCE else None
+            if source and source.group(1) in VLLM_SOURCES:
+                key = VLLM_SOURCES[source.group(1)]
+                out[key] = out.get(key, 0.0) + value
+        return out
+
+    was, now = by_source(before), by_source(after)
+    if now:
+        m.cached_by_source = {k: max(0, int(round(now[k] - was.get(k, 0.0)))) for k in sorted(now)}
+
+
+_TIER_FIELDS = ("cached_by_source", "ttft_returning_ms", "ttft_returning_p95_ms", "ttft_by_hit_ms")
 _REUSE_FIELDS = ("prompt_tokens_total", "cached_tokens_total", "prefix_reuse", "prefix_reuse_first",
                  "prefix_reuse_later", "reuse_expected", "reuse_expected_first", "reuse_expected_later",
                  "reuse_source", "sessions", "sessions_cut", "sessions_truncated", "mean_in_flight", "effective_pool",
@@ -1066,16 +1163,19 @@ def run_trial(
         counters = _prefix_counters(base_url, hooks) if workload.sessions else None  # outside the measured window
         with Telemetry(hooks, pid=pid) as tel:
             outcomes, wall = drive(level)
-            if close_call is not None and close_call(_metrics_from(outcomes, wall, c)):
+            if close_call is not None and close_call(_metrics_from(outcomes, wall, c, hooks.tier_report)):
                 # Too close to the ceiling to call from these requests: as many again, on prompts of their own.
                 extra = _level_workload(workload, k + len(workload.concurrencies), counter)
                 if n < len(extra.prompts):
                     extra = extra.head(n)
                 more, more_wall = drive(extra)
                 outcomes, wall, resampled = outcomes + more, wall + more_wall, True
-        m = _metrics_from(outcomes, wall, c)
+        m = _metrics_from(outcomes, wall, c, hooks.tier_report)
         if counters is not None:
-            _engine_reuse(m, counters, _prefix_counters(base_url, hooks))
+            after = _prefix_counters(base_url, hooks)
+            _engine_reuse(m, counters, after)
+            if hooks.tier_report:
+                _engine_sources(m, counters, after)
         m.resampled = resampled
         s = tel.summary
         source = s.source if s.source != "none" else source
@@ -1126,4 +1226,6 @@ def run_trial(
     )
     if workload.sessions or best.reuse_source != "none":  # the reuse of the level the summary reports, like its speed
         summary = summary.model_copy(update={f: getattr(best, f) for f in _REUSE_FIELDS})
+    if hooks.tier_report:
+        summary = summary.model_copy(update={f: getattr(best, f) for f in _TIER_FIELDS})
     return summary

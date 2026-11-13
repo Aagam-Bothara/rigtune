@@ -261,6 +261,21 @@ def _hicache_features() -> FrozenSet[str]:
     return hicache_features_in(_server_args_source(pkg), _package_text(pkg, "srt", "environ.py"))
 
 
+TIER_DETAILS_FIELD = "return_cached_tokens_details"
+
+
+@functools.lru_cache(maxsize=1)
+def _tier_details_flag() -> bool:
+    """Whether the SGLang that would be launched takes return_cached_tokens_details on a chat request:
+    0.5.19's srt/entrypoints/openai/protocol.py ChatCompletionRequest has it, and serving_chat.py then streams
+    a chunk with no choices whose sglext.cached_tokens_details holds {device, host, storage} (storage only
+    with a storage backend). It needs no server flag. Read from that interpreter's source, as above."""
+    python = sglang_python()
+    pkg = _sglang_package_dir(python) if python else None
+    protocol = _package_text(pkg, "srt", "entrypoints", "openai", "protocol.py") if pkg else ""
+    return TIER_DETAILS_FIELD in protocol
+
+
 def sglang_tier_launch(cfg: Config, port: int) -> Tuple[List[str], dict]:
     """Arguments and environment for cfg.kv_tier: a host pool of the tier's GiB in SGLang's decimal GB
     (rounded down), and for "+disk" the file backend in this engine's own directory (kvtier.trial_dir), always
@@ -455,6 +470,9 @@ class SglangBackend(BaseBackend):
 
     def tier_host_reserve(self) -> int:
         return max(HOST_TIER_RESERVE, SGLANG_HOST_RESERVE)
+
+    def tier_details_field(self) -> Optional[str]:
+        return TIER_DETAILS_FIELD if _tier_details_flag() else None
 
     def tier_host_need(self, cfg: Config, host_bytes: int) -> int:
         """With an EAGLE3 head or a draft model SGLang adds a host pool for the second model's cache, as many

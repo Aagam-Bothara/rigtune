@@ -171,6 +171,9 @@ class SubprocessTrialRunner:
         if cfg.tp > 1 and hooks.gpu_ids:  # one engine over several GPUs: measure all of them
             gpus = [g.index for g in self.hw.gpus if g.vendor == "nvidia"][: cfg.tp]
             hooks = dataclasses.replace(hooks, gpu_ids=gpus or hooks.gpu_ids)
+        if cfg.kv_tier is not None:  # where its cached tokens came from (calibrate/measure.py _tier_stats)
+            hooks = dataclasses.replace(hooks, tier_report=True,
+                                        tier_details_field=backend.tier_details_field())
         observation = MemoryObservation(predicted=self._predict(cfg, backend, model))
         baseline_mb = device_used_mb(hooks.gpu_ids)
         proc = None
@@ -245,6 +248,9 @@ class SubprocessTrialRunner:
         if self.log_dir:
             log_path = self.log_dir / f"{int(time.time())}_{re.sub(r'[^A-Za-z0-9._=+-]+', '_', base.key())}_power.log"
         hooks = backend.workload_hooks(self.hw, model)
+        if base.kv_tier is not None:
+            hooks = dataclasses.replace(hooks, tier_report=True,
+                                        tier_details_field=backend.tier_details_field())
         results: List[TrialResult] = []
         proc = None
         try:

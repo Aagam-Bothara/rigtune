@@ -39,6 +39,12 @@ class LlmtraceHooks:
     # Prometheus endpoint with prefix-cache counters (vLLM), read around each level of a session file whose replies
     # carry no cached-token counts.
     metrics_path: Optional[str] = None
+    # A trial with a KV-cache tier (Config.kv_tier): record where cached tokens came from and time to first
+    # token on returning turns. Set by the trial runner; off for every other trial, whose metrics stay put.
+    tier_report: bool = False
+    # The request field asking the engine to split each reply's cached tokens by tier (SGLang's
+    # return_cached_tokens_details, BaseBackend.tier_details_field), set with tier_report.
+    tier_details_field: Optional[str] = None
 
 
 @dataclass
@@ -340,6 +346,11 @@ class BaseBackend:
     def tier_host_need(self, cfg: Config, host_bytes: int) -> int:
         """Host RAM a tier of `host_bytes` takes with `cfg`: more than that where the engine adds pools."""
         return host_bytes
+
+    def tier_details_field(self) -> Optional[str]:
+        """The request field that makes each reply say which tier its cached tokens came from (LlmtraceHooks
+        .tier_details_field), or None: the engine's /metrics counters, if any, are all a tier trial gets."""
+        return None
 
     def find_second_models(self, prepared: PreparedModel) -> List[str]:
         """Under --speculative all: look up second models (EAGLE3 heads, drafts) on the Hub and record them in

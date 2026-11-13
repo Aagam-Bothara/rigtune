@@ -340,6 +340,16 @@ class TrialMetrics(BaseModel):
     # what a session profile records for the drift watch, from the level its winning trial was scored at.
     prompt_tokens_seen: Dict[str, int] = Field(default_factory=dict)
     turns_seen: Dict[str, float] = Field(default_factory=dict)
+    # Trials with a KV-cache tier only (calibrate/measure.py _tier_stats); empty or None on every other trial.
+    # Cached prompt tokens by where they came from: SGLang's own split per reply ("device", "host",
+    # "storage"), else vLLM's /metrics counters ("device", and "tier" for host and disk: vLLM does not split).
+    cached_by_source: Dict[str, int] = Field(default_factory=dict)
+    ttft_returning_ms: Optional[float] = None  # median time to first token over steps after a session's first
+    ttft_returning_p95_ms: Optional[float] = None
+    # Median time to first token of those returning steps, by where their cache hit came from: "storage",
+    # "host" or "device" (the slowest tier any of its tokens came from), "hit" where the engine does not say,
+    # or "miss".
+    ttft_by_hit_ms: Dict[str, float] = Field(default_factory=dict)
 
     # Explicit requests (agent traces; calibrate/measure.py _behind_edit): the share of prompt tokens a session had
     # sent before but placed behind a change, so the engine prefilled them again. Only what a rewriting layout refills
