@@ -112,12 +112,40 @@ class ArchInfo(BaseModel):
     max_position_embeddings: int = 4096
     num_params: Optional[int] = None
     torch_dtype: str = "bfloat16"
+    # Hybrid attention layouts, read from the config's `layer_types` by rigtune.hfconfig. All defaulted, so
+    # profiles cached before these existed still load: None / 0 means every layer keeps a full KV cache.
+    full_attention_layers: Optional[int] = None  # set only for a recognised hybrid layout
+    full_kv_heads: Optional[int] = None  # full layers' KV heads where they differ (Gemma 4); else num_kv_heads
+    full_head_dim: Optional[int] = None  # full layers' head size where it differs (Gemma 4); else head_dim
+    sliding_layers: int = 0  # layers that keep at most `sliding_window` tokens per sequence
+    sliding_window: Optional[int] = None
+    linear_layers: int = 0  # linear-attention (Gated DeltaNet) layers: fixed recurrent state, no KV
+    linear_state_bytes: int = 0  # recurrent state one sequence holds, summed over the linear layers
+    # What that state grows by per speculative token: the conv state keeps one more column for each.
+    linear_conv_step_bytes: int = 0
+    layout_note: Optional[str] = None  # why a hybrid-looking layout fell back to the every-layer-full estimate
 
     def kv_bytes_per_token(self, kv_dtype_bytes: int) -> int:
         # 2 (K and V) x layers x kv_heads x head_dim x bytes.  For MHA models
         # kv_heads*head_dim == hidden_size, which matches the spec formula; for GQA
-        # models this is the correct (smaller) number.
+        # models this is the correct (smaller) number.  It counts every layer as full
+        # attention; see is_hybrid for the layouts where that is not so.
         return 2 * self.num_layers * self.num_kv_heads * self.head_dim * kv_dtype_bytes
+
+    @property
+    def is_hybrid(self) -> bool:
+        """A recognised layout where some layers keep no full KV cache (sliding or linear attention)."""
+        return self.full_attention_layers is not None
+
+    def full_kv_bytes_per_token(self, kv_dtype_bytes: float) -> float:
+        """KV bytes per token over the full-attention layers only (hybrid layouts)."""
+        heads = self.full_kv_heads or self.num_kv_heads
+        dim = self.full_head_dim or self.head_dim
+        return 2 * (self.full_attention_layers or 0) * heads * dim * kv_dtype_bytes
+
+    def sliding_kv_bytes_per_token(self, kv_dtype_bytes: float) -> float:
+        """KV bytes per token over the sliding-window layers only (hybrid layouts)."""
+        return 2 * self.sliding_layers * self.num_kv_heads * self.head_dim * kv_dtype_bytes
 
 
 class PreparedModel(BaseModel):
