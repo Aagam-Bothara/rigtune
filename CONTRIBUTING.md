@@ -17,6 +17,10 @@ CI runs both on Python 3.10–3.13 for every push and pull request.
 - Tests must not depend on the order a filesystem lists a directory in, or on anything else that varies by machine. Sort, and break ties explicitly.
 - A bug found on real hardware gets a test that reproduces it with the numbers that were measured (`tests/test_combinations.py` is an example).
 
+## Changing the search
+
+Recorded calibrations are evidence for the search as well as for the numbers. `PYTHONPATH=. python benchmarks/replay_search.py <profile.json>...` replays each through the current search with no GPU, answering every trial from the profile's own table. A profile is *exact* when the search asks for exactly the recorded trials and reaches the recorded pick, *inconclusive* when it reaches the pick past trials that were never measured (or under an option the replay cannot apply), and *different* otherwise. The script exits non-zero when a profile does worse than the class it had when the script was written (`BASELINE`); `tests/test_replay_recorded.py` runs it over every recorded profile. Only exact replays say the search is unchanged on that data. Budgeted calibrations are not replayed, since their stages were cut by wall-clock time.
+
 ## Adding a backend
 
 Implement the `Backend` interface in [docs/usage.md](docs/usage.md#backend-interface), register it with the selector, and give it a memory model the planner can use. The core pipeline (probe, plan, calibrate, serve) does not change.
