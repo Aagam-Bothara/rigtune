@@ -124,6 +124,11 @@ class Step:
     tag: str = ""
     max_tokens: Optional[int] = None
     primer: bool = False  # sent to warm a window's prefix, and not measured (see window)
+    # An explicit step against the one before it in its session (see request_kind and prefix_shares): how it changed
+    # the prompt, and the shares of its rendered messages before the first change and new past it.
+    kind: str = ""
+    lcp: Optional[float] = None
+    new: Optional[float] = None
 
     @property
     def explicit(self) -> bool:
@@ -213,6 +218,79 @@ def _explicit_message(m: object, where: str) -> Tuple[str, str]:
     return m["role"], m["content"]
 
 
+Pairs = Tuple[Tuple[str, str], ...]
+
+
+def rendered(messages: Pairs) -> str:
+    """Messages as one string, as measure._render renders them: what two requests share is measured on this."""
+    return "".join(f"\x00{role}\x01{content}" for role, content in messages)
+
+
+def request_kind(prev: Optional[Pairs], cur: Pairs) -> str:
+    """How a request changed the prompt of the one before it: "first" (nothing before), "append" (the previous
+    messages are a prefix of these), "truncate" (these are a prefix of the previous ones: only the end was dropped),
+    "rewrite_head" (the first message differs: an agent that keeps its memory in its system prompt and edits it) or
+    "rewrite_mid" (a later one does: memory edited in place, or old messages replaced by a summary)."""
+    if prev is None:
+        return "first"
+    if cur[:len(prev)] == prev:
+        return "append"
+    if prev[:len(cur)] == cur:
+        return "truncate"
+    return "rewrite_head" if cur[0] != prev[0] else "rewrite_mid"
+
+
+def _shared_start(a: str, b: str) -> int:
+    """How many leading characters two strings share: a bisection on slices, since a character loop is slow on
+    100k-character prompts."""
+    lo, hi = 0, min(len(a), len(b))
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if a[:mid] == b[:mid]:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
+def _spans(messages: Pairs) -> List[Tuple[int, int, Tuple[str, str]]]:
+    out, pos = [], 0
+    for m in messages:
+        start, pos = pos, pos + len(rendered((m,)))
+        out.append((start, pos, m))
+    return out
+
+
+def prefix_shares(prev: Pairs, cur: Pairs) -> Tuple[float, float]:
+    """(lcp, new) for request `cur` after `prev`, as shares of cur's rendered characters. `lcp` is what comes before
+    the first character that differs: all an engine's prefix cache can serve. The rest, 1 - lcp - new, was sent
+    before but sits behind the change, so the engine prefills it again: the messages of `prev` the change displaced
+    that `cur` keeps, in their order (a displaced message that does not come back is dropped, and one that appears
+    again later is new), and, in the message the change falls in, what follows the edit unchanged (its common end
+    with the message it replaced). `new` is everything else past the change. An append has nothing behind a change.
+    A pure function of the file, so it is the same for every configuration and needs no tokenizer."""
+    text, before = rendered(cur), rendered(prev)
+    if not text:
+        return 0.0, 0.0
+    lcp = _shared_start(text, before)
+    displaced = [(start, m) for start, end, m in _spans(prev) if end > lcp]
+    behind, j = 0, 0  # j: the next displaced message a kept one may be; kept messages keep their order
+    for start, end, m in _spans(cur):
+        past = end - max(start, lcp)
+        if past <= 0:
+            continue
+        found = next((i for i in range(j, len(displaced)) if displaced[i][1] == m), None)
+        if found is not None:
+            behind += past
+            j = found + 1
+        elif j == 0 and displaced and start < lcp and displaced[0][0] == start:  # the edited message
+            mine, theirs = rendered((m,)), rendered((displaced[0][1],))
+            room = min(len(mine), len(theirs)) - (lcp - start)
+            behind += min(room, _shared_start(mine[::-1], theirs[::-1]))
+            j = 1
+    return lcp / len(text), (len(text) - lcp - behind) / len(text)
+
+
 def _explicit_session(sid: str, requests: List[Tuple[object, str]]) -> Session:
     """A session from its requests in order, each with the place an error is reported against. `"chain": true` on a
     request means it was sent the moment the one before it finished, so it is that earlier step that chains."""
@@ -229,8 +307,11 @@ def _explicit_session(sid: str, requests: List[Tuple[object, str]]) -> Session:
             raise ValueError(f"{where}: session {sid!r} opens with a chained request, but nothing comes before it")
         if chain:
             steps[-1] = replace(steps[-1], chain=True)
-        steps.append(Step(messages=tuple(_explicit_message(m, where) for m in req["messages"]), tag=tag,
-                          max_tokens=cap))
+        messages = tuple(_explicit_message(m, where) for m in req["messages"])
+        prev = steps[-1].messages if steps else None
+        kind = request_kind(prev, messages)
+        lcp, new = prefix_shares(prev or (), messages)
+        steps.append(Step(messages=messages, tag=tag or kind, max_tokens=cap, kind=kind, lcp=lcp, new=new))
     role, text = steps[0].messages[0]
     return Session(id=sid, system=text if role == "system" else "", steps=tuple(steps))
 

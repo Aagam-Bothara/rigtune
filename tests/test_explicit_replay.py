@@ -111,7 +111,11 @@ def test_every_body_is_the_files_messages_exactly(tmp_path):
         sent[sid].append(k)
         assert body["max_tokens"] == req.get("max_tokens", 64)
     assert dict(sent) == {f"a{i}": [0, 1, 2, 3, 4] for i in range(6)}  # whole sessions, in order
-    assert {(o.session, o.turn, o.tag) for o in out if o.tag} == {(f"a{i}", 3, "edit") for i in range(6)}
+    tags = defaultdict(list)
+    for o in sorted(out, key=lambda o: o.seq):
+        tags[o.session].append(o.tag)
+        assert o.lcp is not None and o.new is not None and (o.lcp == 0.0) == (o.turn == 1)
+    assert set(map(tuple, tags.values())) == {("first", "append", "edit", "append", "append")}
 
 
 def test_a_chained_request_is_sent_at_once_and_the_rest_wait_their_turn(tmp_path):

@@ -310,6 +310,11 @@ class TrialMetrics(BaseModel):
     prompt_tokens_seen: Dict[str, int] = Field(default_factory=dict)
     turns_seen: Dict[str, float] = Field(default_factory=dict)
 
+    # Explicit requests (agent traces; calibrate/measure.py _behind_edit): the share of prompt tokens a session had
+    # sent before but placed behind a change, so the engine prefilled them again. Only what a rewriting layout refills
+    # beyond an appending one of the same events is the layout's doing; eviction refills either way.
+    refill_behind_edit: Optional[float] = None
+
     # A trial is not invalidated by a couple of degenerate requests. Small models sometimes emit
     # end-of-sequence immediately, producing no tokens; a backend that is actually broken fails
     # everything, not 2 requests in 48.

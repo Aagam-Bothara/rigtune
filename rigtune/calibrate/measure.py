@@ -278,6 +278,8 @@ class RequestOutcome:
     tag: str = ""  # Step.tag
     chained: bool = False  # sent the moment the step before it finished (Step.chain), ahead of the queue
     primer: bool = False  # a window's primer (Step.primer): it loads the GPU like any request, but is not measured
+    lcp: Optional[float] = None  # an explicit step's Step.lcp and Step.new, from the file
+    new: Optional[float] = None
     live: int = 0  # sessions live when it was dispatched
     request_chars: int = 0  # length of the request's messages, rendered for comparison
     reusable_chars: int = 0  # how much of that is a prefix of what the engine saw before (see _SessionScheduler)
@@ -525,12 +527,13 @@ class _SessionScheduler:
             rendered = _render(messages)
             reusable = _common_prefix(state.seen, rendered) if state.seen else (
                 len(self.shared) if self.shared and rendered.startswith(self.shared) else 0)
+            step = state.session.steps[state.step]
             meta = RequestOutcome(ok=False, session=state.session.id, turn=state.step + 1, seq=self.dispatched,
                                   distance=None if state.last_seq is None else self.dispatched - state.last_seq - 1,
                                   idle_gap=None if state.done_at is None else self.dispatched - state.done_at,
                                   live=self.live, request_chars=len(rendered), reusable_chars=reusable,
-                                  working_set=self.working_set, tag=state.session.steps[state.step].tag,
-                                  chained=state.chained, primer=state.session.steps[state.step].primer)
+                                  working_set=self.working_set, tag=step.tag, chained=state.chained,
+                                  primer=step.primer, lcp=step.lcp, new=step.new)
             self.dispatched += 1
             self.in_flight += 1
             return state, messages, meta
@@ -635,7 +638,7 @@ async def _drive_sessions(base_url: str, hooks: LlmtraceHooks, workload: Workloa
                 state, messages, meta = pending.pop(fut)
                 out = fut.result()
                 for name in ("session", "turn", "seq", "distance", "idle_gap", "live", "request_chars",
-                             "reusable_chars", "working_set", "tag", "chained", "primer"):
+                             "reusable_chars", "working_set", "tag", "chained", "primer", "lcp", "new"):
                     setattr(out, name, getattr(meta, name))
                 sched.done(state, messages, out)
                 out.text = ""  # the history keeps the answer; the outcome need not
@@ -731,12 +734,27 @@ def _session_stats(outcomes: List[RequestOutcome], wall_s: float) -> Dict[str, A
         if total:
             expected = sum(o.prompt_tokens * o.reusable_chars / o.request_chars for o in steps_ if o.request_chars)
             out[f"reuse_expected{part}"] = round(expected / total, 4)
+    out.update(_behind_edit(served))
     ttfts: Dict[int, List[float]] = {}
     for o in sent:
         if o.ok:
             ttfts.setdefault(o.turn, []).append(o.ttft_s * 1000)
     out["ttft_by_turn_ms"] = {str(t): round(statistics.median(v), 1) for t, v in sorted(ttfts.items())}
     return out
+
+
+def _behind_edit(served: List[RequestOutcome]) -> Dict[str, float]:
+    """For explicit requests: the share of prompt tokens a session had sent before but placed behind a change, so
+    the engine prefilled them again (1 - lcp - new of each request, from the file, weighted by the engine's prompt
+    count). Not all of it is avoidable: an eviction refills what it kept whatever the layout, so only the difference
+    between a rewriting layout and an appending one of the same events is what the layout costs. Agent replay only;
+    nothing for a turn-by-turn level."""
+    steps = [o for o in served if o.lcp is not None and o.new is not None]
+    total = sum(o.prompt_tokens for o in steps)
+    if not total:
+        return {}
+    refill = sum(o.prompt_tokens * max(0.0, 1.0 - o.lcp - o.new) for o in steps)
+    return {"refill_behind_edit": round(refill / total, 4)}
 
 
 def _nearest_rank(ordered: List[int], pct: float) -> int:
@@ -803,6 +821,7 @@ _REUSE_FIELDS = ("prompt_tokens_total", "cached_tokens_total", "prefix_reuse", "
                  "reuse_source", "sessions", "sessions_cut", "sessions_truncated", "mean_in_flight", "effective_pool",
                  "reuse_distance", "idle_gap", "working_set_tokens", "ttft_by_turn_ms", "prompt_tokens_seen",
                  "turns_seen")
+_REUSE_FIELDS += ("refill_behind_edit",)  # explicit requests (agent traces)
 
 
 def _level_workload(workload: Workload, k: int, counter: TokenCounter) -> Workload:
