@@ -135,7 +135,9 @@ load generator keeps every slot busy, so neither the card's idle draw between re
 burst ever reaches J/token; at a few requests a minute the idle draw alone can be most of what each request costs,
 and it is the card's, so no configuration moves it. `--arrival-rate` composes J/request at the stated rate from
 the levels a calibration already measures plus a short idle tail after each trial, instead of driving every trial
-open-loop at that rate, which at 0.1 req/s would take minutes per trial and still measure one point. The motivation for a wind-down term came from a separate project of the
+open-loop at that rate, which at 0.1 req/s would take minutes per trial and still measure one point. The composed
+figure is a model, so the pick is re-measured once with Poisson arrivals at the rate and the profile records the
+prediction next to the measurement: the model is checked on the same card in every calibration that uses it. The motivation for a wind-down term came from a separate project of the
 author's, which saw about 40 J per request of post-request hold on a different setup; that figure is not in this
 repository's data, and nothing here depends on it. What the idle draw and the hold are on the cards rigtune has
 run on is unmeasured ([gaps](benchmarks.md#not-yet-measured)).

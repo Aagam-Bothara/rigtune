@@ -110,6 +110,8 @@ class SearchOptions:
     # --arrival-rate (efficiency only): requests per second the server will see. Trials are then scored by joules
     # per request at that rate, the card's idle draw and wind-down included (calibrate/rate.py). None = J/token.
     arrival_rate: Optional[float] = None
+    # --rate-check: with an arrival rate, re-measure the pick once with Poisson arrivals at it (search.py).
+    rate_check: bool = True
 
     def key(self, objective: Optional[str] = None) -> Dict[str, str]:
         """Options that change the pick, recorded in the profile and in its cache path: the non-default
@@ -150,6 +152,8 @@ class SearchOptions:
             out["tier"] = self.kv_tier
         if self.arrival_rate is not None:  # picked for one rate; J/token profiles keep their names
             out["rate"] = f"{self.arrival_rate:g}rps"
+            if not self.rate_check:  # a profile without the check's evidence is not served where it was asked for
+                out["ratecheck"] = "off"
         if objective == "balanced" and self.ttft_percentile != 50:
             out["ttft"] = f"p{self.ttft_percentile}"
         return out
@@ -815,7 +819,7 @@ def calibrate(
                           budget_s=opts.budget_s, confirm_top=3 if opts.confirm else 0,
                           feasible_fn=combination_fits(hw, reg, plan), quality=probe, gate=gate,
                           explore_space=search_space(hw, plan, reg, workload, opts) if opts.explore else [],
-                          spec_first=True, spec_beam=3 if opts.speculative_all else 2,
+                          spec_first=True, spec_beam=3 if opts.speculative_all else 2, rate_check=opts.rate_check,
                           decide_after_spec=opts.speculative_all,
                           retry_floor=retry_floor_fn(hw, reg, plan) if opts.speculative_all else None,
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
@@ -832,7 +836,8 @@ def calibrate(
     elapsed = time.monotonic() - t0
     notes = power_notes + list(plan.notes) + tier_notes + notes
     notes += spec_state_notes_for(hw, reg, plan, winner.config, opts)
-    notes.append(f"calibration took {elapsed:.0f}s over {len(search.results)} trials")
+    trials = sum(1 for r in search.results if not r.metrics.open_loop)  # the rate check is a check, not a trial
+    notes.append(f"calibration took {elapsed:.0f}s over {trials} trials")
     notes.append(f"workload: {workload.describe()}")
     backend = reg[winner.config.backend]
     prepared = plan.prepared[winner.config.backend]
@@ -840,7 +845,7 @@ def calibrate(
                            notes=notes, workload=workload, prepared_all=plan.prepared,
                            served=scored_level(winner, search.results, objective, constraints))
     profile.calibration_seconds = elapsed
-    profile.calibration_trials = len(search.results)
+    profile.calibration_trials = trials
     profile.power_mode = power_mode
     profile.options = opts.key(objective)
     if gate is not None:

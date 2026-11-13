@@ -291,8 +291,8 @@ def _fallback(base: Profile, layout: str, reason: str) -> Profile:
 
 def _single_reference(profile: Profile) -> Optional[TrialResult]:
     key = profile.config.key()
-    matches = [r for r in profile.calibration_table
-               if r.ok and r.config.key() == key and r.disagg is None and r.replicas == 1]
+    matches = [r for r in profile.calibration_table  # not the open-loop rate check, which shares the key
+               if r.ok and r.config.key() == key and r.disagg is None and r.replicas == 1 and not r.metrics.open_loop]
     return max(matches, key=lambda r: r.metrics.tok_s) if matches else None
 
 
@@ -387,5 +387,9 @@ def calibrate_layout(
         out.launch_args = backend.launch_spec(chosen.config, model, 0).args
     else:
         notes.append("auto: serving on one GPU, which measured better")
+    if chosen is not ref and chosen is not None and constraints is not None and constraints.arrival_rate is not None:
+        notes.append(f"the rate check measured the single-GPU pick at {constraints.arrival_rate:g} req/s; the "
+                     f"{'replicas' if chosen.replicas > 1 else 'tensor-parallel'} layout served was not re-measured "
+                     f"at that rate, and records no idle tail")
     out.notes = list(base.notes) + tier_note + notes
     return out

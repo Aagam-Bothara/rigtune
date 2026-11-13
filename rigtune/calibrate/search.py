@@ -35,8 +35,9 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tupl
 
 from rigtune import kvtier
 from rigtune.backends.base import BaseBackend, free_port
-from rigtune.calibrate.measure import run_trial
+from rigtune.calibrate.measure import MIN_OPEN_LOOP_RATE, run_trial
 from rigtune.calibrate.objectives import Constraints, pick, rank
+from rigtune.calibrate.rate import compose
 from rigtune.calibrate.workload import Workload
 from rigtune.memlog import device_used_mb, merge, parse_log
 from rigtune.memory import estimate as memory_estimate
@@ -163,7 +164,11 @@ class SubprocessTrialRunner:
             logger.debug("no memory estimate for %s: %s", cfg.key(), exc)
             return None
 
-    def run(self, cfg: Config, stage: str) -> TrialResult:
+    def run_open_loop(self, cfg: Config, rate: float, stage: str = "rate-check") -> TrialResult:
+        """Launch cfg and send it Poisson arrivals at `rate` requests per second (run_trial's open-loop run)."""
+        return self.run(cfg, stage, arrival_rate=rate)
+
+    def run(self, cfg: Config, stage: str, arrival_rate: Optional[float] = None) -> TrialResult:
         backend = self.backends[cfg.backend]
         model = self.models[cfg.backend]
         port = free_port()
@@ -203,9 +208,9 @@ class SubprocessTrialRunner:
             metrics = run_trial(
                 f"http://127.0.0.1:{port}", hooks, self.workload, pid=proc.pid,
                 request_timeout=self.request_timeout, enough=self.enough, close_call=self.close_call,
-                idle_tail_s=self.idle_tail_s,
+                idle_tail_s=self.idle_tail_s, arrival_rate=arrival_rate,
             )
-            if self.quality is not None and metrics.ok:
+            if self.quality is not None and metrics.ok and arrival_rate is None:
                 # The engine is up and warm: answer the quality prompts here rather than launch it again later.
                 self.quality.record(f"http://127.0.0.1:{port}", cfg.backend, cfg.quant)
             observation.measured = merge(
@@ -432,6 +437,10 @@ class StagedSearch:
     # config. Run once per tuned engine, after its variant stages and before its combinations, so a tier can
     # be combined. None = off.
     tier_variants: Optional[Callable[[TrialResult], Tuple[List[Config], Optional[str]]]] = None
+
+    # After the pick under `efficiency` at an arrival rate: measure the winner once with Poisson arrivals at that
+    # rate and record the composed J/request beside the measured one. The pick never depends on it.
+    rate_check: bool = True
     _variant_log: List[Tuple[str, Config, Config]] = field(default_factory=list)  # (dimension, leader, variant)
     results: List[TrialResult] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -1146,6 +1155,55 @@ class StagedSearch:
             note += f", {w.power_w:.0f} W vs {r.power_w:.0f} W"
         return note + " against the same config at default power)"
 
+    def stage_rate_check(self, winner: TrialResult) -> Optional[str]:
+        """Measure the pick with Poisson arrivals at the arrival rate it was scored for, and say how the composed
+        J/request compared. The run is appended to the results and never ranked (objectives._ok_results)."""
+        rate = self.constraints.arrival_rate
+        run_open_loop = getattr(self.runner, "run_open_loop", None)
+        if not self.rate_check or self.objective != "efficiency" or rate is None or run_open_loop is None:
+            return None
+        if rate < MIN_OPEN_LOOP_RATE * (1 - 1e-9):
+            return (f"rate check skipped: at {rate:g} req/s even one arrival needs more than "
+                    f"{1 / MIN_OPEN_LOOP_RATE:.0f} s, the longest window it measures")
+        if self._over_budget():
+            self._skipped.append(f"rate-check {winner.config.key()}")
+            return None
+        # Scored as in the pick: among every trial, so in the request size the pick was counted in.
+        ranked = [x for x in rank(self.results, self.objective, self.constraints) if x.result is winner] \
+            or rank([winner], self.objective, self.constraints)
+        comp = ranked[0].rate if ranked else None
+        if self.progress:
+            self.progress("rate-check", winner.config, None)
+        t0 = self.clock()
+        res = run_open_loop(winner.config, rate, "rate-check")
+        self._trial_seconds.append(self.clock() - t0)
+        self.results.append(res)
+        if self.progress:
+            self.progress("rate-check", winner.config, res)
+        m = res.metrics
+        if not res.ok or m.joules_per_request is None:
+            why = res.error or "no energy telemetry"
+            return f"rate check at {rate:g} req/s did not measure J/request: {why.splitlines()[0][:120]}"
+        # The prediction is recomputed in requests as long as the check's own answers: the idle term P_idle / λ is
+        # per request whatever its length, so scaling the pick's figure per token would mis-state it.
+        served = m.requests - m.failed
+        measured_tpr = m.output_tokens / served if served else 0.0
+        note = f"rate check at {rate:g} req/s over {m.requests} Poisson arrivals ({m.duration_s:.0f} s): "
+        measured = f"measured {m.joules_per_request:.1f} J/request at {measured_tpr:.0f} tokens/request"
+        again = None
+        if comp is not None and comp.total_j and measured_tpr:
+            again = compose(winner.metrics, rate, self.constraints.max_utilisation, tokens_per_request=measured_tpr,
+                            idle_w=comp.idle_w)
+        if again is not None and again.total_j:
+            note += (f"predicted {again.total_j:.1f} J/request at those {measured_tpr:.0f} tokens/request, {measured} "
+                     f"({(m.joules_per_request - again.total_j) / again.total_j * 100:+.0f}%)")
+        else:
+            note += measured
+        if m.ttft_p95_ms is not None:
+            note += (f"; p95 TTFT {m.ttft_p95_ms:.0f} ms, from {served} requests, so close to their slowest "
+                     f"rather than a 95th percentile")
+        return note
+
     # ---- entry
 
     def run(self, feasible: Sequence[Config]) -> Tuple[Optional[TrialResult], List[str]]:
@@ -1198,6 +1256,10 @@ class StagedSearch:
             pn = self._power_note(winner, pool)
             if pn:
                 notes.append(pn)
+        if winner is not None:
+            rn = self.stage_rate_check(winner)
+            if rn:
+                notes.append(rn)
         if self.gate is not None:
             notes.extend(self.gate.final_notes(winner, self.results, self.objective, self.constraints))  # type: ignore
         if self._skipped:

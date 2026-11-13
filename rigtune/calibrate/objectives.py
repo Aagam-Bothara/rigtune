@@ -80,7 +80,8 @@ class Ranked:
 
 
 def _ok_results(results: Sequence[TrialResult]) -> List[TrialResult]:
-    return [r for r in results if r.ok]
+    # An open-loop rate check measures the pick at one rate; it checks the choice and is never part of it.
+    return [r for r in results if r.ok and not r.metrics.open_loop]
 
 
 def _ttft(m: TrialMetrics) -> float:

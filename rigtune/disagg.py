@@ -596,7 +596,8 @@ class DisaggSupervisor:
 
 def _unified_reference(profile: Profile) -> Optional[TrialResult]:
     key = profile.config.key()
-    matches = [r for r in profile.calibration_table if r.ok and r.config.key() == key and r.disagg is None]
+    matches = [r for r in profile.calibration_table  # not the open-loop rate check, which shares the key
+               if r.ok and r.config.key() == key and r.disagg is None and not r.metrics.open_loop]
     return max(matches, key=lambda r: r.metrics.tok_s) if matches else None
 
 
@@ -712,5 +713,8 @@ def calibrate_disaggregated(
                                                      chosen.disagg.kv_transfer_config, chosen.disagg.decode_gpu, 0).args
     else:
         notes.append("auto: serving unified, which measured better")
+    if chosen.disagg is not None and constraints is not None and constraints.arrival_rate is not None:
+        notes.append(f"the rate check measured the unified pick at {constraints.arrival_rate:g} req/s; the "
+                     f"disaggregated pair served was not re-measured at that rate, and records no idle tail")
     out.notes = list(base.notes) + notes
     return out

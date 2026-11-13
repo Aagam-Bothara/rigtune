@@ -11,8 +11,10 @@ import asyncio
 import importlib.util
 import json
 import logging
+import math
 import os
 import queue
+import random
 import re
 import statistics
 import threading
@@ -570,6 +572,75 @@ async def _drive(
 
         await asyncio.gather(*(worker(p) for p in workload.prompts))
     return results
+
+
+OPEN_LOOP_REQUESTS = 24
+OPEN_LOOP_MAX_S = 300.0  # no open-loop window is longer
+OPEN_LOOP_MIN_S = 20.0  # nor shorter: at a high rate 24 arrivals would be over before the card's power settles
+MIN_OPEN_LOOP_RATE = 1.0 / OPEN_LOOP_MAX_S  # below this even one arrival needs a window past the cap
+
+
+def arrival_schedule(rate: float, n: int = OPEN_LOOP_REQUESTS, seed: int = 0, max_s: float = OPEN_LOOP_MAX_S,
+                     min_s: float = OPEN_LOOP_MIN_S) -> Tuple[List[float], float]:
+    """(send times from 0, window length) for Poisson arrivals at `rate` per second, deterministic per seed.
+
+    At least `n` arrivals and a window of at least `min_s` (more arrivals at a high rate), but never a window past
+    `max_s` (fewer arrivals at a low rate). The exponential gaps are rescaled so the window, which ends one gap after
+    the last arrival, is exactly arrivals / rate: left raw, 24 arrivals realise a rate within about +-20% of the one
+    asked for, and the idle term of J/request is proportional to the gap, so that spread would land in the
+    comparison with the prediction.
+    """
+    if rate * max_s < 1 - 1e-9:
+        raise ValueError(f"an open-loop check at {rate:g} req/s needs more than {max_s:.0f} s for one arrival; "
+                         f"the lowest rate it can check is 1/{max_s:.0f} req/s")
+    fit = min(max(n, math.ceil(min_s * rate - 1e-9)), max(1, math.floor(max_s * rate + 1e-9)))
+    if fit < n:
+        logger.warning("%d arrivals at %g/s would take %.0f s; sending %d to stay within %.0f s",
+                       n, rate, n / rate, fit, max_s)
+    rng = random.Random(seed)
+    gaps = [rng.expovariate(rate) for _ in range(fit)]
+    window = fit / rate
+    scale = window / sum(gaps)
+    times, t = [], 0.0
+    for g in gaps:
+        times.append(t)
+        t += g * scale
+    return times, window
+
+
+async def _drive_open(base_url: str, hooks: LlmtraceHooks, workload: Workload, times: List[float], window: float,
+                      timeout: float, counter: Optional[TokenCounter] = None) -> Tuple[List[RequestOutcome], float, int]:
+    """Send prompt i at times[i] seconds whatever is still in flight, then wait out the window.
+
+    Returns (outcomes, seconds from the first send to the later of the window's end and the last answer, peak
+    number in flight)."""
+    counter = counter or TokenCounter()
+    url = base_url.rstrip("/") + hooks.completions_path
+    results: List[RequestOutcome] = []
+    in_flight, peak = 0, 0
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+
+    async with httpx.AsyncClient() as client:
+
+        async def one(at: float, prompt: str) -> None:
+            nonlocal in_flight, peak
+            await asyncio.sleep(max(0.0, t0 + at - loop.time()))
+            body: Dict[str, Any] = {"model": hooks.model_name or "model", "prompt": prompt,
+                                    "max_tokens": workload.decode_tokens, "temperature": workload.temperature,
+                                    "stream": True, "ignore_eos": not workload.natural_stop}
+            if hooks.stream_usage:
+                body["stream_options"] = {"include_usage": True}
+            in_flight += 1
+            peak = max(peak, in_flight)
+            try:
+                results.append(await _one_request(client, url, body, timeout, counter))
+            finally:
+                in_flight -= 1
+
+        await asyncio.gather(*(one(at, p) for at, p in zip(times, workload.prompts)))
+    await asyncio.sleep(max(0.0, t0 + window - loop.time()))  # the last gap is idle the card pays for too
+    return results, loop.time() - t0, peak
 
 
 Messages = List[Dict[str, str]]
@@ -1250,6 +1321,8 @@ def run_trial(
     close_call: Optional[Callable[[TrialMetrics], bool]] = None,
     idle_tail_s: float = 0.0,
     sleep: Callable[[float], None] = time.sleep,
+    arrival_rate: Optional[float] = None,
+    seed: int = 0,
 ) -> TrialMetrics:
     """Run the workload at each concurrency level and fold into one TrialMetrics.
 
@@ -1268,6 +1341,10 @@ def run_trial(
     `idle_tail_s` > 0 keeps the last measured level's telemetry window open that long after its last request,
     and records the card's idle power and the wind-down to it (IdleSummary) on the trial. The level's own
     numbers come from the part of the window before the tail, so they are what they would be without it.
+
+    `arrival_rate` replaces the levels with one open-loop run: up to 24 of the first level's prompts sent at
+    Poisson arrival times (arrival_schedule, seeded), measured over the whole window, gaps and the final gap
+    included, so its energy over its requests is the J/request a server at that rate pays.
 
     Summary rule: tok/s and TTFT/TPOT come from the concurrency level with the highest
     throughput (that is the load the server would actually be run at); energy per token
@@ -1298,6 +1375,9 @@ def run_trial(
             asyncio.run(_drive(base_url, hooks, small, top, request_timeout, counter))
         except Exception as exc:
             logger.debug("warmup failed: %s", exc)
+
+    if arrival_rate is not None:
+        return _open_loop(base_url, hooks, workload, arrival_rate, seed, pid, request_timeout, counter, prompt_tokens)
 
     per_level: Dict[str, TrialMetrics] = {}
     total_energy = 0.0
@@ -1420,6 +1500,43 @@ def run_trial(
         summary.energy_source = idle.energy_source
         summary.idle_tail_s = idle.tail_s
     return summary
+
+
+def _open_loop(base_url: str, hooks: LlmtraceHooks, workload: Workload, rate: float, seed: int, pid: Optional[int],
+               timeout: float, counter: TokenCounter, prompt_tokens: int) -> TrialMetrics:
+    """One open-loop run at `rate` requests per second (see run_trial)."""
+    times, window = arrival_schedule(rate, OPEN_LOOP_REQUESTS, seed, OPEN_LOOP_MAX_S, OPEN_LOOP_MIN_S)
+    lw = replace(workload, prompts=_open_loop_prompts(workload, len(times), counter), n_prompts=len(times))
+    with Telemetry(hooks, pid=pid) as tel:
+        outcomes, wall, peak = asyncio.run(_drive_open(base_url, hooks, lw, times, window, timeout, counter))
+    m = _metrics_from(outcomes, wall, max(1, peak))
+    s = tel.summary
+    energy = s.counter_energy_j if s.counter_energy_j is not None else s.energy_j
+    served = m.requests - m.failed
+    m.open_loop, m.arrival_rate_rps = True, rate
+    m.telemetry_source, m.prompt_tokens = s.source, prompt_tokens
+    m.peak_mem_mb, m.gpu_util_pct, m.power_w, m.sm_clock_mhz = s.peak_mem_mb, s.gpu_util_pct, s.power_w, s.sm_clock_mhz
+    m.counter_energy_j = s.counter_energy_j
+    if energy is not None and served > 0:
+        m.joules_per_request = energy / served
+        m.joules_per_token = energy / m.output_tokens if m.output_tokens else None
+        m.energy_source = "nvml_counter" if s.counter_energy_j is not None else "trapezoid"
+    return m
+
+
+def _open_loop_prompts(workload: Workload, n: int, counter: TokenCounter) -> List[str]:
+    """n prompts, each sent once where the workload has that many: further levels' prompts are drawn in turn
+    (_level_workload), since a repeated prompt would be served partly from the prefix cache."""
+    out: List[str] = []
+    for k in range(16):
+        level = workload if k == 0 else _level_workload(workload, k, counter)
+        out += [p for p in level.prompts if p not in out]
+        if len(out) >= n:
+            return out[:n]
+    if not out:
+        return []
+    logger.warning("the workload has %d distinct prompts for %d open-loop arrivals; some are sent twice", len(out), n)
+    return [out[i % len(out)] for i in range(n)]
 
 
 def _stops(enough: Optional[Callable[[TrialMetrics], bool]], m: TrialMetrics) -> bool:

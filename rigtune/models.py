@@ -377,6 +377,11 @@ class TrialMetrics(BaseModel):
     hold_after_concurrency: Optional[int] = None  # the level the tail followed
     energy_source: Optional[str] = None  # "nvml_counter" | "trapezoid": what idle and hold were computed from
     idle_tail_s: Optional[float] = None
+    # An open-loop run (the rate check): requests sent at Poisson arrival times rather than c always in flight.
+    # Never ranked with the closed-loop trials; it checks the J/request the rate model predicted for the pick.
+    open_loop: bool = False
+    arrival_rate_rps: Optional[float] = None
+    joules_per_request: Optional[float] = None  # the whole window's energy, gaps included, over its requests
 
     # A trial is not invalidated by a couple of degenerate requests. Small models sometimes emit
     # end-of-sequence immediately, producing no tokens; a backend that is actually broken fails

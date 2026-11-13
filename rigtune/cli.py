@@ -358,7 +358,7 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
           explore: str = "off", quality_probe: str = "off", eval_set: Optional[str] = None,
           max_accuracy_loss: float = 3.0, eval_items: int = 300, report_reuse: bool = False,
           kv_tier: str = "off",
-          arrival_rate: Optional[float] = None):
+          arrival_rate: Optional[float] = None, rate_check: str = "on"):
     from rigtune.pipeline import SearchOptions
 
     if eval_set:
@@ -375,7 +375,7 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
         all_levels=all_levels, explore=explore == "on", quality_probe=quality_probe == "on",
         eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items, report_reuse=report_reuse,
         kv_tier=kv_tier,
-        arrival_rate=arrival_rate,
+        arrival_rate=arrival_rate, rate_check=rate_check == "on",
     )
 
 
@@ -458,6 +458,10 @@ RATE_OPT = typer.Option(None, "--arrival-rate", callback=_rate,
                              "each configuration by joules per request at that rate, the card's idle draw between "
                              "requests and its wind-down after them included, instead of joules per token at full "
                              "load. Not yet run on hardware.")
+RATE_CHECK_OPT = typer.Option("on", "--rate-check", callback=_on_off,
+                              help="With --arrival-rate: launch the pick once more and send it up to 24 requests at "
+                                   "Poisson arrival times at that rate (at most 5 minutes), and record the measured "
+                                   "J/request beside the predicted one (on|off)")
 TTFT_OPT = typer.Option(None, "--ttft-ceiling", help="balanced: TTFT ceiling in ms (default: the workload's)")
 TTFT_PCT_OPT = typer.Option(95, "--ttft-percentile", callback=_percentile,
                             help="balanced: which time to first token the ceiling applies to: 95 (default; at "
@@ -618,6 +622,7 @@ def bench(
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
     arrival_rate: Optional[str] = RATE_OPT,
+    rate_check: str = RATE_CHECK_OPT,
 ) -> None:
     """Run calibration and print the table; do not serve."""
     from rigtune import cache as profile_cache
@@ -635,7 +640,7 @@ def bench(
         raise typer.Exit(2)
     opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate)
+                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check)
     if layout != "single" and opts.kv_tier != "off":  # as pipeline._resolve_layout does
         err.print(f"[yellow]--kv-tier {opts.kv_tier} is not tried under --layout {layout}: a KV-cache tier's "
                   "host RAM is budgeted for one engine on one GPU[/]")
@@ -702,6 +707,7 @@ def recalibrate(
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
     arrival_rate: Optional[str] = RATE_OPT,
+    rate_check: str = RATE_CHECK_OPT,
 ) -> None:
     """Force a calibration rerun and overwrite the cached profile."""
     from rigtune.pipeline import resolve_profile
@@ -717,7 +723,7 @@ def recalibrate(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate), layout=layout)
+                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check), layout=layout)
     view.stop()
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
@@ -769,6 +775,7 @@ def compare(
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
     arrival_rate: Optional[str] = RATE_OPT,
+    rate_check: str = RATE_CHECK_OPT,
 ) -> None:
     """Measure rigtune's pick vs stock defaults (and Ollama) on one workload; write a results JSON."""
     from rigtune.bench import compare as _compare, to_markdown
@@ -790,14 +797,14 @@ def compare(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate), layout=layout)
+                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check), layout=layout)
     view.stop()
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend, workload=eval_wl, report_reuse=report_reuse)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
                                quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse, arrival_rate=arrival_rate).search_quants())
+                 report_reuse=report_reuse, arrival_rate=arrival_rate, rate_check=rate_check).search_quants())
 
     def _row_progress(label: str, row) -> None:
         if row is None:
@@ -1029,6 +1036,7 @@ def serve(
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
     arrival_rate: Optional[str] = RATE_OPT,
+    rate_check: str = RATE_CHECK_OPT,
 ) -> None:
     """Discover hardware, calibrate once (cached), then serve an OpenAI-compatible API."""
     import uvicorn
@@ -1051,7 +1059,7 @@ def serve(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate), layout=layout)
+                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check), layout=layout)
     view.stop()
     _print_profile(profile)
     if profile.prepared is None:
