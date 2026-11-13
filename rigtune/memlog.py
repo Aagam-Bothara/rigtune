@@ -18,10 +18,12 @@ GiB = 1024 * MiB
 
 class MeasuredMemory(BaseModel):
     weights_mb: Optional[float] = None
-    kv_mb: Optional[float] = None  # KV cache the backend actually allocated
+    kv_mb: Optional[float] = None  # KV cache (and hybrid models' recurrent state) the backend actually allocated
     workspace_mb: Optional[float] = None  # everything else on the device (context, graphs, activations)
     non_kv_mb: Optional[float] = None  # weights + workspace as the backend reports it
-    kv_tokens: Optional[int] = None  # tokens the allocated KV cache can hold
+    # Tokens the allocated KV cache can hold, as the engine reports it. Recorded, not read back by the planner.
+    # Hybrid models: vLLM reports max-length-request capacity, SGLang the full-attention pool (see the parsers).
+    kv_tokens: Optional[int] = None
     device_peak_mb: Optional[float] = None  # NVML peak during the trial, minus what was used before launch
     baseline_mb: Optional[float] = None  # device memory used before launch
     source: str = "none"  # "vllm-log" | "llamacpp-log" | "sglang-log" | "nvml" | "psutil"
@@ -75,6 +77,10 @@ def parse_vllm(text: str) -> MeasuredMemory:
     if r := re.search(r"Available KV cache memory:\s*" + _SIZE, text):
         m.kv_mb = _to_mb(*r.groups())
     if r := re.search(r"GPU KV cache size:\s*([\d,]+)\s*tokens", text):
+        # vLLM 0.29 (v1/core/kv_cache_utils.update_kv_cache_capacity) prints max_concurrency x max_model_len,
+        # where max_concurrency counts the blocks one max-length request takes from every KV cache group. For a
+        # hybrid model that is max-length-request capacity, not tokens per group; "Available KV cache memory"
+        # already covers the whole shared pool, recurrent state included.
         m.kv_tokens = int(r.group(1).replace(",", ""))
     if m.non_kv_mb is not None and m.weights_mb is not None:
         m.workspace_mb = max(0.0, m.non_kv_mb - m.weights_mb)
@@ -146,6 +152,10 @@ def parse_sglang(text: str) -> MeasuredMemory:
     m = MeasuredMemory(source="none")
     if r := re.search(r"Load weight end\..*?mem usage=" + _SIZE, text):
         m.weights_mb = _to_mb(*r.groups())
+    if _parse_sglang_pools(text, m):
+        if m.weights_mb is not None or m.kv_mb is not None:
+            m.source = "sglang-log"
+        return m
     ks = vs = None
     if r := re.search(r"K size:\s*" + _SIZE, text):
         ks = _to_mb(*r.groups())
@@ -158,6 +168,78 @@ def parse_sglang(text: str) -> MeasuredMemory:
     if m.weights_mb is not None or m.kv_mb is not None:
         m.source = "sglang-log"
     return m
+
+
+def _sglang_rank(line: str) -> Optional[int]:
+    """The tensor-parallel rank in an SGLang log line's prefix ("[2026-11-12 10:00:00 TP1] ..."), if any."""
+    r = re.search(r"\bTP(\d+)\b", line)
+    return int(r.group(1)) if r else None
+
+
+_STATE_KEYS = ("conv_state size", "ssm_state size", "intermediate_ssm_state_cache size",
+               "intermediate_conv_window_cache size")
+
+
+def _parse_sglang_pools(text: str, m: MeasuredMemory) -> bool:
+    """Every cache pool SGLang 0.5.19 logs for one rank, summed into kv_mb. False when no pool line is present.
+
+    Hybrid models log more than one pool, and the first "K size" alone undercounts them; the remainder would
+    then be derived as workspace (merge) and inflate `memory-report`'s fitted workspace for the machine.
+      mem_cache/memory_pool._finalize_allocation_log, one line per pool, labelled "Full" / "SWA" for hybrid SWA
+        (mem_cache/swa_memory_pool.py), and "VA upper bound" instead of "is allocated" while post-capture KV
+        sizing is on:
+        SWA KV Cache is allocated. dtype: torch.bfloat16, #tokens: 81920, K size: 12.50 GB, V size: 12.50 GB
+      model_runner_components/kv_pool_runtime.py, the backed size once post-capture sizing has resized the pool:
+        Post-capture KV sizing: KV cache allocated. dtype: torch.bfloat16, #tokens: 90000, KV size: 9.10 GB, ...
+      MambaPool.__init__, the per-request recurrent state of linear-attention layers (and its speculative
+        intermediate caches):
+        Mamba Cache is allocated. max_mamba_cache_size: 93, conv_state size: 0.11GB, ssm_state size: 4.38GB
+    With tensor parallelism every rank logs its own pools, and weights are read from one rank, so only the
+    lowest rank's lines are summed. kv_mb is everything that rank allocated for cache and state; kv_tokens is the
+    full-attention pool's token count, with the SWA pool's in details.
+    """
+    tagged = [ln for ln in text.splitlines()
+              if re.search(r"KV Cache (?:is allocated|VA upper bound)\.|Mamba Cache is allocated\.|"
+                           r"Post-capture KV sizing: KV cache allocated\.", ln)]
+    if not tagged:
+        return False
+    ranks = [r for r in (_sglang_rank(ln) for ln in tagged) if r is not None]
+    rank = min(ranks) if ranks else None
+    lines = [ln for ln in tagged if _sglang_rank(ln) == rank]
+    attention = state = 0.0
+    backed = None
+    for ln in lines:
+        if "Post-capture KV sizing" in ln:
+            if r := re.search(r"KV size:\s*" + _SIZE, ln):
+                backed = _to_mb(*r.groups())
+            if r := re.search(r"#tokens:\s*([\d,]+)", ln):
+                m.kv_tokens = int(r.group(1).replace(",", ""))
+            continue
+        for key in ("K size", "V size", "KV size"):
+            if r := re.search(r"(?<![\w_])" + key + r":\s*" + _SIZE, ln):
+                attention += _to_mb(*r.groups())
+        for key in _STATE_KEYS:
+            if r := re.search(r"(?<![\w_])" + key + r":\s*" + _SIZE, ln):
+                state += _to_mb(*r.groups())
+        if r := re.search(r"max_mamba_cache_size:\s*(\d+)", ln):
+            m.details["mamba_slots"] = float(r.group(1))
+        if r := re.search(r"#tokens:\s*([\d,]+)", ln):
+            tokens = int(r.group(1).replace(",", ""))
+            if "SWA KV Cache" in ln:
+                m.details["swa_kv_tokens"] = float(tokens)
+            elif m.kv_tokens is None:
+                m.kv_tokens = tokens
+    if backed is not None:
+        attention = backed  # what the resized pool holds, not the virtual upper bound
+    if "Mamba Cache is allocated" in "\n".join(lines):
+        m.details["mamba_mb"] = state
+    m.kv_mb = attention + state
+    if rank is not None:  # weights from the same rank as the pools
+        for ln in text.splitlines():
+            if _sglang_rank(ln) == rank and (r := re.search(r"Load weight end\..*?mem usage=" + _SIZE, ln)):
+                m.weights_mb = _to_mb(*r.groups())
+                break
+    return True
 
 
 PARSERS = {

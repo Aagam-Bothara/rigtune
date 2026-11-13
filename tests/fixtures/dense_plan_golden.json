@@ -1,0 +1,45 @@
+{
+  "groups": {
+    "a100/sglang/llama-3.2-3b": {
+      "feasible": 962,
+      "rows": 1323,
+      "sha256": "26172f86652414a66844f20037a0f59b292d9bc5d719b8ac8874e1b7aa3af92b"
+    },
+    "a100/sglang/qwen2.5-7b": {
+      "feasible": 865,
+      "rows": 945,
+      "sha256": "5fe12460cf0d986fd7c21d737755862cf23eeaa617d4d4a0868dcf8d42e771f2"
+    },
+    "a100/vllm/llama-3.2-3b": {
+      "feasible": 1270,
+      "rows": 1764,
+      "sha256": "c66e15c873b00d6a60e1dcd078db7914dd2bb13e4ce81c5e76ae3fe6632c7fbc"
+    },
+    "a100/vllm/qwen2.5-7b": {
+      "feasible": 1158,
+      "rows": 1260,
+      "sha256": "f3d439dcde72959df024abb1383c8d99ff3bcd30c05e6402973430e80aaca46c"
+    },
+    "rtx4090/sglang/llama-3.2-3b": {
+      "feasible": 744,
+      "rows": 1764,
+      "sha256": "777ba6407063072739892cd64fd6de4bfac7ae4b18e0a26e05374af4488f859a"
+    },
+    "rtx4090/sglang/qwen2.5-7b": {
+      "feasible": 787,
+      "rows": 1260,
+      "sha256": "5a00f7b25c6f88eee8c78fd3c63bdda027cbd094f8c7b75c21056410c5bddb18"
+    },
+    "rtx4090/vllm/llama-3.2-3b": {
+      "feasible": 744,
+      "rows": 1764,
+      "sha256": "b47b6367b9d2fc558a7e371c5f6110350fcaa4f17d034ae41c5a5cd8bd29996c"
+    },
+    "rtx4090/vllm/qwen2.5-7b": {
+      "feasible": 787,
+      "rows": 1260,
+      "sha256": "0d50b9a820a58e350a42abc14edfb0d62f63f4966418ec0fe0254f016950b8d0"
+    }
+  },
+  "source": "rigtune 24b4e5e (before hybrid layouts), tests/test_hybrid_memory.dense_rows"
+}

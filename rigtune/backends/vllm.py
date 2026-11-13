@@ -14,9 +14,9 @@ from typing import List, Optional, Tuple
 
 from rigtune import speculative
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
-from rigtune.hfconfig import dtype_bytes, load_arch
-from rigtune.memory import MemoryModel
-from rigtune.models import Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
+from rigtune.hfconfig import dtype_bytes, kv_element_bytes, load_arch
+from rigtune.memory import HybridKV, MemoryModel
+from rigtune.models import ArchInfo, Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
 from rigtune.hardware import nvlink_between
 from rigtune.quantized import INT4_METHODS, INT8_METHODS, PREQUANTIZED, hf_weight_options
 
@@ -47,6 +47,114 @@ KNOWN_ARCHS = {
 # Paged-KV runtimes do not need KV for every (ctx x batch) token up front; they preempt when
 # occupancy is exceeded. Budget a fraction of the worst case so realistic batches survive planning.
 PAGED_KV_FRACTION = 0.25
+
+
+VLLM_BLOCK = 16  # config/cache.CacheConfig.DEFAULT_BLOCK_SIZE; FlashAttention and Triton take MultipleOf(16)
+VLLM_CONCURRENT_BATCHES = 2  # config/vllm.VllmConfig.max_concurrent_batches with async scheduling (the default)
+
+
+def vllm_default_batched_tokens(hw: HardwareDescriptor) -> int:
+    """max_num_batched_tokens `vllm serve` picks when none is given (engine/arg_utils.EngineArgs.get_batch_defaults,
+    UsageContext.OPENAI_API_SERVER): 16384 from 160 GiB, 8192 from 70 GiB except on an A100, else 2048."""
+    total = hw.gpu.vram_total_bytes if hw.gpu else 0
+    name = (hw.gpu.name if hw.gpu else "").lower()
+    if total >= 160 * GiB:
+        return 16384
+    if total >= 70 * GiB and "a100" not in name:
+        return 8192
+    return 2048
+
+
+def _cdiv(a: float, b: float) -> int:
+    return int(-(-a // b))
+
+
+def vllm_hybrid_kv(cfg: Config, arch: ArchInfo, default_batched_tokens: int = 2048) -> HybridKV:
+    """vLLM 0.29's hybrid KV cache manager, read from source (not yet run on hardware).
+
+    - One block pool for every layer type: v1/core/kv_cache_utils.get_kv_cache_config_from_groups sizes
+      num_blocks = available // bytes_per_block, and every KV cache group draws from it, so the pool is not
+      pre-split by type. The manager is on by default on CUDA (config/vllm.py VllmConfig.__post_init__ turns it off
+      only for a platform without it, chunked local attention, or a KV connector without HMA support).
+    - Blocks: 16 tokens (CacheConfig.DEFAULT_BLOCK_SIZE). With linear layers,
+      platforms/interface.Platform._align_hybrid_block_size raises the attention block to
+      16 x cdiv(state page, 16 x attention page per token) and pads the state page up to one attention page
+      (528 tokens for Qwen3.5-9B with a bf16 cache, 1056 with fp8). Mixed page sizes without linear layers
+      (Gemma 4: 8 heads of 256 on sliding layers, 1 of 512 on full ones) are unified by raising the smaller page's
+      block (kv_cache_utils.unify_kv_cache_spec_page_size: 64 tokens on Gemma 4's full layers).
+    - Layer groups: _get_kv_cache_groups_uniform_page_size makes every group as large as the smallest layer type
+      (the largest, when that is under 1.5x the smallest) and pads the rest: gemma-3-27b's 52 sliding layers take
+      60 layer pages beside its 10 full ones.
+    - Sliding layers free out-of-window blocks (single_type_kv_cache_manager.SlidingWindowManager), but keep the
+      blocks of tokens scheduled and not yet settled: kv_cache_interface.SlidingWindowSpec.max_admission_blocks_
+      per_request reserves window - 1 + VllmConfig.max_in_flight_tokens (+1 block), where max_in_flight_tokens is
+      max_concurrent_batches x max_num_batched_tokens. Counted once across the batch.
+    - Linear (mamba) layers hold one state block per running request (kv_cache_interface.MambaSpec,
+      MambaManager). With prefix caching, which vLLM enables for hybrid generative models
+      (config/model.ModelConfig.is_prefix_caching_supported), mamba_cache_mode becomes "align"
+      (model_executor/models/config.MambaModelConfig.verify_and_update_config): a request briefly holds a second
+      block while crossing a block boundary (MambaManager.remove_skipped_blocks frees it), so the steady state,
+      one per running sequence, is what the batch is planned for.
+    - Speculative decoding: mamba/abstract.MambaBase.get_kv_cache_spec sets num_speculative_blocks =
+      num_speculative_tokens, so a spec with k tokens holds 1 + k states per sequence, and the conv state grows
+      by k columns (mamba_utils.gated_delta_net_state_shape, conv_kernel - 1 + num_spec).
+    - Start-up: kv_cache_utils.get_kv_cache_configs refuses to start unless one request at max_model_len fits
+      (_check_enough_kv_cache_memory, _max_memory_usage_bytes_from_groups: per group, full layers
+      cdiv(max_model_len, block) blocks, sliding cdiv(min(window - 1 + in-flight, max_model_len), block) + 1, mamba
+      2 + k in align mode and 1 + k without prefix caching), after holding back one null block. The plan is never
+      below that.
+    """
+    elem = kv_element_bytes(cfg.kv_dtype if cfg.kv_dtype != "auto" else arch.torch_dtype)
+    k = speculative.parse(cfg.spec_decode)[2] if cfg.spec_decode else 0
+    n_full, n_sliding, n_linear = arch.full_attention_layers or 0, arch.sliding_layers, arch.linear_layers
+    full_page1 = 2 * (arch.full_kv_heads or arch.num_kv_heads) * (arch.full_head_dim or arch.head_dim) * elem
+    sliding_page1 = 2 * arch.num_kv_heads * arch.head_dim * elem
+    full_block = sliding_block = VLLM_BLOCK
+    state_page = 0.0
+    if n_linear:
+        raw_state = (arch.linear_state_bytes + k * arch.linear_conv_step_bytes) / n_linear
+        full_block = sliding_block = VLLM_BLOCK * _cdiv(raw_state, VLLM_BLOCK * full_page1)
+        state_page = full_block * full_page1
+    elif n_sliding and n_full:
+        big = max(VLLM_BLOCK * full_page1, VLLM_BLOCK * sliding_page1)
+        if big % (VLLM_BLOCK * full_page1) == 0:
+            full_block = int(big // full_page1)
+        if big % (VLLM_BLOCK * sliding_page1) == 0:
+            sliding_block = int(big // sliding_page1)
+    counts = [n for n in (n_full, n_sliding, n_linear) if n]
+    group = min(counts)
+    if max(counts) < 1.5 * group:
+        group = max(counts)
+
+    def padded(n: int) -> int:
+        return _cdiv(n, group) * group
+
+    in_flight = VLLM_CONCURRENT_BATCHES * (cfg.prefill_budget or default_batched_tokens)
+    ctx = cfg.ctx
+    one_request = padded(n_full) * _cdiv(ctx, full_block) * full_block * full_page1
+    page = max(full_block * full_page1, state_page)
+    if n_sliding:
+        window = arch.sliding_window or 0
+        one_request += padded(n_sliding) * (_cdiv(min(window - 1 + in_flight, ctx), sliding_block) + 1) \
+            * sliding_block * sliding_page1
+        page = max(page, sliding_block * sliding_page1)
+    if n_linear:
+        align = cfg.prefix_cache is not False
+        one_request += padded(n_linear) * ((2 if align else 1) + k) * state_page
+    null_block = group * page
+    return HybridKV(
+        state_slots=cfg.batch * (1 + k),
+        state_bytes=int(padded(n_linear) * state_page) if n_linear else None,
+        full_block=full_block,
+        sliding_block=sliding_block,
+        full_layers=padded(n_full),
+        sliding_layers=padded(n_sliding) if n_sliding else None,
+        swa_extra_tokens=in_flight if n_sliding else 0,
+        # SlidingWindowSpec.max_admission_blocks_per_request: min(window - 1 + in-flight, max_model_len) + 1 block.
+        sliding_cap=(_cdiv(min((arch.sliding_window or 0) - 1 + in_flight, ctx), sliding_block) + 1) * sliding_block
+        if n_sliding else None,
+        min_bytes=int(one_request + null_block),
+    )
 
 
 def vllm_registry_archs() -> Optional[set]:
@@ -215,7 +323,9 @@ class VllmBackend(BaseBackend):
     # ---- memory
 
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
-        return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "gpu")
+        return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "gpu",
+                                      hybrid_fn=lambda cfg, arch: vllm_hybrid_kv(
+                                          cfg, arch, vllm_default_batched_tokens(hw)))
 
     # ---- configs
 

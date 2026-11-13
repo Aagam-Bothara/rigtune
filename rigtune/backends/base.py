@@ -236,8 +236,13 @@ class BaseBackend:
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
         raise NotImplementedError
 
-    def calibrated_memory(self, hw: HardwareDescriptor, kv_tokens_fn, device: str) -> MemoryModel:
-        """MemoryModel using this machine's fitted workspace/margin when `rigtune memory-report --apply` ran."""
+    def calibrated_memory(self, hw: HardwareDescriptor, kv_tokens_fn, device: str,
+                          hybrid_fn=None, full_kv_fn=None) -> MemoryModel:
+        """MemoryModel using this machine's fitted workspace/margin when `rigtune memory-report --apply` ran.
+
+        `hybrid_fn` (Config, ArchInfo) -> memory.HybridKV is given only by backends whose hybrid-attention KV
+        rules were read from the engine's source; `full_kv_fn` ArchInfo -> reason, by those that keep a full
+        KV cache on every layer of some hybrid layouts."""
         from rigtune.hardware import hardware_hash
         from rigtune.memcal import margin_override, workspace_override
         from rigtune.memory import DEFAULT_MARGIN_FRACTION
@@ -251,6 +256,8 @@ class BaseBackend:
             device=device,
             margin_fraction=mf if mf is not None else DEFAULT_MARGIN_FRACTION,
             calibrated=ws is not None or mf is not None,
+            hybrid_fn=hybrid_fn,
+            full_kv_fn=full_kv_fn,
         )
 
     def estimate_memory(self, cfg: Config, model: PreparedModel, hw: HardwareDescriptor) -> int:

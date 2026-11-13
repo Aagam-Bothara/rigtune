@@ -15,12 +15,117 @@ from rigtune import speculative
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from rigtune.backends.vllm import KNOWN_ARCHS, PAGED_KV_FRACTION
 from rigtune.hfconfig import dtype_bytes, load_arch
-from rigtune.memory import MIN_SAFETY_MARGIN, MemoryModel, estimate
-from rigtune.models import Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
+from rigtune.memory import MIN_SAFETY_MARGIN, HybridKV, MemoryModel, estimate
+from rigtune.models import ArchInfo, Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
 from rigtune.hardware import nvlink_between, sglang_python
 from rigtune.quantized import INT4_METHODS, hf_weight_options
 
 logger = logging.getLogger(__name__)
+
+# SGLang 0.5.19 defaults behind its hybrid-model pools (all read from source; not yet run on hardware).
+MAMBA_FULL_MEMORY_RATIO = 0.9  # server_args.ServerArgs.mamba_full_memory_ratio
+MAMBA_SLOTS_PER_REQUEST = 3  # mem_cache/kv_cache_configurator.MAMBA_CACHE_SIZE_MAX_RUNNING_REQUESTS_RATIO
+MAMBA_EXTRA_BUFFER_SLOTS = 2  # kv_cache_configurator.MAMBA_CACHE_V2_ADDITIONAL_RATIO_OVERLAP
+MAMBA_EXTRA_BUFFER_SLOTS_LAZY = 1  # MAMBA_CACHE_V2_ADDITIONAL_RATIO_OVERLAP_LAZY (and _NO_OVERLAP)
+SWA_FULL_TOKENS_RATIO = 0.8  # server_args.ServerArgs.swa_full_tokens_ratio
+SWA_EVICTION_INTERVAL = 128  # environ.SGLANG_SWA_EVICTION_INTERVAL
+SWA_CHUNKS_IN_FLIGHT = 2  # pool_configurator.SWAChunkCapPoolConfigurator, under the default overlap scheduler
+# Architectures whose sliding layers get SGLang's hybrid SWA pool (configs/model_config.is_hybrid_swa_model, the
+# Gemma 4 entries and SWA_SINK_ARCHS). Gemma 2 and 3 are not among them, and arg_groups/model_overrides/
+# gemma2_gemma3.py sets disable_hybrid_swa_memory for them: every layer keeps a full KV cache.
+SGLANG_HYBRID_SWA_ARCHS = frozenset({
+    "Gemma4ForCausalLM", "Gemma4ForConditionalGeneration", "Gemma4UnifiedForConditionalGeneration",
+    "GptOssForCausalLM", "GraniteSWAForCausalLM", "GraniteMoeSWAForCausalLM",
+})
+# Architectures for which arg_groups/overrides._mamba_radix_cache_resolution can pick the "extra_buffer" strategy
+# (overrides._MAMBA_EXTRA_BUFFER_ARCHS, with the default triton linear-attention backend): the Qwen3.5 family.
+SGLANG_EXTRA_BUFFER_ARCHS = frozenset({
+    "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration", "Qwen3_5ForCausalLM",
+    "Qwen3_5MoeForCausalLM", "Qwen3NextForCausalLM",
+})
+
+
+def sglang_default_chunk(vram_total_bytes: int) -> int:
+    """chunked_prefill_size SGLang picks from GPU memory (memory_hook._handle_gpu_memory_settings)."""
+    mib = vram_total_bytes / 2**20
+    if not mib:
+        return 4096
+    for limit, chunk in ((35 * 1024, 2048), (60 * 1024, 4096), (160 * 1024, 8192)):
+        if mib < limit:
+            return chunk
+    return 16384
+
+
+def sglang_full_kv_reason(arch: ArchInfo) -> Optional[str]:
+    """Why SGLang keeps a full KV cache on every layer of this hybrid layout, or None when it does not."""
+    if arch.sliding_layers and arch.architecture not in SGLANG_HYBRID_SWA_ARCHS:
+        return (f"SGLang keeps a full KV cache on every layer of {arch.architecture}: it is not one of the "
+                "architectures it gives a sliding-window pool (and it disables that pool for Gemma 2 and 3)")
+    return None
+
+
+def sglang_mamba_slots_per_request(cfg: Config, arch: ArchInfo) -> int:
+    """State slots SGLang holds per running request with the radix cache on (_calculate_mamba_ratio).
+
+    Three, plus the extra buffer: _mamba_radix_cache_resolution resolves the "auto" strategy to "extra_buffer"
+    when the overlap scheduler is on (the default) and the architecture supports it, which adds two slots
+    (one for "extra_buffer_lazy", or without overlap); otherwise "no_buffer" and three. A strategy or
+    disable_overlap_schedule passed through cfg.extra is honoured."""
+    strategy = str(cfg.extra.get("mamba_radix_cache_strategy", "auto"))
+    overlap = not cfg.extra.get("disable_overlap_schedule", False)
+    if strategy == "auto":
+        strategy = "extra_buffer" if overlap and arch.architecture in SGLANG_EXTRA_BUFFER_ARCHS else "no_buffer"
+    if strategy == "extra_buffer":
+        return MAMBA_SLOTS_PER_REQUEST + (MAMBA_EXTRA_BUFFER_SLOTS if overlap else MAMBA_EXTRA_BUFFER_SLOTS_LAZY)
+    if strategy == "extra_buffer_lazy":
+        return MAMBA_SLOTS_PER_REQUEST + MAMBA_EXTRA_BUFFER_SLOTS_LAZY
+    return MAMBA_SLOTS_PER_REQUEST
+
+
+def sglang_hybrid_kv(cfg: Config, arch: ArchInfo, vram_total_bytes: int) -> HybridKV:
+    """SGLang 0.5.19's pools for hybrid models, read from source (not yet run on hardware). Sliding layers only
+    count for SGLANG_HYBRID_SWA_ARCHS; for others MemoryModel.full_kv_fn keeps every layer full.
+
+    Radix cache on (the default; `--disable-radix-cache` when cfg.prefix_cache is False):
+    - Linear layers: mem_cache/kv_cache_configurator._handle_max_mamba_cache gives the mamba pool
+      ratio / (1 + ratio) of the cache budget (mamba_full_memory_ratio 0.9) and resolve_max_num_reqs caps
+      running requests at slots // sglang_mamba_slots_per_request (5 for Qwen3.5 under the defaults). So
+      cfg.batch needs that many slots per request (+1 padding slot) inside that share; with fewer, SGLang
+      lowers max_running_requests ("max_running_requests is capped to N by the mamba state cache").
+    - Sliding layers: model_executor/pool_configurator.HybridSWAPoolConfigurator sizes the SWA pool at
+      swa_full_tokens_ratio (0.8) x the full pool's tokens, whatever the context.
+    Radix cache off, with --max-running-requests (always passed):
+    - Linear layers: max_mamba_cache_size = max_running_requests, plus the padding slot.
+    - Sliding layers: SWAChunkCapPoolConfigurator.is_applicable holds (chunked_prefill_size is always
+      resolved), so the SWA pool is (window + eviction interval + 2 pages) x requests + 2 prefill chunks + 1 page.
+    Speculative decoding (D = --speculative-num-draft-tokens, as speculative.sglang_config passes it):
+    _handle_max_mamba_cache also reserves an intermediate state per draft token for every request slot,
+    per_req x (requests + 1) x D, inside the mamba share with the radix cache (the joint solve for K) and beside it
+    without. ReplaySSM, which would replace it, is off by default (server_args enable_linear_replayssm_spec).
+    SGLang's GDN conv state does not grow with D (configs/mamba_utils.Mamba2StateShape.create: conv_kernel - 1).
+    A second model's own KV cache is not counted, as for dense models (see spec_fraction).
+    """
+    draft = sglang_draft_tokens(cfg.spec_decode)
+    if cfg.prefix_cache is not False:
+        slots = sglang_mamba_slots_per_request(cfg, arch) * cfg.batch + 1
+        return HybridKV(state_slots=slots + draft * (cfg.batch + 1),
+                        swa_full_tokens_ratio=SWA_FULL_TOKENS_RATIO,
+                        state_share=MAMBA_FULL_MEMORY_RATIO / (1 + MAMBA_FULL_MEMORY_RATIO))
+    swa_pool = None
+    if arch.sliding_layers and arch.full_attention_layers:
+        page = 1  # CUDA default (arg_groups/overrides.py page_size resolution)
+        chunk = cfg.prefill_budget or sglang_default_chunk(vram_total_bytes)
+        swa_pool = ((arch.sliding_window or 0) + SWA_EVICTION_INTERVAL + 2 * page) * cfg.batch \
+            + SWA_CHUNKS_IN_FLIGHT * chunk + page
+    return HybridKV(state_slots=(cfg.batch + 1) * (1 + draft), swa_pool_tokens=swa_pool)
+
+
+def sglang_draft_tokens(spec: Optional[str]) -> int:
+    """--speculative-num-draft-tokens for a spec: k for n-gram, k + 1 for a second model (sglang_config)."""
+    if not spec:
+        return 0
+    kind, _, k = speculative.parse(spec)
+    return k if kind == "ngram" else k + 1
 
 
 def sglang_registry_archs() -> Optional[set]:
@@ -180,7 +285,10 @@ class SglangBackend(BaseBackend):
         return model
 
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
-        return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "gpu")
+        total = hw.gpu.vram_total_bytes if hw.gpu else 0
+        return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "gpu",
+                                      hybrid_fn=lambda cfg, arch: sglang_hybrid_kv(cfg, arch, total),
+                                      full_kv_fn=sglang_full_kv_reason)
 
     def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> List[Config]:
         ctxs = ctx_grid(model.arch.max_position_embeddings, min_ctx)
