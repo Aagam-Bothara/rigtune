@@ -386,7 +386,8 @@ def _level_workload(workload: Workload, k: int, counter: TokenCounter) -> Worklo
 
     Replaying the first level's prompts lets the engine's prefix cache serve every later level's
     prefill almost for free: on an A40 one configuration read 3638 tok/s with replayed prompts and
-    1814 with fresh ones. A workload's shared prefix is kept; caching that is the point.
+    1814 with fresh ones. A workload's shared prefix is kept; caching that is the point. A session file's levels
+    get sessions of their own the same way, by offset into its shuffled pool.
     """
     if k == 0:
         return workload
@@ -523,7 +524,7 @@ def run_trial(
         level = _level_workload(workload, k, counter)
         n = level.level_requests(c)
         if n < len(level.prompts):
-            level = replace(level, prompts=level.prompts[:n], n_prompts=n)
+            level = level.head(n)
         def drive(lw: Workload) -> Tuple[List[RequestOutcome], float]:
             if clients > 1:
                 return _drive_clients(base_url, hooks, lw, c, request_timeout, clients)
@@ -538,7 +539,7 @@ def run_trial(
                 # Too close to the ceiling to call from these requests: as many again, on prompts of their own.
                 extra = _level_workload(workload, k + len(workload.concurrencies), counter)
                 if n < len(extra.prompts):
-                    extra = replace(extra, prompts=extra.prompts[:n], n_prompts=n)
+                    extra = extra.head(n)
                 more, more_wall = drive(extra)
                 outcomes, wall, resampled = outcomes + more, wall + more_wall, True
         m = _metrics_from(outcomes, wall, c)

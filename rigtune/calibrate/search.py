@@ -66,6 +66,34 @@ def mentions_oom(log: str) -> bool:
     return "out of memory" in text or "outofmemoryerror" in text
 
 
+def _point_workload(workload: Workload, i: int, points: int) -> Workload:
+    """The workload for the i-th of `points` power points of a sweep on one running engine.
+
+    Every point shares the engine, so a session file replayed at each point would find the earlier points'
+    conversations still cached. Each point takes sessions past those of every level and re-measure before it, and
+    when the file cannot give every point that many, each point draws on fewer sessions rather than wrapping
+    around to ones already replayed. Other workloads keep their prompts, as they always have."""
+    if not workload.sessions:
+        return workload
+    from rigtune.calibrate import datasets
+
+    slices = 2 * len(workload.concurrencies)  # each level and its close-call re-measure
+    available = len(datasets.session_pool(workload.source[len(datasets.FILE_PREFIX):], workload.force_sessions))
+    n = min(workload.n_prompts, available // (points * slices))
+    if n < 1:
+        if i == 0:
+            logger.warning("%d sessions cannot give %d power points sessions of their own; later points replay "
+                           "sessions an earlier point cached", available, points)
+        n = workload.n_prompts
+    elif n < workload.n_prompts and i == 0:
+        logger.warning("%d sessions over %d power points: each level draws on %d sessions instead of %d, so none is "
+                       "replayed twice on one engine", available, points, n, workload.n_prompts)
+    if i == 0 and n == workload.n_prompts:
+        return workload
+    return dataclasses.replace(workload, n_prompts=n, prompts=[], session_list=[], fitted=False, token_counts=[],
+                               sample_offset=workload.sample_offset + i * slices * n)
+
+
 class SubprocessTrialRunner:
     """Launch the backend for one config, measure, tear down."""
 
@@ -219,7 +247,7 @@ class SubprocessTrialRunner:
                 err = f"failed to start (rc={proc.returncode()})\n{proc.tail_log(20)}"
                 return [TrialResult(config=with_power(base, s), stage=stage, metrics=TrialMetrics(), launched=False,
                                     error=err) for s in settings]
-            for s in settings:
+            for i, s in enumerate(settings):
                 cfg = with_power(base, s)
                 if progress:
                     progress(stage, cfg, None)
@@ -228,7 +256,8 @@ class SubprocessTrialRunner:
                     res = TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=perr)
                 else:
                     try:
-                        metrics = run_trial(f"http://127.0.0.1:{port}", hooks, self.workload, pid=proc.pid,
+                        metrics = run_trial(f"http://127.0.0.1:{port}", hooks,
+                                            _point_workload(self.workload, i, len(settings)), pid=proc.pid,
                                             request_timeout=self.request_timeout)
                         err = None if metrics.ok else metrics.failure_summary()
                         res = TrialResult(config=cfg, stage=stage, metrics=metrics, error=err)

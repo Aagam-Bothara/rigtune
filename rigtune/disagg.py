@@ -422,7 +422,9 @@ class DisaggTrialRunner:
                                    log_path=(self.log_dir / f"{int(time.time())}_router.log") if self.log_dir
                                    else None).start()
             hooks = self._hooks(base)
-            for s in settings:
+            from rigtune.calibrate.search import _point_workload  # sessions of their own per point, on one pair
+
+            for i, s in enumerate(settings):
                 variant = with_decode_power(base, s)
                 if progress:
                     progress(stage, variant.decode, None)
@@ -446,7 +448,7 @@ class DisaggTrialRunner:
                                       disagg=variant)
                 else:
                     try:
-                        m = run_trial(router.url, hooks, self.workload, pid=None,
+                        m = run_trial(router.url, hooks, _point_workload(self.workload, i, len(settings)), pid=None,
                                       request_timeout=self.request_timeout, clients=2)
                         res = TrialResult(config=variant.decode, stage=stage, metrics=m, disagg=variant,
                                           error=None if m.ok else m.failure_summary())

@@ -129,6 +129,10 @@ class Workload:
             return len(self.prompts)
         return min(len(self.prompts), max(MIN_LEVEL_REQUESTS, concurrency * self.requests_per_slot))
 
+    def head(self, n: int) -> "Workload":
+        """A copy sending only the first n prompts, or for a session file drawing on only the first n sessions."""
+        return replace(self, prompts=self.prompts[:n], n_prompts=n, session_list=self.session_list[:n])
+
     def turn_budget(self, concurrency: int) -> int:
         """Turns a level of a session file sends: it stops issuing new ones once they are spent (see turn_budget)."""
         return turn_budget(concurrency, self.turns_per_slot, self.session_pool)
