@@ -399,8 +399,8 @@ def workload_from_file(path, template: Optional[Workload] = None, session_pool: 
                          "cannot apply to it")
     conversations, ignored = datasets.flat_notes(p)
     if conversations:
-        logger.info("%s: %d conversations are flattened into one prompt each, as before; give each line a "
-                    "\"session\" key to replay them turn by turn", p.name, conversations)
+        logger.info("%s: %d conversations are flattened into one prompt each, as before; pass --sessions (or give "
+                    "each line a \"session\" key) to replay them turn by turn", p.name, conversations)
     if ignored:
         logger.info("%s: %d lines have a \"session\" key beside a prompt rather than messages; it is ignored, as "
                     "before", p.name, ignored)

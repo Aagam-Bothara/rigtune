@@ -175,15 +175,24 @@ def _trace(which: str) -> None:
     console.print(view.render())
 
 
-def _workload(name: str, file: Optional[Path] = None):
+def _workload(name: str, file: Optional[Path] = None, sessions: bool = False, session_pool: Optional[int] = None,
+              session_turns: Optional[int] = None, history: Optional[str] = None,
+              session_system: Optional[Path] = None):
     from rigtune.calibrate.workload import WORKLOAD_NAMES, get_workload, workload_from_file
 
     if name not in WORKLOAD_NAMES:
         raise typer.BadParameter(f"workload must be one of {', '.join(WORKLOAD_NAMES)}")
+    options = {"--sessions": sessions or None, "--session-pool": session_pool, "--session-turns": session_turns,
+               "--history": history, "--session-system": session_system}
     if file is None:
+        given = [k for k, v in options.items() if v is not None]
+        if given:
+            raise typer.BadParameter(f"{', '.join(given)} need a --workload-file", param_hint=given[0])
         return get_workload(name)
     try:
-        return workload_from_file(file, template=get_workload(name))
+        system = session_system.read_text(encoding="utf-8-sig") if session_system is not None else None
+        return workload_from_file(file, template=get_workload(name), session_pool=session_pool,
+                                  turns_cap=session_turns, history=history, session_system=system, sessions=sessions)
     except (OSError, ValueError) as exc:
         raise typer.BadParameter(str(exc), param_hint="--workload-file")
 
@@ -222,6 +231,25 @@ WORKLOAD_FILE_OPT = typer.Option(
     None, "--workload-file",
     help="Calibrate on your own prompts: a JSONL file with one prompt per line, as a string, {\"prompt\": ...} or "
          "{\"messages\": [...]}. --workload then sets only the concurrency levels and latency ceilings.")
+SESSIONS_OPT = typer.Option(
+    False, "--sessions",
+    help="Replay every line of --workload-file as a session, turn by turn, even without a \"session\" key (a file "
+         "whose lines have one is a session file anyway). Without it, multi-turn {\"messages\": [...]} lines are "
+         "flattened into one prompt each, as before.")
+SESSION_POOL_OPT = typer.Option(
+    None, "--session-pool", min=1,
+    help="Session files: sessions live at once per level (default: one per concurrency slot). A session's next turn "
+         "waits behind the others, so its reuse distance is this many minus one; a larger pool tests whether its "
+         "cached history survives. A level then draws on at least twice this many sessions.")
+SESSION_TURNS_OPT = typer.Option(None, "--session-turns", min=1,
+                                 help="Session files: turns replayed per session (default 8)")
+HISTORY_OPT = typer.Option(
+    None, "--history",
+    help="Session files: what a later turn carries as the earlier answers: generated (the model's own, default) or "
+         "recorded (the file's, the same for every configuration)")
+SESSION_SYSTEM_OPT = typer.Option(None, "--session-system",
+                                  help="Session files: a text file whose contents are every session's system prompt, "
+                                       "in place of the file's own")
 POWER_OPT = typer.Option(
     "off", "--power", callback=_power_mode,
     help="Energy tuning: off | cap (power limit) | clock (locked SM clock) | both. Needs root; machine-wide; "
@@ -455,13 +483,18 @@ def plan(
     backend: Optional[str] = typer.Option(None, "--backend", help="Force one backend"),
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
+    sessions: bool = SESSIONS_OPT,
+    session_pool: Optional[int] = SESSION_POOL_OPT,
+    session_turns: Optional[int] = SESSION_TURNS_OPT,
+    history: Optional[str] = HISTORY_OPT,
+    session_system: Optional[Path] = SESSION_SYSTEM_OPT,
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Print feasible configs (after the memory planner) without running them."""
     from rigtune.hardware import probe as _probe
     from rigtune.pipeline import prepare_and_plan, select
 
-    wl = _workload(workload, workload_file)
+    wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     candidates, reg = select(hw, spec, force=backend)
@@ -508,6 +541,11 @@ def bench(
     objective: str = typer.Option("balanced", "--objective", callback=_objective),
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
+    sessions: bool = SESSIONS_OPT,
+    session_pool: Optional[int] = SESSION_POOL_OPT,
+    session_turns: Optional[int] = SESSION_TURNS_OPT,
+    history: Optional[str] = HISTORY_OPT,
+    session_system: Optional[Path] = SESSION_SYSTEM_OPT,
     backend: Optional[str] = typer.Option(None, "--backend"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
     ttft_percentile: int = TTFT_PCT_OPT,
@@ -538,7 +576,7 @@ def bench(
     from rigtune.hardware import probe as _probe
     from rigtune.pipeline import calibrate, prepare_and_plan, select
 
-    wl = _workload(workload, workload_file)
+    wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     candidates, reg = select(hw, spec, force=backend, workload=wl, report_reuse=report_reuse)
@@ -580,6 +618,11 @@ def recalibrate(
     objective: str = typer.Option("balanced", "--objective", callback=_objective),
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
+    sessions: bool = SESSIONS_OPT,
+    session_pool: Optional[int] = SESSION_POOL_OPT,
+    session_turns: Optional[int] = SESSION_TURNS_OPT,
+    history: Optional[str] = HISTORY_OPT,
+    session_system: Optional[Path] = SESSION_SYSTEM_OPT,
     backend: Optional[str] = typer.Option(None, "--backend"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
     ttft_percentile: int = TTFT_PCT_OPT,
@@ -607,7 +650,7 @@ def recalibrate(
     """Force a calibration rerun and overwrite the cached profile."""
     from rigtune.pipeline import resolve_profile
 
-    wl = _workload(workload, workload_file)
+    wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
     view = _search_view(objective, cons)
     profile = _calibrating(view, resolve_profile, ModelSpec(hf_id=model), objective, force_backend=backend, recalibrate=True,
@@ -628,6 +671,11 @@ def compare(
     objective: str = typer.Option("balanced", "--objective", callback=_objective),
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
+    sessions: bool = SESSIONS_OPT,
+    session_pool: Optional[int] = SESSION_POOL_OPT,
+    session_turns: Optional[int] = SESSION_TURNS_OPT,
+    history: Optional[str] = HISTORY_OPT,
+    session_system: Optional[Path] = SESSION_SYSTEM_OPT,
     eval_workload_file: Optional[Path] = typer.Option(
         None, "--eval-workload-file",
         help="Measure every row on these prompts instead (JSONL, as --workload-file). Calibration never sees them, "
@@ -668,9 +716,9 @@ def compare(
     from rigtune.hardware import probe as _probe
     from rigtune.pipeline import prepare_and_plan, resolve_profile, select
 
-    wl = _workload(workload, workload_file)
+    wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     # Held-out prompts are read before calibrating, so a bad file fails in seconds rather than after the search.
-    eval_wl = _workload(workload, eval_workload_file) if eval_workload_file else wl
+    eval_wl = _workload(workload, eval_workload_file, sessions, session_pool, session_turns, history, session_system) if eval_workload_file else wl
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
@@ -727,6 +775,11 @@ def predict(
     model: str,
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
+    sessions: bool = SESSIONS_OPT,
+    session_pool: Optional[int] = SESSION_POOL_OPT,
+    session_turns: Optional[int] = SESSION_TURNS_OPT,
+    history: Optional[str] = HISTORY_OPT,
+    session_system: Optional[Path] = SESSION_SYSTEM_OPT,
     backend: Optional[str] = typer.Option(None, "--backend"),
     top: int = typer.Option(20, "--top", help="Rows to show"),
 ) -> None:
@@ -735,7 +788,7 @@ def predict(
     from rigtune.pipeline import prepare_and_plan, select
     from rigtune.predict import Predictor
 
-    wl = _workload(workload, workload_file)
+    wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     candidates, reg = select(hw, spec, force=backend)
@@ -879,6 +932,11 @@ def serve(
     objective: str = typer.Option("balanced", "--objective", callback=_objective),
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
+    sessions: bool = SESSIONS_OPT,
+    session_pool: Optional[int] = SESSION_POOL_OPT,
+    session_turns: Optional[int] = SESSION_TURNS_OPT,
+    history: Optional[str] = HISTORY_OPT,
+    session_system: Optional[Path] = SESSION_SYSTEM_OPT,
     port: int = typer.Option(8000, "--port"),
     host: str = typer.Option("127.0.0.1", "--host", envvar=["RIGTUNE_HOST", "POLYSERVE_HOST"],
                              help="Address to listen on. The default is this machine only; 0.0.0.0 exposes the "
@@ -916,7 +974,7 @@ def serve(
     from rigtune.pipeline import resolve_profile
     from rigtune.serve import Supervisor, create_app
 
-    wl = _workload(workload, workload_file)
+    wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     spec = ModelSpec(hf_id=model)
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
     view = _search_view(objective, cons)

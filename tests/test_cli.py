@@ -44,6 +44,28 @@ def test_plan_command(hw_a100, monkeypatch):
     assert data["vllm"] and data["_errors"] == {}
 
 
+def test_session_options_need_a_session_file(tmp_path):
+    from rigtune.cli import _workload
+
+    flat = tmp_path / "flat.jsonl"
+    flat.write_text('{"prompt": "x"}\n', encoding="utf-8")
+    for argv in (["plan", "x/y", "--session-pool", "8"], ["plan", "x/y", "--sessions"],
+                 ["bench", "x/y", "--workload-file", str(flat), "--history", "recorded"],
+                 ["serve", "x/y", "--workload-file", str(flat), "--session-turns", "4"]):
+        r = runner.invoke(app, argv)
+        assert r.exit_code == 2, (argv, r.output)
+    chats = tmp_path / "chats.jsonl"
+    chats.write_text(json.dumps({"messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
+                                              {"role": "user", "content": "c"}]}) + "\n", encoding="utf-8")
+    assert not _workload("chat", chats).sessions  # no "session" key: flattened, as before
+    system = tmp_path / "system.txt"
+    system.write_text("Shared system prompt.\n", encoding="utf-8")
+    wl = _workload("chat", chats, sessions=True, session_pool=16, session_turns=4, history="recorded",
+                   session_system=system)
+    assert wl.sessions and wl.name.endswith("-sessions-t4-pool16-recorded")
+    assert wl.session_system == "Shared system prompt."
+
+
 def test_serve_listens_on_this_machine_only_by_default():
     """0.0.0.0 would put an unauthenticated inference endpoint on every network the host can reach."""
     import typer.main
