@@ -136,3 +136,43 @@ def test_qwen3_6_and_qwen3_8_share_the_layout():
     assert (dense.num_layers, dense.full_attention_layers, dense.linear_layers) == (64, 16, 48)
     # 48 value heads: conv (2*16*128 + 48*128) x 3 x 2 B + temporal 48 x 128 x 128 x 4 B per layer.
     assert dense.linear_state_bytes == 48 * ((2 * 16 * 128 + 48 * 128) * 3 * 2 + 48 * 128 * 128 * 4)
+
+
+HYBRID_ARCHS = ("Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration", "Qwen3_5ForCausalLM",
+                "Qwen3_5MoeForCausalLM", "Gemma4UnifiedForConditionalGeneration", "Gemma4ForConditionalGeneration",
+                "Gemma4ForCausalLM")
+
+
+def test_hybrid_architectures_are_known_without_the_engine_registry(hw_rtx4090, monkeypatch):
+    """SGLang usually runs from $SGLANG_PYTHON, so rigtune cannot import its registry and falls back to KNOWN_ARCHS;
+    before these entries both engines refused the 2026 hybrid models whenever that happened."""
+    import rigtune.backends.sglang as sg
+    import rigtune.backends.vllm as vl
+    from rigtune.models import ModelSpec
+
+    base = arch_from_config(load(QWEN35))
+    for name in HYBRID_ARCHS:
+        arch = base.model_copy(update={"architecture": name})
+        for mod in (vl, sg):
+            monkeypatch.setattr(mod, "load_arch", lambda spec, token=None, a=arch: a)
+        # Both registries are stubbed to "cannot be imported" (conftest).
+        assert vl.VllmBackend().supports(hw_rtx4090, ModelSpec(hf_id="x")), name
+        assert sg.SglangBackend().supports(hw_rtx4090, ModelSpec(hf_id="x")), name
+
+
+def test_a_readable_registry_still_decides(hw_rtx4090, monkeypatch):
+    import rigtune.backends.sglang as sg
+    import rigtune.backends.vllm as vl
+    from rigtune.models import ModelSpec
+
+    arch = arch_from_config(load(QWEN35))
+    for mod in (vl, sg):
+        monkeypatch.setattr(mod, "load_arch", lambda spec, token=None: arch)
+    monkeypatch.setattr(vl, "vllm_registry_archs", lambda: {"LlamaForCausalLM"})
+    monkeypatch.setattr(sg, "sglang_registry_archs", lambda: {"LlamaForCausalLM"})
+    assert not vl.VllmBackend().supports(hw_rtx4090, ModelSpec(hf_id="x"))
+    assert not sg.SglangBackend().supports(hw_rtx4090, ModelSpec(hf_id="x"))
+    monkeypatch.setattr(vl, "vllm_registry_archs", lambda: {arch.architecture})
+    monkeypatch.setattr(sg, "sglang_registry_archs", lambda: {arch.architecture})
+    assert vl.VllmBackend().supports(hw_rtx4090, ModelSpec(hf_id="x"))
+    assert sg.SglangBackend().supports(hw_rtx4090, ModelSpec(hf_id="x"))

@@ -42,6 +42,18 @@ KNOWN_ARCHS = {
     "OPTForCausalLM", "FalconForCausalLM", "DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM", "OlmoForCausalLM",
     "Olmo2ForCausalLM", "InternLM2ForCausalLM", "StableLmForCausalLM", "CohereForCausalLM", "GraniteForCausalLM",
     "Starcoder2ForCausalLM", "BloomForCausalLM", "MPTForCausalLM", "ExaoneForCausalLM", "SmolLM3ForCausalLM",
+    # 2026 hybrid-attention models, registered by both engines. vLLM 0.29.0 model_executor/models/registry.py:
+    # _TEXT_GENERATION_MODELS has Gemma4ForCausalLM (line 112), Qwen3_5ForCausalLM and Qwen3_5MoeForCausalLM
+    # (202-203); _MULTIMODAL_MODELS has Gemma4ForConditionalGeneration (401),
+    # Gemma4UnifiedForConditionalGeneration (402-404), Qwen3_5ForConditionalGeneration and
+    # Qwen3_5MoeForConditionalGeneration (575-578). SGLang 0.5.19 EntryClass: srt/models/qwen3_5.py:2690,
+    # qwen3_5_text.py:257, gemma4_unified.py:438, gemma4_mm.py:1135, gemma4_causal.py:1437.
+    # SglangBackend.supports falls back to this list too, which is the usual case for SGLang: it often runs from
+    # $SGLANG_PYTHON, and rigtune's own interpreter cannot import its registry. The list knows no versions, so
+    # an older engine there may be offered these models and fail at launch.
+    "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration", "Qwen3_5ForCausalLM",
+    "Qwen3_5MoeForCausalLM", "Gemma4UnifiedForConditionalGeneration", "Gemma4ForConditionalGeneration",
+    "Gemma4ForCausalLM",
 }
 
 # Paged-KV runtimes do not need KV for every (ctx x batch) token up front; they preempt when
