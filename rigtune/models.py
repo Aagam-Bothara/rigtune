@@ -194,6 +194,10 @@ class Config(BaseModel):
     prefix_cache: Optional[bool] = None  # None = the engine default (on for vLLM and SGLang)
     spec_decode: Optional[str] = None  # speculative decoding: "ngram|ngram_gpu|suffix:<k>" | "draft|eagle3:<hf_id>:<k>"
     tp: int = 1  # tensor-parallel degree across GPUs
+    # A KV-cache tier below the GPU pool (vLLM's offloading connector, SGLang's hierarchical cache):
+    # "host:<GiB>" of host RAM, or "host:<GiB>+disk:<GiB>" with a directory under rigtune's own cache dir
+    # behind it. None = GPU only, as in every profile before tiers. Only --kv-tier auto tries one.
+    kv_tier: Optional[str] = None
     extra: Dict[str, Any] = Field(default_factory=dict)
     # The memory fraction before a speculation setting lowered it to leave a second model room (SGLang under
     # --speculative all), so undoing or swapping the speculation restores it. Not part of the key: the launch is
@@ -221,6 +225,8 @@ class Config(BaseModel):
             parts.append(f"sd={self.spec_decode}")  # no brackets: rich reads [..] as console markup
         if self.tp > 1:
             parts.append(f"tp{self.tp}")
+        if self.kv_tier is not None:
+            parts.append("tier=" + self.kv_tier.replace(":", ""))  # host16, host16+disk40
         for k in sorted(self.extra):
             if k != "threads":
                 parts.append(f"{k}={self.extra[k]}")
@@ -236,6 +242,31 @@ class Config(BaseModel):
 
     def short(self) -> str:
         return self.key()
+
+    @property
+    def tier_gib(self) -> Tuple[int, int]:
+        """(host GiB, disk GiB) of the KV-cache tier; (0, 0) without one."""
+        return parse_kv_tier(self.kv_tier)
+
+
+def format_kv_tier(host_gib: int, disk_gib: int = 0) -> str:
+    """Config.kv_tier for `host_gib` GiB of host RAM, with `disk_gib` GiB of disk behind it if given."""
+    return f"host:{int(host_gib)}" + (f"+disk:{int(disk_gib)}" if disk_gib else "")
+
+
+def parse_kv_tier(tier: Optional[str]) -> Tuple[int, int]:
+    """(host GiB, disk GiB) from Config.kv_tier; (0, 0) for None. Raises ValueError for anything else."""
+    if tier is None:
+        return 0, 0
+    sizes = {"host": 0, "disk": 0}
+    for part in tier.split("+"):
+        kind, _, gib = part.partition(":")
+        if kind not in sizes or not gib.isdigit() or sizes[kind]:
+            raise ValueError(f"not a KV-cache tier: {tier!r} (expected host:<GiB> or host:<GiB>+disk:<GiB>)")
+        sizes[kind] = int(gib)
+    if sizes["host"] <= 0:
+        raise ValueError(f"not a KV-cache tier: {tier!r} (a tier starts with host RAM)")
+    return sizes["host"], sizes["disk"]
 
 
 class MemoryEstimate(BaseModel):

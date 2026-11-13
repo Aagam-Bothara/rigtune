@@ -136,6 +136,10 @@ def strategy_variants(pick: Config, backend: BaseBackend, hw: HardwareDescriptor
     else:
         for v in backend.spec_variants(pick, model):
             out.append(variant(f"+spec:{v.spec_decode}", "spec", v))
+
+    # A KV-cache tier: only a pick that has one is ablated (the GPU-only arm of the same schedule).
+    if pick.kv_tier is not None:
+        out.append(variant("-tier", "tier", pick.model_copy(update={"kv_tier": None})))
     return out
 
 

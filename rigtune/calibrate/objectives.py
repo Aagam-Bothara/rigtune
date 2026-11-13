@@ -200,11 +200,12 @@ def _strategies(r: TrialResult) -> int:
 
     Within the noise band the config with fewer of them wins, so a strategy is adopted only when
     it measurably helps. A quantized KV cache or speculative decoding that merely ties is complexity
-    (and, for the cache, a quality risk) with nothing to show for it.
+    (and, for the cache, a quality risk) with nothing to show for it. So is a KV-cache tier that ties: it
+    holds host RAM (and perhaps disk) the machine could use for something else.
     """
     c = r.config
     return sum((c.kv_dtype != "auto", c.spec_decode is not None, c.prefill_budget is not None,
-                bool({"cache_reuse", "kv_unified"} & set(c.extra))))
+                bool({"cache_reuse", "kv_unified"} & set(c.extra)), c.kv_tier is not None))
 
 
 def _joules(x: Ranked) -> float:

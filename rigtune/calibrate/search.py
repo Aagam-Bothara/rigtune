@@ -692,7 +692,8 @@ class StagedSearch:
             self._variant_log.append(("prefill", base, v))
 
     # Config fields a single-dimension stage may change (plus `extra`, compared key by key).
-    _DELTA_FIELDS = ("batch", "n_batch", "prefill_budget", "kv_dtype", "prefix_cache", "spec_decode")
+    _DELTA_FIELDS = ("batch", "n_batch", "prefill_budget", "kv_dtype", "prefix_cache", "spec_decode",
+                     "kv_tier")
     # Changed together with the speculation setting only: SGLang lowers the memory fraction to leave a second
     # model room, and a combination that carries the speculation over must carry the lower fraction with it.
     _SPEC_MEMORY_FIELDS = ("gpu_memory_utilization", "gmu_before_spec")
