@@ -114,9 +114,15 @@ def test_a_bad_eval_set_fails_before_anything_runs(tmp_path):
     bad.write_text('{"prompt": "fine", "answer": "1", "grader": "number"}\n{"prompt": "q", "answer": "1"}\n',
                    encoding="utf-8")
     r = runner.invoke(app, ["recalibrate", "x/y", "--eval-set", str(bad)])
-    assert r.exit_code == 2 and "line 2: no grader" in r.output
+    assert r.exit_code == 2 and "line 2: no grader" in _unboxed(r.output)
     r = runner.invoke(app, ["recalibrate", "x/y", "--eval-set", "gsm8k", "--max-accuracy-loss", "0"])
-    assert r.exit_code == 2 and "above 0 and below 100" in r.output
+    assert r.exit_code == 2 and "above 0 and below 100" in _unboxed(r.output)
+
+
+def _unboxed(output: str) -> str:
+    """An error as one line of text. Typer draws it in a box at the terminal's width (80 columns on CI), and a
+    message that carries a long temporary path wraps there, putting the box's borders in the middle of a phrase."""
+    return " ".join(output.translate({ord(c): " " for c in "│╭╮╰╯─"}).split())
 
 
 @pytest.mark.parametrize("command", ["bench", "recalibrate", "compare", "serve"])
