@@ -11,11 +11,11 @@ import sys
 from pathlib import Path
 from typing import FrozenSet, List, Optional, Tuple
 
-from rigtune import speculative
+from rigtune import kvtier, speculative
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from rigtune.backends.vllm import KNOWN_ARCHS, PAGED_KV_FRACTION
 from rigtune.hfconfig import dtype_bytes, load_arch
-from rigtune.memory import MIN_SAFETY_MARGIN, HybridKV, MemoryModel, estimate
+from rigtune.memory import HOST_TIER_RESERVE, MIN_SAFETY_MARGIN, HybridKV, MemoryModel, estimate
 from rigtune.models import ArchInfo, Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
 from rigtune.hardware import nvlink_between, sglang_python
 from rigtune.quantized import INT4_METHODS, hf_weight_options
@@ -212,6 +212,74 @@ def _cache_report_flag() -> bool:
     return bool(pkg) and "enable_cache_report" in _server_args_source(pkg)
 
 
+# SGLang's hierarchical cache (HiCache), read in 0.5.19 and not yet run on hardware:
+#   "hicache":  --enable-hierarchical-cache and --hicache-size (srt/server_args.py): a host pool of that many
+#               decimal GB per rank (mem_cache/pool_host/base.py HostKVCache: host_size * 1e9 //
+#               size_per_token), pinned, split between a hybrid model's pools by their bytes
+#               (hybrid_cache/hybrid_pool_assembler.py _split_hicache_size). A pool smaller than the device
+#               pool only warns there.
+#   "file":     --hicache-storage-backend file, whose directory comes from
+#               SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR (srt/environ.py; mem_cache/hicache_storage.HiCacheFile
+#               writes /tmp/hicache without it, so without the variable no disk tier is offered).
+#   "file_cap": SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE bounds that directory
+#               (mem_cache/storage/file/lru_file_evictor.LRUFileEvictor, which evicts least recently used
+#               files past it; unbounded by default). A disk tier is offered only with it, always set.
+# HiCache refuses --disable-radix-cache (arg_groups/kv_cache_hook.py), and checks host RAM itself: it raises
+# unless psutil's available RAM less HICACHE_HOST_MEMORY_RESERVE_BYTES covers the pool (pool_host/base.py).
+SGLANG_HOST_RESERVE = 10 * GiB  # mem_cache/pool_host/base.py HICACHE_HOST_MEMORY_RESERVE_BYTES
+FILE_DIR_VAR = "SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR"
+FILE_CAP_VAR = "SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE"
+
+
+def hicache_features_in(args_source: str, environ_source: str) -> FrozenSet[str]:
+    """The HiCache features ("hicache", "file", "file_cap") SGLang source text shows: its argument parser's,
+    and srt/environ.py's."""
+    out = set()
+    if "enable_hierarchical_cache" in args_source and "hicache_size" in args_source:
+        out.add("hicache")
+        if "hicache_storage_backend" in args_source and FILE_DIR_VAR in environ_source:
+            out.add("file")
+            if FILE_CAP_VAR in environ_source:
+                out.add("file_cap")
+    return frozenset(out)
+
+
+def _package_text(pkg: Path, *parts: str) -> str:
+    try:
+        return pkg.joinpath(*parts).read_text("utf-8")
+    except OSError:
+        return ""
+
+
+@functools.lru_cache(maxsize=1)
+def _hicache_features() -> FrozenSet[str]:
+    """hicache_features_in for the SGLang that would be launched; empty when it cannot be found."""
+    python = sglang_python()
+    pkg = _sglang_package_dir(python) if python else None
+    if not pkg:
+        return frozenset()
+    return hicache_features_in(_server_args_source(pkg), _package_text(pkg, "srt", "environ.py"))
+
+
+def sglang_tier_launch(cfg: Config, port: int) -> Tuple[List[str], dict]:
+    """Arguments and environment for cfg.kv_tier: a host pool of the tier's GiB in SGLang's decimal GB
+    (rounded down), and for "+disk" the file backend in this engine's own directory (kvtier.trial_dir), always
+    capped at the disk tier's size, which the planner checked against the free disk. Port 0 (a profile's
+    recorded launch) writes kvtier.DIR_PLACEHOLDER for the directory; serving fills in its own. A disk tier
+    that would land on a network filesystem is refused, never launched as host-only."""
+    host_gib, disk_gib = cfg.tier_gib
+    args = ["--enable-hierarchical-cache", "--hicache-size", str(int(host_gib * GiB // 10**9))]
+    env = {}
+    if disk_gib:
+        reason = kvtier.refusal()
+        if reason:
+            raise ValueError(f"{cfg.kv_tier}: {reason}")
+        args += ["--hicache-storage-backend", "file"]
+        env[FILE_DIR_VAR] = str(kvtier.trial_dir(port)) if port else kvtier.DIR_PLACEHOLDER
+        env[FILE_CAP_VAR] = str(disk_gib * GiB)
+    return args, env
+
+
 class SglangBackend(BaseBackend):
     name = "sglang"
     runtime_workspace_bytes = int(2.0 * GiB)  # CUDA graphs for many batch sizes + radix cache metadata
@@ -359,7 +427,42 @@ class SglangBackend(BaseBackend):
         # SGLang's own counter, sglang:cached_tokens_total, needs --enable-metrics too, so only the per-reply count.
         if self.report_reuse and _cache_report_flag():
             args += ["--enable-cache-report"]
+        if cfg.kv_tier is not None:
+            tier_args, tier_env = sglang_tier_launch(cfg, port)
+            args += tier_args
+            env.update(tier_env)
         return LaunchSpec(args=args, env=env)
+
+    # ---- KV-cache tier
+
+    def tier_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
+        if "hicache" not in _hicache_features():
+            return ("the SGLang that would run has no --enable-hierarchical-cache with --hicache-size (read "
+                    "from its source)")
+        if cfg.prefix_cache is False:
+            return "SGLang's hierarchical cache refuses --disable-radix-cache"
+        if cfg.tp > 1:
+            return "not offered with tensor parallelism (--hicache-size is per rank; never run)"
+        return None
+
+    def tier_disk_refusal(self) -> Optional[str]:
+        features = _hicache_features()
+        if "file" not in features:
+            return "the SGLang that would run has no file backend with a directory rigtune can set"
+        if "file_cap" not in features:
+            return "the SGLang that would run cannot cap its file backend's size; not offered"
+        return None
+
+    def tier_host_reserve(self) -> int:
+        return max(HOST_TIER_RESERVE, SGLANG_HOST_RESERVE)
+
+    def tier_host_need(self, cfg: Config, host_bytes: int) -> int:
+        """With an EAGLE3 head or a draft model SGLang adds a host pool for the second model's cache, as many
+        tokens as the target's (hybrid_cache/hybrid_pool_assembler.build_full_draft_pools, outside
+        --hicache-size). Its size per token is the second model's, which the planner does not know, so it is
+        counted as the target's."""
+        kind = speculative.parse(cfg.spec_decode)[0] if cfg.spec_decode else None
+        return 2 * host_bytes if kind in ("eagle3", "draft") else host_bytes
 
     # A start-up out-of-memory failure with a second model steps down from the lowered fraction, this far at most
     # (the search's own floor, 0.85, sits above it on a 24 GB card).
