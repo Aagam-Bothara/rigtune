@@ -16,14 +16,16 @@ import queue
 import statistics
 import threading
 import time
-from dataclasses import dataclass, replace
+from collections import Counter
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import httpx
 
 from rigtune.backends.base import LlmtraceHooks
+from rigtune.calibrate.datasets import CHARS_PER_TOKEN, Session, Step
 from rigtune.calibrate.tokens import TokenCounter, worst_source
-from rigtune.calibrate.workload import Workload
+from rigtune.calibrate.workload import TURN_OVERHEAD, Workload
 from rigtune.models import TrialMetrics
 
 logger = logging.getLogger(__name__)
@@ -261,6 +263,21 @@ class RequestOutcome:
     tokens: int = 0
     token_source: str = "none"  # "usage" | "tokenizer" | "chunks"
     error: Optional[str] = None
+    prompt_tokens: Optional[int] = None  # the engine's usage.prompt_tokens, when it reports one
+    # Session replay only (_SessionScheduler): which step of which session this was, when it was dispatched, and
+    # what it shared with what the engine had already seen.
+    session: Optional[str] = None
+    turn: int = 0
+    seq: int = -1  # dispatch order within the level
+    distance: Optional[int] = None  # requests dispatched between this session's previous step and this one
+    idle_gap: Optional[int] = None  # of those, the ones dispatched after its previous step had finished
+    working_set: int = 0  # tokens the live sessions' last prompts and answers held when it was dispatched
+    tag: str = ""  # Step.tag
+    live: int = 0  # sessions live when it was dispatched
+    request_chars: int = 0  # length of the request's messages, rendered for comparison
+    reusable_chars: int = 0  # how much of that is a prefix of what the engine saw before (see _SessionScheduler)
+    text: str = ""  # the answer, while the scheduler needs it for the next step's history
+    skipped: Optional[str] = None  # not a request: "cut" (the next prompt would not fit) or "truncated" (budget spent)
 
 
 def _parse_sse_line(line: str) -> Optional[Dict[str, Any]]:
@@ -276,13 +293,15 @@ def _parse_sse_line(line: str) -> Optional[Dict[str, Any]]:
 
 
 async def _one_request(
-    client: httpx.AsyncClient, url: str, body: Dict[str, Any], timeout: float, counter: TokenCounter
+    client: httpx.AsyncClient, url: str, body: Dict[str, Any], timeout: float, counter: TokenCounter,
+    keep_text: bool = False,
 ) -> RequestOutcome:
     t0 = time.perf_counter()
     first: Optional[float] = None
     chunks = 0
     pieces: List[str] = []
     usage_tokens: Optional[int] = None
+    prompt_tokens: Optional[int] = None
     try:
         async with client.stream("POST", url, json=body, timeout=timeout) as resp:
             if resp.status_code != 200:
@@ -306,6 +325,8 @@ async def _one_request(
                 usage = obj.get("usage")
                 if isinstance(usage, dict) and usage.get("completion_tokens"):
                     usage_tokens = int(usage["completion_tokens"])
+                if isinstance(usage, dict) and isinstance(usage.get("prompt_tokens"), int):
+                    prompt_tokens = usage["prompt_tokens"]
     except (httpx.HTTPError, asyncio.TimeoutError) as exc:
         return RequestOutcome(ok=False, error=f"{type(exc).__name__}: {exc}")
     end = time.perf_counter()
@@ -320,7 +341,8 @@ async def _one_request(
             tokens, source = counted, "tokenizer"
         else:
             tokens, source = chunks, "chunks"
-    return RequestOutcome(ok=True, ttft_s=first - t0, duration_s=end - t0, tokens=tokens, token_source=source)
+    return RequestOutcome(ok=True, ttft_s=first - t0, duration_s=end - t0, tokens=tokens, token_source=source,
+                          prompt_tokens=prompt_tokens, text="".join(pieces) if keep_text else "")
 
 
 async def _drive(
@@ -332,6 +354,8 @@ async def _drive(
     counter: Optional[TokenCounter] = None,
 ) -> List[RequestOutcome]:
     counter = counter or TokenCounter()
+    if workload.sessions:
+        return await _drive_sessions(base_url, hooks, workload, concurrency, timeout, counter)
     sem = asyncio.Semaphore(concurrency)
     url = base_url.rstrip("/") + hooks.completions_path
     results: List[RequestOutcome] = []
@@ -357,7 +381,251 @@ async def _drive(
     return results
 
 
+Messages = List[Dict[str, str]]
+
+
+def _render(messages: Messages) -> str:
+    """Messages as one string, so the prefix two requests share can be measured without a chat template."""
+    return "".join(f"\x00{m['role']}\x01{m['content']}" for m in messages)
+
+
+def _common_prefix(a: str, b: str) -> int:
+    n = min(len(a), len(b))
+    i = 0
+    while i < n and a[i] == b[i]:
+        i += 1
+    return i
+
+
+def _count(text: str, counter: TokenCounter) -> int:
+    return counter.count(text) or len(text) // CHARS_PER_TOKEN + 1
+
+
+@dataclass
+class _LiveSession:
+    """A session being replayed: the conversation so far, and what the engine said it counted for the last step."""
+
+    session: Session
+    step: int = 0  # the next step to send
+    history: Messages = field(default_factory=list)  # the conversation so far, without the system prompt
+    seen: str = ""  # the last request and the engine's answer to it, rendered: what its cache can hold
+    last_prompt_tokens: Optional[int] = None
+    carried_tokens: int = 0  # tokens of the answer the next step carries
+    last_seq: Optional[int] = None
+    done_at: Optional[int] = None  # requests dispatched in the level when its last step finished
+    footprint: int = 0  # its last prompt and answer, in tokens: what it holds in the cache while live
+
+    @property
+    def chained(self) -> bool:
+        """Whether the step just finished asked for the next to follow at once (Step.chain)."""
+        return self.step > 0 and self.session.steps[self.step - 1].chain
+
+    def request(self) -> Messages:
+        """The next step's messages: the conversation so far plus its user turn, or an explicit step's own."""
+        step = self.session.steps[self.step]
+        if step.explicit:
+            return [{"role": r, "content": c} for r, c in step.messages]
+        system = [{"role": "system", "content": self.session.system}] if self.session.system else []
+        return system + self.history + [{"role": "user", "content": step.user}]
+
+    def next_prompt_tokens(self, messages: Messages, counter: TokenCounter) -> int:
+        """How long the next prompt will be: what the engine counted last step, plus the answer it carries and the
+        new user turn; or, before the engine has reported anything (or for an explicit step), every message."""
+        step = self.session.steps[self.step]
+        if self.last_prompt_tokens is not None and not step.explicit:
+            return self.last_prompt_tokens + self.carried_tokens + _count(step.user, counter) + 2 * TURN_OVERHEAD
+        return sum(_count(m["content"], counter) for m in messages) + TURN_OVERHEAD * len(messages)
+
+    def advance(self, sent: Messages, out: "RequestOutcome", history: str, counter: TokenCounter) -> None:
+        """Take in the answer to the step just sent. With recorded history the next step carries the file's answer;
+        the engine still saw its own, so that is what `seen` keeps."""
+        step = self.session.steps[self.step]
+        recorded = step.answer if history == "recorded" and step.answer is not None else None
+        carried = recorded if recorded is not None else out.text
+        convo = sent[1:] if sent and sent[0]["role"] == "system" and not step.explicit and self.session.system \
+            else list(sent)
+        self.history = convo + [{"role": "assistant", "content": carried}]
+        self.seen = _render(sent + [{"role": "assistant", "content": out.text}])
+        self.last_prompt_tokens = out.prompt_tokens
+        self.carried_tokens = _count(recorded, counter) if recorded is not None else out.tokens
+        self.last_seq = out.seq
+        self.step += 1
+
+
+class _SessionScheduler:
+    """Which session step goes next in a level of session replay. No I/O and no clock, so it is tested on its own.
+
+    `pool` (P, at least the concurrency) sessions are live at once and take turns in a queue: a session whose step
+    finishes goes to the back. In steady state P - 1 other requests are dispatched between two of its steps (its
+    reuse distance), of which about P - c start while it sits idle, its previous step done (its idle gap); both are
+    recorded per request. With P = c a session's next step follows its last at once, which keeps its cache entries
+    the most recently used and can never show eviction. A session never has two steps in flight. A step marked
+    `chain` (an agent's tool-call follow-up) puts its successor at the front of the queue instead.
+
+    A level is a budget of steps, not of sessions: new sessions are admitted as others end for as long as the
+    budget lasts, so the caller can keep its concurrency full until the budget is spent (a level that instead ran
+    a fixed set of sessions to completion thinned out as its last sessions ended: in simulation it averaged 0.75 c
+    at c = 8). Once the budget is spent no new step is issued, except to finish an open chain; sessions with steps
+    left are counted truncated. The budget should give a pool's sessions several steps each (turn_budget).
+
+    A step whose prompt `fits` rejects stops its session and is recorded as cut rather than sent to fail; a failed
+    step ends its session too, since the next one would carry no answer to it. `shared_system`, a system prompt
+    several sessions share (and the warm-up sent), is what a session's first step can reuse."""
+
+    def __init__(self, sessions: List[Session], concurrency: int, pool: int, budget: int,
+                 fits: Callable[[_LiveSession, Messages], bool], history: str = "generated",
+                 counter: Optional[TokenCounter] = None, shared_system: str = ""):
+        self.waiting = list(reversed(sessions))  # pop() from the end, in the order the sessions were drawn
+        self.pool = max(concurrency, pool or 0)
+        self.budget = budget
+        self.fits = fits
+        self.history = history
+        self.counter = counter or TokenCounter()
+        self.shared = _render([{"role": "system", "content": shared_system}]) if shared_system else ""
+        self.ready: List[_LiveSession] = []  # a FIFO; small, so list.pop(0) is fine
+        self.live = 0
+        self.in_flight = 0
+        self.dispatched = 0
+        self.working_set = 0  # tokens the live sessions' last prompts and answers make up
+        self.skipped: List[RequestOutcome] = []
+        self._admit()
+
+    def _admit(self) -> None:
+        while self.waiting and self.live < self.pool and self.dispatched < self.budget:
+            self.ready.append(_LiveSession(self.waiting.pop()))
+            self.live += 1
+
+    def _retire(self, state: _LiveSession) -> None:
+        self.live -= 1
+        self.working_set -= state.footprint
+        self._admit()
+
+    def next(self) -> Optional[Tuple[_LiveSession, Messages, RequestOutcome]]:
+        """The next step to dispatch, with its messages and its outcome's bookkeeping filled in; None when no
+        session is ready (all live ones are in flight) or the budget is spent and no chain is open."""
+        while self.ready and (self.dispatched < self.budget or self.ready[0].chained):
+            state = self.ready.pop(0)
+            messages = state.request()
+            if not self.fits(state, messages):
+                self.skipped.append(RequestOutcome(ok=False, skipped="cut", session=state.session.id,
+                                                   turn=state.step + 1, tag=state.session.steps[state.step].tag,
+                                                   error="session stopped: its next prompt would not fit"))
+                self._retire(state)
+                continue
+            rendered = _render(messages)
+            reusable = _common_prefix(state.seen, rendered) if state.seen else (
+                len(self.shared) if self.shared and rendered.startswith(self.shared) else 0)
+            meta = RequestOutcome(ok=False, session=state.session.id, turn=state.step + 1, seq=self.dispatched,
+                                  distance=None if state.last_seq is None else self.dispatched - state.last_seq - 1,
+                                  idle_gap=None if state.done_at is None else self.dispatched - state.done_at,
+                                  live=self.live, request_chars=len(rendered), reusable_chars=reusable,
+                                  working_set=self.working_set, tag=state.session.steps[state.step].tag)
+            self.dispatched += 1
+            self.in_flight += 1
+            return state, messages, meta
+
+        return None
+
+    def done(self, state: _LiveSession, messages: Messages, out: RequestOutcome) -> None:
+        """A dispatched step finished: queue the session's next step (at the front when the step chains to it, even
+        past the budget), or end the session."""
+        self.in_flight -= 1
+        if not out.ok or state.step + 1 >= state.session.turns:
+            self._retire(state)
+            return
+        state.advance(messages, out, self.history, self.counter)
+        footprint = (out.prompt_tokens or 0) + out.tokens
+        self.working_set += footprint - state.footprint
+        state.footprint, state.done_at = footprint, self.dispatched
+        if state.chained:
+            self.ready.insert(0, state)
+        elif self.dispatched < self.budget:
+            self.ready.append(state)
+        else:
+            self._truncate(state)
+
+    def _truncate(self, state: _LiveSession) -> None:
+        self.skipped.append(RequestOutcome(ok=False, skipped="truncated", session=state.session.id,
+                                           turn=state.step + 1, error="turn budget spent"))
+        self._retire(state)
+
+    def close(self) -> List[RequestOutcome]:
+        """Markers for every session stopped early, once nothing is in flight."""
+        while self.ready:
+            self._truncate(self.ready.pop(0))
+        return self.skipped
+
+
+def _shared_system(workload: Workload) -> str:
+    """The system prompt sessions share: the override, or one that more than one session uses."""
+    if workload.session_system:
+        return workload.session_system
+    counts = Counter(s.system for s in workload.session_list if s.system)
+    return next((text for text, n in counts.most_common(1) if n > 1), "")
+
+
+BodyHook = Callable[[Dict[str, Any], "_LiveSession", Messages], None]
+
+
+async def _drive_sessions(base_url: str, hooks: LlmtraceHooks, workload: Workload, concurrency: int,
+                          timeout: float, counter: TokenCounter,
+                          body_hook: Optional[BodyHook] = None) -> List[RequestOutcome]:
+    """Replay a level of a session file through the chat endpoint, `concurrency` steps in flight (_SessionScheduler
+    decides which). A step's messages are the conversation so far, so the prefix the engine can reuse is exactly
+    what it rendered before. Returns one outcome per step sent, then markers for sessions cut or truncated.
+    `body_hook(body, state, messages)` may add fields to each request (an engine's cache-detail switch, say)."""
+    url = base_url.rstrip("/") + hooks.chat_path
+
+    def fits(state: _LiveSession, messages: Messages) -> bool:
+        return state.next_prompt_tokens(messages, counter) <= workload.prefill_tokens
+
+    sched = _SessionScheduler(workload.session_list, concurrency, workload.session_pool,
+                              workload.turn_budget(concurrency), fits, workload.history, counter,
+                              _shared_system(workload))
+    results: List[RequestOutcome] = []
+
+    async with httpx.AsyncClient() as client:
+
+        async def send(state: _LiveSession, messages: Messages) -> RequestOutcome:
+            step = state.session.steps[state.step]
+            body: Dict[str, Any] = {
+                "model": hooks.model_name or "model",
+                "messages": messages,
+                "max_tokens": step.max_tokens or workload.decode_tokens,
+                "temperature": workload.temperature,
+                "stream": True,
+                "ignore_eos": not workload.natural_stop,
+            }
+            if hooks.stream_usage:
+                body["stream_options"] = {"include_usage": True}
+            if body_hook is not None:
+                body_hook(body, state, messages)
+            return await _one_request(client, url, body, timeout, counter, keep_text=True)
+
+        pending: Dict[asyncio.Future, Tuple[_LiveSession, Messages, RequestOutcome]] = {}
+        while True:
+            while len(pending) < concurrency:
+                item = sched.next()
+                if item is None:
+                    break
+                pending[asyncio.ensure_future(send(item[0], item[1]))] = item
+            if not pending:
+                break
+            finished, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for fut in sorted(finished, key=lambda f: pending[f][2].seq):
+                state, messages, meta = pending.pop(fut)
+                out = fut.result()
+                for name in ("session", "turn", "seq", "distance", "idle_gap", "live", "request_chars",
+                             "reusable_chars", "working_set", "tag"):
+                    setattr(out, name, getattr(meta, name))
+                sched.done(state, messages, out)
+                out.text = ""  # the history keeps the answer; the outcome need not
+                results.append(out)
+    return results + sched.close()
+
+
 def _metrics_from(outcomes: List[RequestOutcome], wall_s: float, concurrency: int) -> TrialMetrics:
+    outcomes = [o for o in outcomes if o.skipped is None]  # a session stopped early sent nothing for its rest
     ok = [o for o in outcomes if o.ok]
     m = TrialMetrics(
         requests=len(outcomes),
@@ -399,6 +667,21 @@ def _level_workload(workload: Workload, k: int, counter: TokenCounter) -> Worklo
     return level
 
 
+def _session_warmup(workload: Workload, synthetic: Workload) -> Workload:
+    """The warm-up for a session file: the synthetic prompts, each as a one-step session through the chat endpoint.
+
+    They carry the system prompt sessions share, so it is cached as it would be in production, and nothing of any
+    session: warming a session's own turns would flatter the level that replays it. A system prompt only one
+    session uses is not shared, so it is left out too."""
+    system = _shared_system(workload)
+    users = [p[:max(64, min(512, workload.prefill_tokens) * CHARS_PER_TOKEN)] for p in synthetic.prompts]
+    warm = [Session(id=f"warmup{i}", system=system, steps=(Step(user=u),)) for i, u in enumerate(users)]
+    top = max(synthetic.concurrencies)
+    return replace(workload, session_list=warm, prompts=[s.first_turn for s in warm], n_prompts=len(warm),
+                   decode_tokens=synthetic.decode_tokens, concurrencies=synthetic.concurrencies, session_pool=0,
+                   turns_per_slot=max(1, -(-len(warm) // top)), fitted=True)
+
+
 def _client_main(index: int, base_url: str, hooks: LlmtraceHooks, workload: Workload, concurrency: int,
                  timeout: float, ready: Any, go: Any, out: Any) -> None:
     """One load-generator process (see _drive_clients). Module level so it pickles under spawn."""
@@ -417,13 +700,14 @@ def _drive_clients(base_url: str, hooks: LlmtraceHooks, workload: Workload, conc
     """
     import multiprocessing as mp
 
-    shards = [s for s in (workload.prompts[i::clients] for i in range(clients)) if s]
+    units = workload.session_list if workload.sessions else workload.prompts  # a session is never split
+    shards = [s for s in (units[i::clients] for i in range(clients)) if s]
     per = max(1, -(-concurrency // len(shards)))
     ctx = mp.get_context("spawn")
     ready, out, go = ctx.Queue(), ctx.Queue(), ctx.Event()
     procs = [ctx.Process(target=_client_main, daemon=True,
-                         args=(i, base_url, hooks, replace(workload, prompts=s, n_prompts=len(s), fitted=True),
-                               per, timeout, ready, go, out))
+                         args=(i, base_url, hooks, _shard(workload, s, len(shards), concurrency), per, timeout,
+                               ready, go, out))
              for i, s in enumerate(shards)]
     for p in procs:
         p.start()
@@ -450,8 +734,22 @@ def _drive_clients(base_url: str, hooks: LlmtraceHooks, workload: Workload, conc
         p.join(timeout=10)
     merged: List[RequestOutcome] = []
     for i, s in enumerate(shards):
-        merged += results.get(i) or [RequestOutcome(ok=False, error="load-generator process died")] * len(s)
+        died = RequestOutcome(ok=False, error="load-generator process died")
+        shard_budget = _shard(workload, s, len(shards), concurrency).level_turns if workload.sessions else 0
+        merged += results.get(i) or [died] * (len(s) if not workload.sessions else
+                                              min(sum(x.turns for x in s), shard_budget))
     return merged, wall
+
+
+def _shard(workload: Workload, units: list, shards: int, concurrency: int = 1) -> Workload:
+    """One load-generator process's part of a level: some of its prompts, or some of its whole sessions with its
+    share of the pool and of the level's turn budget. The share is of the level's total, floor included: each process
+    applying the floor of 8 to its own share would inflate a small level several times over."""
+    if not workload.sessions:
+        return replace(workload, prompts=units, n_prompts=len(units), fitted=True)
+    return replace(workload, session_list=units, prompts=[s.first_turn for s in units], n_prompts=len(units),
+                   fitted=True, session_pool=-(-workload.session_pool // shards) if workload.session_pool else 0,
+                   level_turns=-(-workload.turn_budget(concurrency) // shards))
 
 
 def run_trial(
@@ -503,6 +801,8 @@ def run_trial(
             # Same shared prefix as the real prompts, so the warmup leaves it cached as production would.
             shared_prefix_tokens=workload.shared_prefix_tokens, prefix_text=workload.prefix_text, prefix_fixed=True,
         )
+        if workload.sessions:
+            small = _session_warmup(workload, small)
         try:
             asyncio.run(_drive(base_url, hooks, small, top, request_timeout, counter))
         except Exception as exc:

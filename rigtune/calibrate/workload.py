@@ -108,6 +108,7 @@ class Workload:
     history: str = "generated"  # what a later turn carries as the earlier answers: "generated" | "recorded"
     session_pool: int = 0  # sessions live at once per level (0: one per concurrency slot)
     turns_per_slot: int = TURNS_PER_SLOT
+    level_turns: int = 0  # a fixed turn budget in place of turn_budget's: one load-generator process's share
     session_system: str = ""  # every session's system prompt in place of its own, when given
     session_list: List[Session] = field(default_factory=list)
 
@@ -135,7 +136,7 @@ class Workload:
 
     def turn_budget(self, concurrency: int) -> int:
         """Turns a level of a session file sends: it stops issuing new ones once they are spent (see turn_budget)."""
-        return turn_budget(concurrency, self.turns_per_slot, self.session_pool)
+        return self.level_turns or turn_budget(concurrency, self.turns_per_slot, self.session_pool)
 
     def ensure_prompts(self) -> "Workload":
         """Generate or download the prompts if they are not there yet."""

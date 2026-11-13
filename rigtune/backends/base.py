@@ -26,6 +26,9 @@ class LlmtraceHooks:
     """How the calibration driver should talk to (and measure) this backend."""
 
     completions_path: str = "/v1/completions"
+    # Session files are replayed as messages, so the engine applies its own chat template and turn n+1 starts with
+    # exactly the bytes it rendered for turn n.
+    chat_path: str = "/v1/chat/completions"
     health_path: str = "/health"
     models_path: str = "/v1/models"
     stream_usage: bool = True  # backend reports usage in the final stream chunk when asked
