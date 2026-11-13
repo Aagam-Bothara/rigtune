@@ -112,3 +112,23 @@ def test_with_a_budget_an_engine_behind_after_stage_one_gets_the_variations_too(
     assert winner.config.backend == "vllm" and winner.config.spec_decode == "ngram:4"
     assert [s for s, _ in runner.ran] == ["quant", "quant", "kv", "kv", "spec"]
     assert sum("came within" in n for n in notes) == 1  # asked after stage 1 and again after the batch stage
+
+
+def test_what_a_trailing_engine_offers_is_judged_against_the_leaders_engine_not_its_tuned_config():
+    """With a budget the leader takes the fp8 cache before the batch stage. Judged against that tuned config,
+    SGLang seemed to offer a quantized cache vLLM lacked, so it was tuned, and was then dropped for offering
+    nothing vLLM lacks: the notes said both."""
+    clock = {"now": 0.0}
+
+    class ClockRunner(ScoredRunner):
+        def run(self, cfg, stage):
+            clock["now"] += 60.0
+            return super().run(cfg, stage)
+
+    runner = ClockRunner(lambda c: {"vllm": 500.0, "sglang": 400.0}[c.backend] * (1.1 if c.kv_dtype == "fp8" else 1.0))
+    search = StagedSearch(objective="throughput", runner=runner, budget_s=6000, clock=lambda: clock["now"],
+                          variant_stages=[("kv", kv)])
+    winner, notes = search.run([VLLM, SGLANG])
+    assert winner.config.backend == "vllm" and winner.config.kv_dtype == "fp8"
+    assert not any("offers a quantized KV cache, which vllm does not" in n for n in notes)
+    assert [s for s, c in runner.ran if c.backend == "sglang"] == ["quant"]

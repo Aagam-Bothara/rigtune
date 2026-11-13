@@ -818,6 +818,11 @@ class StagedSearch:
         lead = ranked[0]
         lb = lead.result.config.backend
         out, seen = [lead.result.config], {lb}
+        # What an engine can do, as in _outpaced: the leader's first configuration stands for its engine. Its tuned
+        # configuration has already adopted a KV cache or a speculation setting, so judged against that, another
+        # engine seemed to offer what the leader's engine lacks, was tuned, and was then dropped by _outpaced for
+        # offering nothing it lacks; the notes said both.
+        lead_base = next(r.config for r in self.results if r.config.backend == lb)
         for x in ranked[1:]:
             backend = x.result.config.backend
             if backend in seen:
@@ -826,7 +831,7 @@ class StagedSearch:
             if self.contender_band <= 0 or not (lead.feasible and x.feasible):
                 continue
             close = x.score - lead.score <= self.contender_band * abs(lead.score)
-            extra = None if close else self._offers_more(x.result.config, lead.result.config)
+            extra = None if close else self._offers_more(x.result.config, lead_base)
             if close or extra:
                 out.append(x.result.config)
                 if backend not in self._noted_contenders:  # a budgeted run asks twice; say it once
