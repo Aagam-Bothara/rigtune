@@ -5,15 +5,17 @@ from __future__ import annotations
 import functools
 import importlib.util
 import logging
+import math
 import subprocess
 import sys
 from pathlib import Path
 from typing import FrozenSet, List, Optional, Tuple
 
+from rigtune import speculative
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from rigtune.backends.vllm import KNOWN_ARCHS, PAGED_KV_FRACTION
 from rigtune.hfconfig import dtype_bytes, load_arch
-from rigtune.memory import MemoryModel
+from rigtune.memory import MIN_SAFETY_MARGIN, MemoryModel, estimate
 from rigtune.models import Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
 from rigtune.hardware import nvlink_between, sglang_python
 from rigtune.quantized import INT4_METHODS, hf_weight_options
@@ -132,6 +134,40 @@ class SglangBackend(BaseBackend):
         return PreparedModel(spec=model, backend=self.name, arch=arch, hf_path=model.hf_id, hf_paths=paths,
                              weights_bytes=weights)
 
+    def find_second_models(self, prepared: PreparedModel) -> List[str]:
+        """Under --speculative all: record the EAGLE3 head and the draft model this SGLang could load, with their
+        sizes, since the memory left outside the reservation depends on them (spec_fraction). One whose size is
+        unknown is not offered. Returns notes for the profile when the Hub could not be asked."""
+        methods = sglang_spec_methods()
+        notes: List[str] = []
+        if "eagle3" in methods:
+            try:
+                found = speculative.find_eagle3_head(prepared.spec, prepared.arch)
+            except Exception as exc:
+                found = None
+                notes.append(f"sglang: no EAGLE3 head tried, the Hub could not be asked ({exc})")
+            if found and found[1]:
+                prepared.spec_repos["eagle3"] = found[0]
+                prepared.spec_bytes[found[0]] = int(found[1])
+            elif found:
+                notes.append(f"sglang: EAGLE3 head {found[0]} not tried, its size could not be read")
+        draft = speculative.draft_for(prepared.spec.hf_id)
+        if "draft" in methods and draft:
+            try:
+                size = speculative.repo_bytes(draft)
+            except Exception as exc:
+                size = None
+                notes.append(f"sglang: draft model {draft} not tried, the Hub could not be asked ({exc})")
+            else:
+                if not size:
+                    notes.append(f"sglang: draft model {draft} not tried, its size could not be read")
+            if size:
+                prepared.spec_repos["draft"] = draft
+                prepared.spec_bytes[draft] = int(size)
+        for n in notes:
+            logger.warning(n)
+        return notes
+
     supports_tp = True
 
     def kv_dtypes(self, hw: HardwareDescriptor) -> List[str]:
@@ -189,6 +225,8 @@ class SglangBackend(BaseBackend):
             args += ["--kv-cache-dtype", cfg.kv_dtype]
         if cfg.prefix_cache is False:
             args += ["--disable-radix-cache"]
+        if cfg.spec_decode:
+            args += speculative.sglang_config(cfg.spec_decode)
         if cfg.tp > 1:
             args += ["--tp-size", str(cfg.tp)]
         if model.spec.revision and cfg.quant not in INT4_METHODS:
@@ -202,6 +240,69 @@ class SglangBackend(BaseBackend):
             env["NCCL_P2P_DISABLE"] = "1"
             args += ["--disable-custom-all-reduce"]
         return LaunchSpec(args=args, env=env)
+
+    # A start-up out-of-memory failure with a second model steps down from the lowered fraction, this far at most
+    # (the search's own floor, 0.85, sits above it on a 24 GB card).
+    SPEC_RETRY_DEPTH = 0.10
+
+    def spec_fraction(self, spec: Optional[str], model: PreparedModel, hw: HardwareDescriptor) -> Optional[float]:
+        """The largest --mem-fraction-static that leaves a spec's second weights room outside the reservation:
+        1 - (draft weights + runtime workspace + 512 MB) / total VRAM, rounded down to 0.01 (0.86 for an 850 MB
+        EAGLE3 head on a 24 GB card, 0.79 for Llama 3.2 1B). None: no second model (no spec, a lookup method) or no
+        GPU, so no limit. 0.0 for a second model of unknown size: no fraction is known to leave it room.
+
+        SGLang 0.5.19 loads the draft after the target, sizes its KV pools after both, and scales the pool's cell
+        size for the draft's KV cache, so that cache lives inside the fraction; the planner does not count it, so
+        the pool holds fewer tokens than it estimates. Whether the first sizing subtracts the draft's weights was
+        not verified, so they are assumed to need room outside the fraction."""
+        if not spec or hw.gpu is None or not hw.gpu.vram_total_bytes:
+            return None
+        extra = speculative.draft_bytes(spec, model)
+        if extra == 0:
+            return None
+        if extra is None:
+            return 0.0
+        outside = extra + self.memory_model(hw).runtime_workspace + MIN_SAFETY_MARGIN
+        return math.floor((1 - outside / hw.gpu.vram_total_bytes) * 100) / 100
+
+    def spec_retry_floor(self, cfg: Config, model: PreparedModel, hw: HardwareDescriptor) -> Optional[float]:
+        """How low an out-of-memory retry may take a second-model spec trial: SPEC_RETRY_DEPTH below its cap."""
+        cap = self.spec_fraction(cfg.spec_decode, model, hw)
+        return round(cap - self.SPEC_RETRY_DEPTH, 2) if cap else None
+
+    def spec_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
+                      all_methods: bool = False) -> List[Config]:
+        """Under --speculative all only: n-gram lookup, the verified EAGLE3 head and the draft model, as far as the
+        installed SGLang has them. A second model needs `hw` to be left room, and is offered only where the
+        planner says the configuration still fits at the lower fraction. Fractions start from the one before any
+        speculation lowered it, so the variants of a draft-model leader are not measured at its 0.79."""
+        if not all_methods:
+            return []
+        methods = sglang_spec_methods()
+        specs: List[str] = []
+        if "ngram" in methods:
+            specs.append(speculative.ngram(speculative.NGRAM_TOKENS_SGLANG))
+        if hw is not None:
+            if "eagle3" in methods and "eagle3" in model.spec_repos:
+                specs.append(speculative.eagle3(model.spec_repos["eagle3"], speculative.EAGLE3_TOKENS))
+            if "draft" in methods and "draft" in model.spec_repos:
+                specs.append(speculative.draft(model.spec_repos["draft"], speculative.DRAFT_TOKENS_SGLANG))
+        base = cfg.gmu_before_spec if cfg.gmu_before_spec is not None else cfg.gpu_memory_utilization
+        out: List[Config] = []
+        for s in specs:
+            if s == cfg.spec_decode:
+                continue
+            v = cfg.model_copy(update={"spec_decode": s, "gpu_memory_utilization": base, "gmu_before_spec": None})
+            cap = self.spec_fraction(s, model, hw) if hw is not None else None
+            if cap is not None and (base is None or base > cap):
+                v = v.model_copy(update={"gpu_memory_utilization": cap, "gmu_before_spec": base})
+                try:
+                    if not cap or not estimate(hw, model, v, self.memory_model(hw)).feasible:
+                        continue
+                except Exception:
+                    continue
+            out.append(v)
+        return out
 
     PREFILL_BUDGETS = (2048, 8192, 16384)
 

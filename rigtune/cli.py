@@ -253,6 +253,12 @@ def _on_off(value: str) -> str:
     return value
 
 
+def _on_off_all(value: str) -> str:
+    if value not in ("on", "off", "all"):
+        raise typer.BadParameter("expected on, off or all")
+    return value
+
+
 def _layout(value: str) -> str:
     from rigtune.layout import LAYOUTS
 
@@ -303,8 +309,8 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
             raise typer.BadParameter(str(exc), param_hint="--eval-set") from None
     return SearchOptions(
         quants=None if quant == "auto" else [q.strip() for q in quant.split(",") if q.strip()],
-        kv_quant=kv_quant == "on", speculative=speculative == "on", prefix_cache=prefix_cache == "on",
-        combine=combine == "on", budget_s=budget, ttft_percentile=ttft_percentile, confirm=confirm == "on",
+        kv_quant=kv_quant == "on", speculative=speculative != "off", speculative_all=speculative == "all",
+        prefix_cache=prefix_cache == "on", combine=combine == "on", budget_s=budget, ttft_percentile=ttft_percentile, confirm=confirm == "on",
         all_levels=all_levels, explore=explore == "on", quality_probe=quality_probe == "on",
         eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
     )
@@ -318,8 +324,10 @@ QUANT_OPT = typer.Option("auto", "--quant", callback=_quant_list,
                               "Q4_K_M, Q5_K_M, Q6_K, Q8_0).")
 KVQ_OPT = typer.Option("on", "--kv-quant", callback=_on_off,
                        help="Try quantized KV caches (fp8 on vLLM and SGLang, q8_0 and q4_0 on llama.cpp)")
-SPEC_OPT = typer.Option("on", "--speculative", callback=_on_off,
-                        help="Try speculative decoding (n-gram prompt lookup, a small draft model)")
+SPEC_OPT = typer.Option("on", "--speculative", callback=_on_off_all,
+                        help="Try speculative decoding (n-gram prompt lookup, a small draft model, suffix decoding). "
+                             "all: also SGLang's n-gram, EAGLE3 and draft model and vLLM's EAGLE3 head, none of "
+                             "which has run on hardware yet, choosing engines after speculation (opt-in)")
 PREFIX_OPT = typer.Option("on", "--prefix-cache", callback=_on_off,
                           help="Keep prefix caching on and tune it for workloads whose prompts share a prefix")
 QUALITY_OPT = typer.Option("off", "--quality-probe", callback=_on_off,
@@ -525,7 +533,8 @@ def bench(
         raise typer.Exit(2)
     opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items)
-    result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.search_quants())
+    result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.search_quants(),
+                              speculative_all=opts.speculative_all)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)

@@ -291,8 +291,15 @@ class BaseBackend:
         """Prefix-cache settings to try when the workload's prompts share a prefix."""
         return []
 
-    def spec_variants(self, cfg: Config, model: PreparedModel) -> List[Config]:
-        """Speculative-decoding settings to try."""
+    def spec_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
+                      all_methods: bool = False) -> List[Config]:
+        """Speculative-decoding settings to try. `hw` lets a backend leave memory for a second model, and
+        `all_methods` (--speculative all) adds the methods that have not run on hardware yet."""
+        return []
+
+    def find_second_models(self, prepared: PreparedModel) -> List[str]:
+        """Under --speculative all: look up second models (EAGLE3 heads, drafts) on the Hub and record them in
+        `prepared`. Returns notes for the profile, such as a lookup the Hub could not answer. Default: none."""
         return []
 
     def replica_launch_spec(self, cfg: Config, model: PreparedModel, port: int, gpu_index: int) -> LaunchSpec:

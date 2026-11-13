@@ -48,6 +48,7 @@ class PlanResult:
     feasible: Dict[str, List[Tuple[Config, MemoryEstimate]]] = field(default_factory=dict)
     considered: Dict[str, int] = field(default_factory=dict)
     errors: Dict[str, str] = field(default_factory=dict)
+    notes: List[str] = field(default_factory=list)  # for the profile, such as a Hub lookup that failed
 
     @property
     def all_feasible(self) -> List[Config]:
@@ -66,6 +67,9 @@ class SearchOptions:
     quants: Optional[List[str]] = None
     kv_quant: bool = True  # quantized KV caches
     speculative: bool = True  # n-gram and draft-model speculative decoding
+    # --speculative all: also the methods that have never run on hardware (SGLang's n-gram, EAGLE3 head and draft
+    # model, vLLM's EAGLE3 head), the engines' choice after speculation and a third speculation setting per engine.
+    speculative_all: bool = False
     prefix_cache: bool = True  # keep prefix caching on, and tune it for shared-prefix workloads
     phase_tuning: bool = True  # the prefill-knob stage
     combine: bool = True  # combinations of the strategies that were promising on their own
@@ -96,6 +100,8 @@ class SearchOptions:
             out["kv"] = "off"
         if not self.speculative:
             out["spec"] = "off"
+        elif self.speculative_all:
+            out["spec"] = "all"
         if not self.prefix_cache:
             out["prefix"] = "off"
         if not self.phase_tuning:
@@ -175,12 +181,28 @@ def combination_fits(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: 
         pm = plan.prepared.get(c.backend)
         if pm is None:
             return False
+        # SGLang: a draft or EAGLE3 head needs its weights' room outside the reservation (SglangBackend.spec_fraction);
+        # a second model of unknown size gets a limit of 0, so it is never combined in.
+        cap = getattr(reg[c.backend], "spec_fraction", None)
+        limit = cap(c.spec_decode, pm, hw) if cap is not None and c.spec_decode else None
+        if limit is not None and (c.gpu_memory_utilization or 0) > limit + 1e-9:
+            return False
         if c.prefill_budget is not None and c.prefill_budget < c.batch and not c.backend.startswith("llamacpp"):
             return False
         try:
             return estimate(hw, pm, c, reg[c.backend].memory_model(hw)).feasible
         except Exception:
             return False
+
+    return fn
+
+
+def retry_floor_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult"):
+    """The out-of-memory retry floor for configs that reserve less on purpose (SglangBackend.spec_retry_floor)."""
+    def fn(c: Config) -> Optional[float]:
+        floor = getattr(reg.get(c.backend), "spec_retry_floor", None)
+        pm = plan.prepared.get(c.backend)
+        return floor(c, pm, hw) if floor is not None and pm is not None and c.spec_decode else None
 
     return fn
 
@@ -237,7 +259,7 @@ def search_space(hw: HardwareDescriptor, plan: "PlanResult", reg: Dict[str, Base
     if opts.prefix_cache and workload.shared_prefix_tokens > 0:
         stages.append(lambda c: reg[c.backend].prefix_variants(c))
     if opts.speculative:
-        stages.append(lambda c: reg[c.backend].spec_variants(c, plan.prepared[c.backend]))
+        stages.append(lambda c: reg[c.backend].spec_variants(c, plan.prepared[c.backend], hw, opts.speculative_all))
     _warn_if_only_quantized_fits(plan, opts)
     configs = list(plan.all_feasible)
     if not opts.prefix_cache:
@@ -374,10 +396,13 @@ def prepare_and_plan(
     materialize: bool = False,
     workload: Optional[Workload] = None,
     quants: Optional[List[str]] = None,
+    speculative_all: bool = False,
 ) -> PlanResult:
     """Prepare each candidate backend's model, enumerate its grid, keep what fits the workload.
 
-    `quants` restricts weight precisions (the --quant option); None allows everything supported.
+    `quants` restricts weight precisions (the --quant option); None allows everything supported. With
+    `speculative_all` (--speculative all), each backend also looks up its second models on the Hub; nothing is
+    looked up otherwise.
     """
     result = PlanResult(hw=hw, spec=spec, candidates=list(candidates))
     min_ctx = workload.min_ctx if workload else 0
@@ -388,6 +413,8 @@ def prepare_and_plan(
             if quants is not None and allowed == []:
                 raise RuntimeError(f"none of --quant {','.join(quants)} is available on {name}")
             prepared = backend.prepare(spec, hw, quants=allowed)
+            if speculative_all:
+                result.notes += backend.find_second_models(prepared)
             grid = backend.candidate_configs(hw, prepared, min_ctx=min_ctx)
             if not grid:
                 raise RuntimeError(
@@ -499,7 +526,8 @@ def calibrate(
     if opts.prefix_cache and workload.shared_prefix_tokens > 0:
         stages.append(("prefix", lambda c: reg[c.backend].prefix_variants(c)))
     if opts.speculative:
-        stages.append(("spec", lambda c: reg[c.backend].spec_variants(c, plan.prepared[c.backend])))
+        stages.append(("spec", lambda c: reg[c.backend].spec_variants(c, plan.prepared[c.backend], hw,
+                                                                         opts.speculative_all)))
     controller, points, power_notes = None, [], []
     if power_points is not None:  # injected (tests, or a caller that already probed the GPU)
         controller, points = power_controller, list(power_points)
@@ -530,7 +558,8 @@ def calibrate(
                           budget_s=opts.budget_s, confirm_top=3 if opts.confirm else 0,
                           feasible_fn=combination_fits(hw, reg, plan), quality=probe, gate=gate,
                           explore_space=search_space(hw, plan, reg, workload, opts) if opts.explore else [],
-                          spec_first=True,
+                          spec_first=True, spec_beam=3 if opts.speculative_all else 2,
+                          retry_floor=retry_floor_fn(hw, reg, plan) if opts.speculative_all else None,
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
                                             if phase_tuning and opts.phase_tuning else None))
     t0 = time.monotonic()
@@ -542,7 +571,7 @@ def calibrate(
     if winner is None:
         raise RuntimeError("calibration failed: " + "; ".join(notes))
     elapsed = time.monotonic() - t0
-    notes = power_notes + notes
+    notes = power_notes + list(plan.notes) + notes
     notes.append(f"calibration took {elapsed:.0f}s over {len(search.results)} trials")
     notes.append(f"workload: {workload.describe()}")
     backend = reg[winner.config.backend]
@@ -630,7 +659,7 @@ def resolve_profile(
         raise RuntimeError("no backend supports this machine/model; run `rigtune probe` for details")
     say("prepare + plan")
     plan = prepare_and_plan(hw, spec, candidates, reg, materialize=not skip_calibration, workload=workload,
-                            quants=opts.search_quants())
+                            quants=opts.search_quants(), speculative_all=opts.speculative_all)
     if skip_calibration:
         say("defaults")
         return default_profile(hw, spec, plan, reg, objective, workload=workload)

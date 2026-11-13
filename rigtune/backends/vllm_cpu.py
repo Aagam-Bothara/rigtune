@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import List
+from typing import List, Optional
 
 from rigtune.backends.base import LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from rigtune.backends.vllm import vllm_serve_head
@@ -34,7 +34,8 @@ class VllmCpuBackend(VllmBackend):
     def kv_dtypes(self, hw: HardwareDescriptor) -> List[str]:
         return []
 
-    def spec_variants(self, cfg: Config, model: PreparedModel) -> List[Config]:
+    def spec_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
+                      all_methods: bool = False) -> List[Config]:
         return []
 
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:

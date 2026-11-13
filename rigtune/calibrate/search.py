@@ -366,6 +366,9 @@ class StagedSearch:
     # callers that pass their own stages keep the plain order unless they ask.
     spec_first: bool = False
     spec_beam: int = 2
+    # The lowest fraction an out-of-memory retry may reach for a config, when it is not MIN_RETRY_GMU: SGLang's
+    # second-model trials start below it on purpose (pipeline.retry_floor_fn). None: MIN_RETRY_GMU for every config.
+    retry_floor: Optional[Callable[[Config], Optional[float]]] = None
     _variant_log: List[Tuple[str, Config, Config]] = field(default_factory=list)  # (dimension, leader, variant)
     results: List[TrialResult] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -413,7 +416,12 @@ class StagedSearch:
         if res.launched or not (res.error or "").startswith("out of memory at start-up") or gmu is None:
             return None
         lower = round(gmu - self.RETRY_GMU_STEP, 2)
-        if lower < self.MIN_RETRY_GMU - 1e-9:
+        floor = self.MIN_RETRY_GMU
+        if self.retry_floor is not None:  # a trial that reserved less on purpose steps down from there
+            own = self.retry_floor(cfg)
+            if own is not None:
+                floor = min(floor, own)
+        if lower < floor - 1e-9:
             return None
         retry = cfg.model_copy(update={"gpu_memory_utilization": lower})
         if retry.key() in self._done or (self.feasible_fn is not None and not self.feasible_fn(retry)):
@@ -646,11 +654,16 @@ class StagedSearch:
 
     # Config fields a single-dimension stage may change (plus `extra`, compared key by key).
     _DELTA_FIELDS = ("batch", "n_batch", "prefill_budget", "kv_dtype", "prefix_cache", "spec_decode")
+    # Changed together with the speculation setting only: SGLang lowers the memory fraction to leave a second
+    # model room, and a combination that carries the speculation over must carry the lower fraction with it.
+    _SPEC_MEMORY_FIELDS = ("gpu_memory_utilization", "gmu_before_spec")
 
     @classmethod
     def _delta(cls, ref: Config, var: Config) -> Dict[str, Any]:
         """What a variant changed relative to the leader it was measured against."""
         d: Dict[str, Any] = {f: getattr(var, f) for f in cls._DELTA_FIELDS if getattr(var, f) != getattr(ref, f)}
+        if "spec_decode" in d:
+            d.update({f: getattr(var, f) for f in cls._SPEC_MEMORY_FIELDS if getattr(var, f) != getattr(ref, f)})
         extra = {k: v for k, v in var.extra.items() if ref.extra.get(k) != v}
         if extra:
             d["extra"] = extra
@@ -687,7 +700,13 @@ class StagedSearch:
             return []
         lead = leader.config
         changed = self._delta(base, lead)
-        out: List[Config] = [lead.model_copy(update={f: getattr(base, f)}) for f in changed if f != "extra"]
+        # A speculation setting that lowered the memory fraction (SGLang's draft room) is undone with it.
+        paired = ("spec_decode",) + self._SPEC_MEMORY_FIELDS
+        together = "spec_decode" in changed and any(f in changed for f in self._SPEC_MEMORY_FIELDS)
+        out: List[Config] = [lead.model_copy(update={f: getattr(base, f)}) for f in changed
+                             if f != "extra" and not (together and f in paired)]
+        if together:
+            out.append(lead.model_copy(update={f: getattr(base, f) for f in paired}))
         for k in changed.get("extra", {}):
             extra = {kk: vv for kk, vv in lead.extra.items() if kk != k}
             if k in base.extra:

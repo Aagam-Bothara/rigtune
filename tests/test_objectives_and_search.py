@@ -217,3 +217,25 @@ def test_staged_search_all_fail():
 def test_staged_search_empty():
     winner, notes = StagedSearch(objective="throughput", runner=FakeRunner()).run([])
     assert winner is None and "no feasible" in notes[0]
+
+
+def test_a_lowered_memory_fraction_travels_with_the_speculation_that_needed_it():
+    """SGLang leaves a draft model room by reserving less: a combination that carries the draft over carries the
+    lower fraction too, and undoing the draft restores the fraction with it. A fraction changed on its own (an
+    out-of-memory retry) is not a delta, as before."""
+    base = Config(backend="sglang", quant="fp8", ctx=8192, batch=16, gpu_memory_utilization=0.93)
+    spec = base.model_copy(update={"spec_decode": "draft:d:3", "gpu_memory_utilization": 0.79, "gmu_before_spec": 0.93})
+    delta = StagedSearch._delta(base, spec)
+    assert delta == {"spec_decode": "draft:d:3", "gpu_memory_utilization": 0.79, "gmu_before_spec": 0.93}
+    assert StagedSearch._delta(base, base.model_copy(update={"gpu_memory_utilization": 0.88})) == {}
+    combined = StagedSearch._apply(base.model_copy(update={"kv_dtype": "fp8_e5m2"}), delta)
+    assert (combined.spec_decode, combined.gpu_memory_utilization, combined.kv_dtype) == ("draft:d:3", 0.79,
+                                                                                          "fp8_e5m2")
+    lead = spec.model_copy(update={"kv_dtype": "fp8_e5m2"})
+    s = StagedSearch(objective="throughput", runner=None)
+    s.results.append(TrialResult(config=lead, stage="kv", metrics=TrialMetrics(tok_s=100.0, ttft_ms=100.0, requests=8,
+                                                                               output_tokens=800)))
+    undone = s._leader_without_each(base)
+    assert {c.key() for c in undone} == {lead.model_copy(update={"kv_dtype": "auto"}).key(), base.model_copy(
+        update={"kv_dtype": "fp8_e5m2"}).key()}  # the draft and its fraction go back together
+    assert all(c.gmu_before_spec in (None, 0.93) for c in undone)

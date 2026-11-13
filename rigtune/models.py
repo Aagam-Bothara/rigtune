@@ -130,6 +130,11 @@ class PreparedModel(BaseModel):
     weights_bytes: Dict[str, int] = Field(default_factory=dict)  # quant/precision -> bytes
     hf_paths: Dict[str, str] = Field(default_factory=dict)  # quant -> pre-quantized repo (AWQ, GPTQ)
     draft_paths: Dict[str, str] = Field(default_factory=dict)  # draft model id -> GGUF path (llama.cpp)
+    # Second models for speculative decoding that the Hub has and that fit this target: spec kind -> repository
+    # ("eagle3" -> a verified head), and repository -> size in bytes, for the memory left outside the engine's
+    # reservation. Empty in profiles saved before they existed, which still load.
+    spec_repos: Dict[str, str] = Field(default_factory=dict)
+    spec_bytes: Dict[str, int] = Field(default_factory=dict)
 
     def weights_for(self, quant: str) -> int:
         if quant in self.weights_bytes:
@@ -159,9 +164,13 @@ class Config(BaseModel):
     prefill_budget: Optional[int] = None
     kv_dtype: str = "auto"
     prefix_cache: Optional[bool] = None  # None = the engine default (on for vLLM and SGLang)
-    spec_decode: Optional[str] = None  # speculative decoding: "ngram|ngram_gpu|suffix:<k>" | "draft:<hf_id>:<k>"
+    spec_decode: Optional[str] = None  # speculative decoding: "ngram|ngram_gpu|suffix:<k>" | "draft|eagle3:<hf_id>:<k>"
     tp: int = 1  # tensor-parallel degree across GPUs
     extra: Dict[str, Any] = Field(default_factory=dict)
+    # The memory fraction before a speculation setting lowered it to leave a second model room (SGLang under
+    # --speculative all), so undoing or swapping the speculation restores it. Not part of the key: the launch is
+    # the same whichever fraction it came from.
+    gmu_before_spec: Optional[float] = None
     # Energy tuning, applied through NVML while the backend runs rather than as launch flags.
     power_limit_w: Optional[int] = None  # board power cap
     sm_clock_mhz: Optional[int] = None  # upper bound of the locked SM clock range

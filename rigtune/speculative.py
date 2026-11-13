@@ -27,9 +27,9 @@ from __future__ import annotations
 import importlib.util
 import logging
 import re
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from rigtune.models import ArchInfo, ModelSpec
+from rigtune.models import ArchInfo, ModelSpec, PreparedModel
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,10 @@ DRAFT_TOKENS_LLAMACPP = 16
 # Tokens an EAGLE3 head proposes per step, as a chain (one candidate per position): SGLang's own chain default
 # (3 steps, top-k 1) for models it does not tune as Llama-class.
 EAGLE3_TOKENS = 3
+# SGLang: a draft model proposes a chain of 3, as an EAGLE3 head does, and n-gram lookup keeps SGLang's own 12
+# draft tokens (its tree is speculative_ngram_max_bfs_breadth wide, 10 by default).
+DRAFT_TOKENS_SGLANG = 3
+NGRAM_TOKENS_SGLANG = 12
 
 LOOKUP = ("ngram", "ngram_gpu", "suffix")  # proposers that need no second model
 SECOND_MODEL = ("draft", "eagle3")  # proposers whose second set of weights the spec names
@@ -253,3 +257,31 @@ def vllm_config(spec: str) -> Dict[str, object]:
     if kind == "eagle3":  # vLLM 0.29 reads the head's architecture from its config
         return {"method": "eagle3", "model": model_id, "num_speculative_tokens": k}
     return {"method": "draft_model", "model": model_id, "num_speculative_tokens": k}
+
+
+def sglang_config(spec: str) -> List[str]:
+    """SGLang's launch flags for a spec (flags as in SGLang 0.5.19's server_args.py).
+
+    An EAGLE3 head and a draft model (SGLang's STANDALONE) decode a chain: top-k 1, k steps, k + 1 draft tokens
+    (with top-k 1 SGLang forces the draft tokens to steps + 1 anyway). SGLang's own default for Llama-class
+    models is a tree (5 steps, top-k 4, 8 tokens), but 0.5.19 always runs speculation on its V2 (overlap)
+    worker, which its docs support with top-k 1 only, and a chain keeps the comparison with vLLM's k fair."""
+    kind, model_id, k = parse(spec)
+    if kind == "ngram":
+        return ["--speculative-algorithm", "NGRAM", "--speculative-num-draft-tokens", str(k)]
+    if kind in SECOND_MODEL:
+        return ["--speculative-algorithm", "EAGLE3" if kind == "eagle3" else "STANDALONE",
+                "--speculative-draft-model-path", str(model_id), "--speculative-num-steps", str(k),
+                "--speculative-eagle-topk", "1", "--speculative-num-draft-tokens", str(k + 1)]
+    raise ValueError(f"SGLang has no {kind} speculative decoding")
+
+
+def draft_bytes(spec: Optional[str], model: PreparedModel) -> Optional[int]:
+    """Bytes of the second set of weights a spec loads: 0 for none (no spec, or a lookup proposer), None when it
+    loads a second model whose size is not known."""
+    if not spec:
+        return 0
+    kind, model_id, _ = parse(spec)
+    if kind not in SECOND_MODEL:
+        return 0
+    return model.spec_bytes.get(model_id or "")

@@ -139,6 +139,10 @@ def no_network(monkeypatch, llama3b_arch):
     import rigtune.quantized as qz
 
     monkeypatch.setattr(qz, "find_prequantized_repos", lambda spec, **kw: {})
+    import rigtune.speculative as sp
+
+    monkeypatch.setattr(sp, "find_eagle3_head", lambda spec, arch, **kw: None)  # second models (--speculative all)
+    monkeypatch.setattr(sp, "repo_bytes", lambda repo, token=None: None)
     yield
 
 

@@ -168,7 +168,8 @@ class VllmBackend(BaseBackend):
     def batch_ladder(self) -> Tuple[int, ...]:
         return (16, 64, 256, 512)
 
-    def spec_variants(self, cfg: Config, model: PreparedModel) -> List[Config]:
+    def spec_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
+                      all_methods: bool = False) -> List[Config]:
         # n-gram lookup on the GPU where vLLM has it, since the CPU proposer turns async scheduling off.
         specs = [speculative.ngram_gpu() if speculative.vllm_supports_ngram_gpu() else speculative.ngram()]
         if speculative.vllm_supports_suffix():
