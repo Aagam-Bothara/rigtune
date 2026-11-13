@@ -95,6 +95,26 @@ is where the card's best configuration was. The search now also tunes an engine 
 something to try on it and nothing on the leader's, and drops an engine that a tuned rival has left more than 10%
 behind with nothing more to offer ([design](writeup.md#3-staged-search)).
 
+## Why does `--speculative all` decide which engines to keep tuning after speculation?
+
+Because speculation is the strategy most likely to reorder engines, and choosing before it judges an engine
+before its best move. On the 4090, SGLang led after the batch stage (776 against 669 tok/s) and vLLM got through
+only by a special rule: it offered speculative decoding and SGLang did not. Once SGLang is offered speculation
+that rule no longer applies, so under `--speculative all` the search runs the speculation stage on every engine
+still in it and only then keeps the engines within 10% of the leader; the rule stays for strategies one engine
+lacks. The same option keeps a third speculation setting per engine, so a new method cannot push out the
+second-best existing one (the 4090's recorded pick came from the second: a draft model at 878 tok/s behind suffix
+decoding at 901). The default search is unchanged.
+
+What the replay shows (`benchmarks/replay_search.py`, no GPU) is limited. No recording has SGLang speculation or
+an EAGLE3 head, so both were excluded from it: what it can show is the cost of the option's other changes. Of the
+21 replayable calibrations, the default search reproduces 5 exactly, reaches the recorded pick past unmeasured
+trials in 13, and differs in 3, as it did before this option existed. Under `--speculative all` every one reaches
+the same pick as the default search, but only 1 reproduces exactly: the others ask for 1 to 7 trials that were
+never measured, 57 in all, mostly the third speculation setting's prefill and KV trials (7 more on the 4090, whose
+calibration ran 24). Those picks are inconclusive, not confirmed, and SGLang's own speculation, which would add
+trials of its own, has not been measured anywhere.
+
 ## Why re-measure the best three configurations at the end?
 
 Because the best of many noisy trials is flattered by the choosing. Of five picks re-measured before this stage

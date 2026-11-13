@@ -86,3 +86,11 @@ def test_the_runner_answers_by_key_and_lists_what_was_never_measured():
     res = runner.run(b, "batch")
     assert not res.ok and not res.launched
     assert runner.missing == [("batch", b.key())]
+
+
+def test_the_opt_in_search_replays_to_the_same_picks_but_asks_for_more(no_network, capsys):
+    """--speculative all with neither SGLang speculation nor EAGLE3 (no profile records them): every pick is
+    unchanged, but the third speculation setting asks for trials no profile measured."""
+    paths = sorted(PROFILES.glob("**/profiles/**/*.json"))
+    assert MOD.main(["--speculative-all"] + [str(p) for p in paths]) == 0
+    assert "1 exact; 17 inconclusive; 3 different" in capsys.readouterr().out

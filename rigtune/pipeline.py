@@ -561,6 +561,7 @@ def calibrate(
                           feasible_fn=combination_fits(hw, reg, plan), quality=probe, gate=gate,
                           explore_space=search_space(hw, plan, reg, workload, opts) if opts.explore else [],
                           spec_first=True, spec_beam=3 if opts.speculative_all else 2,
+                          decide_after_spec=opts.speculative_all,
                           retry_floor=retry_floor_fn(hw, reg, plan) if opts.speculative_all else None,
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
                                             if phase_tuning and opts.phase_tuning else None))

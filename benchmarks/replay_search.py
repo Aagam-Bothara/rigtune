@@ -21,7 +21,10 @@ differed then cannot fail it. Run it before shipping a change to the search.
 
 What the replay holds fixed. Engine features rigtune detects from the installed software are taken from the
 recording: the vLLM version from the profile's `hardware`, suffix decoding where the table holds a suffix trial,
-FlashInfer where it holds an fp8_e5m2 trial on vLLM. The predictor and any memory fit made with
+FlashInfer where it holds an fp8_e5m2 trial on vLLM, and no speculation on SGLang, which none of them has.
+`--speculative-all` replays the opt-in search instead (with neither SGLang's speculation nor EAGLE3, since no
+profile records a head), to show what its other changes would have asked for; it is not checked against
+BASELINE. The predictor and any memory fit made with
 `rigtune memory-report --apply` are left out (they live on the machine that calibrated, not in the profile).
 The quality probe is off: it records drift without changing the pick, but a profile recorded under the drift
 gate that was later withdrawn (`quality` set to a threshold) is at best inconclusive. Budgeted profiles are not
@@ -32,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import importlib.util
 import os
 import re
@@ -165,6 +169,7 @@ def _version_tuple(version: Optional[str]) -> Tuple[int, int]:
 @contextlib.contextmanager
 def recorded_environment(profile: Profile) -> Iterator[None]:
     """Engine features as the recording machine had them, and none of this machine's fitted state."""
+    import rigtune.backends.sglang as sglang_backend
     import rigtune.backends.vllm as vllm_backend
     import rigtune.speculative as speculative
 
@@ -187,6 +192,8 @@ def recorded_environment(profile: Profile) -> Iterator[None]:
         stack.enter_context(mock.patch.object(importlib.util, "find_spec", find_spec))
         stack.enter_context(mock.patch.object(vllm_backend, "_vllm_version", lambda: _version_tuple(version)))
         stack.enter_context(mock.patch.object(speculative, "_vllm_version", lambda: version))
+        # No recording has SGLang speculation (rigtune offered none there), so a replay cannot answer it.
+        stack.enter_context(mock.patch.object(sglang_backend, "sglang_spec_methods", lambda: frozenset()))
         yield
 
 
@@ -265,6 +272,7 @@ def regression(name: str, r: Replay) -> Optional[str]:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("profiles", nargs="+", type=Path, help="profile JSON files (others are ignored)")
+    ap.add_argument("--speculative-all", action="store_true", help="replay the search --speculative all runs")
     args = ap.parse_args(argv)
     counts: Dict[str, int] = {}
     regressions: List[str] = []
@@ -272,7 +280,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         profile = load(path)
         if profile is None or not profile.calibration_table:
             continue
-        r = replay(profile, str(path))
+        opts = None
+        if args.speculative_all:
+            opts = dataclasses.replace(options_of(profile)[0], speculative_all=True)
+        r = replay(profile, str(path), opts)
         print(path.as_posix())
         if r.skipped:
             print(f"  skipped: {r.skipped}")
@@ -287,7 +298,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  recorded with options the replay cannot apply: {', '.join(r.cannot)}")
         for stage, key in r.missing:
             print(f"    not recorded ({stage}): {key}")
-        why = regression(baseline_name(path), r)
+        why = None if args.speculative_all else regression(baseline_name(path), r)
         if why:
             regressions.append(f"{path.as_posix()}: {why}")
     print("; ".join(f"{counts.get(c, 0)} {c}" for c in CLASSES))

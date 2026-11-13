@@ -369,6 +369,11 @@ class StagedSearch:
     # The lowest fraction an out-of-memory retry may reach for a config, when it is not MIN_RETRY_GMU: SGLang's
     # second-model trials start below it on purpose (pipeline.retry_floor_fn). None: MIN_RETRY_GMU for every config.
     retry_floor: Optional[Callable[[Config], Optional[float]]] = None
+    # With spec_first, run the speculation stage on every engine still in the search before choosing which engines
+    # to tune further (--speculative all). Choosing after the batch stage judged an engine before its most valuable
+    # strategy: on an RTX 4090 with Llama 3.1 8B, SGLang led vLLM by 14% there (776 against 669 tok/s), and vLLM led
+    # only once it had speculated; it got that far only because SGLang was offered no speculation.
+    decide_after_spec: bool = False
     _variant_log: List[Tuple[str, Config, Config]] = field(default_factory=list)  # (dimension, leader, variant)
     results: List[TrialResult] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -377,6 +382,7 @@ class StagedSearch:
     _trial_seconds: List[float] = field(default_factory=list)
     _skipped: List[str] = field(default_factory=list)
     _noted_contenders: set = field(default_factory=set)
+    _spec_tried: set = field(default_factory=set)  # engines whose speculation stage has run (decide_after_spec)
 
     # ---- predictor helpers
 
@@ -876,8 +882,9 @@ class StagedSearch:
             if self.combine:
                 self.stage_combinations(base)
             return
-        for name, fn in spec_stages:
-            self.stage_variants(name, fn, backend=base.backend)
+        if base.backend not in self._spec_tried:
+            for name, fn in spec_stages:
+                self.stage_variants(name, fn, backend=base.backend)
         settings = self._spec_settings(base.backend)
         limit = max(2, self.max_combinations // max(1, len(settings)))
         for spec in settings:
@@ -891,6 +898,18 @@ class StagedSearch:
                     self.stage_variants(name, fn, backend=base.backend, spec=spec)
             if self.combine:
                 self.stage_combinations(start.config, spec=spec, limit=limit)
+
+    def stage_spec_each(self, backends: Sequence[str]) -> bool:
+        """decide_after_spec: the speculation stage on every engine still in the search, in stage 1's order.
+        Returns whether a speculation stage ran."""
+        stages = [(n, fn) for n, fn in self.variant_stages if n == "spec"]
+        if not (self.spec_first and self.decide_after_spec and stages):
+            return False
+        for backend in backends:
+            for name, fn in stages:
+                self.stage_variants(name, fn, backend=backend)
+            self._spec_tried.add(backend)
+        return True
 
     def stage_variants(self, name: str, fn: Callable[[Config], List[Config]], backend: Optional[str] = None,
                        spec: Any = _ANY) -> None:
@@ -1054,9 +1073,18 @@ class StagedSearch:
                     self.stage_variants(name, fn, backend=base.backend)
         chosen = self.stage_memory(feasible, kept)
         self.stage_batch(feasible, chosen)
+        engines = list(dict.fromkeys(b for b, _ in chosen))
+        speculated = self.stage_spec_each(engines)
+        contenders = self._contenders("the speculation stage" if speculated else "the batch stage")
+        if speculated:  # an engine left out now gets the note it would have got when skipped below
+            tuned = {c.backend for c in contenders}
+            for b in engines:
+                mine = None if b in tuned else self._leader(b)
+                if mine is not None:
+                    self._outpaced(mine.config)
         # Engines offering more strategies go first (a stable sort, so the leader first among equals), and one
         # that an engine tuned before it has left clearly behind, with nothing more to offer, is skipped.
-        for base in sorted(self._contenders(), key=lambda c: -self._offer_count(c)):
+        for base in sorted(contenders, key=lambda c: -self._offer_count(c)):
             if not self._outpaced(base):
                 self._tune(base)
         self.stage_explore()
