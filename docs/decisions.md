@@ -270,4 +270,8 @@ sampling visibly degrades, which is the same missing experiment named above
   +409%. Session files replay conversations turn by turn, but have not yet run on hardware
   ([prediction](benchmarks.md#not-yet-measured)); if the picks they make differ from those made on the same
   conversations flattened, every flat calibration of chat traffic was tuned for the wrong load.
+- Agent traffic, which rewrites its prompt rather than appending to it. Explicit-request replay and a MemGPT-like
+  trace generator exist but have not run on hardware ([prediction](benchmarks.md#not-yet-measured)); if a rewriting
+  layout and an appending one of the same events pick differently, a pick tuned on chat sessions is tuned on the
+  wrong tail for agents.
 - A second person running a calibration on hardware and traffic the author does not control.
