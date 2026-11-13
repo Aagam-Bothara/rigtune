@@ -83,6 +83,21 @@ rigtune serve Qwen/Qwen2.5-3B-Instruct --workload chat --workload-file prompts.j
 
 This is new and so far exercised by tests only; it drives the same real-text harness as `sharegpt`, `extract` and `code-edit`, which has run on GPUs.
 
+#### Conversations: session files
+
+A flat file sends every conversation as one prompt, so calibration never sees the reuse real chat traffic has: each turn resends the conversation so far. A session file keeps conversations whole. Either form below makes one, and the two may be mixed:
+
+```jsonl
+{"session": "s1", "system": "You are ...", "messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}, {"role": "user", "content": "Why?"}]}
+{"session": "s2", "turn": 1, "role": "user", "content": "..."}
+{"session": "s2", "turn": 2, "role": "assistant", "content": "..."}
+```
+
+- A file is a session file only when some line has a `session` key together with `messages` (or with `role`, in the one-turn-per-line form). A file of multi-turn `{"messages": [...]}` lines without one is flattened exactly as before (same requests, same name, so its cached profile stays valid), and rigtune logs a notice that it could be replayed instead. A `session` key beside `prompt` or `text` is ignored, as it always was, with a notice. A byte-order mark at the start of the file is fine.
+- In a session file a line without `session` is a session of its own, and a plain prompt is a one-turn session. Turns must alternate user and assistant; a trailing answer is dropped, since nothing follows it. The one-turn-per-line form groups lines by `session` in file order (`turn`, when given, must increase). A system prompt comes from a `system` key or leading system messages. Errors name the line.
+- Each session keeps its first 8 turns. A level replays a budget of turns, 6 per concurrency slot (at least 8, and with a session pool 3 per live session, or the pool's sessions would never get a second turn), drawn from twice as many sessions' worth of turns, so it is still starting new sessions when the budget runs out. The file is split so that every level and every re-measure of a close call gets sessions of its own; a small file gets fewer per level and says so, and its busiest levels may then run out of sessions and end below their concurrency.
+- The profile's name ends in `-sessions`. The longest prompt a session can reach (system prompt, every user turn, and the answers between them at the length the file recorded, capped at the answer cap) sets the shortest context the planner keeps. An answer the file leaves empty is budgeted at the median of those it records; a file that records none is budgeted at the full cap per answer, which at 8 turns needs contexts above 4096.
+
 Prompt lengths are exact when the model's tokenizer is available (prompts are fitted to the target token count), and output tokens are counted from the server's `usage` or the tokenizer, never from stream chunks. The planner drops any config whose context cannot hold prefill + decode.
 
 ```bash

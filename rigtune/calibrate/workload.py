@@ -32,7 +32,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from rigtune.calibrate.datasets import CHARS_PER_TOKEN, FILE_PREFIX
+from rigtune.calibrate.datasets import CHARS_PER_TOKEN, DEFAULT_TURNS_CAP, FILE_PREFIX, Session
 from rigtune.calibrate.tokens import TokenCounter
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,14 @@ _SUFFIX = "\n\nContinue the text:"
 CTX_HEADROOM = 64  # tokens of slack for chat templates / special tokens
 MIN_LEVEL_REQUESTS = 8  # fewest requests a level sends when requests_per_slot caps it
 MAX_FILE_PREFILL = 32768  # a longer prompt in a --workload-file is cut to this many tokens, keeping its start
+# Session files. A level replays a budget of turns rather than a number of sessions: TURNS_PER_SLOT per concurrency
+# slot, from at least twice as many sessions' worth of turns, so the level stays closed-loop at its concurrency
+# until the budget is spent instead of thinning out as its last sessions end.
+TURNS_PER_SLOT = 6
+TURNS_PER_POOLED_SESSION = 3  # a pool's live sessions each get about this many turns before the budget ends
+MIN_LEVEL_SESSIONS = 2
+TURN_OVERHEAD = 16  # tokens a chat template adds per message, budgeted when sizing a session's longest prompt
+HISTORIES = ("generated", "recorded")
 
 
 def _pct(values: Sequence[int], pct: float) -> int:
@@ -91,6 +99,17 @@ class Workload:
     # run to hundreds of tokens, so sending all 64 ShareGPT prompts one at a time took 5 minutes of
     # an 8-minute trial on an A40; a level at concurrency c needs a few rounds of c, not all of them.
     requests_per_slot: int = 0
+    # Session replay, for a --workload-file of conversations (datasets.read_sessions). n_prompts then counts the
+    # sessions a level may draw on, `session_list` holds them, and `prompts` holds each one's first turn as plain
+    # text for whatever needs one prompt per session (the quality probe, prompt-length counts).
+    sessions: bool = False
+    force_sessions: bool = False  # --sessions: every line is a session, whether or not it names one
+    turns_cap: int = DEFAULT_TURNS_CAP
+    history: str = "generated"  # what a later turn carries as the earlier answers: "generated" | "recorded"
+    session_pool: int = 0  # sessions live at once per level (0: one per concurrency slot)
+    turns_per_slot: int = TURNS_PER_SLOT
+    session_system: str = ""  # every session's system prompt in place of its own, when given
+    session_list: List[Session] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.shared_prefix_tokens and not self.prefix_text:
@@ -100,10 +119,19 @@ class Workload:
             self.token_counts = []  # a copy's regenerated prompts are not the ones that were counted
 
     def level_requests(self, concurrency: int) -> int:
-        """How many of the prompts a level at this concurrency sends."""
+        """How many of the prompts a level at this concurrency sends (for a session file: how many sessions it may
+        draw on, see sessions_for)."""
+        if self.sessions:
+            turns = (sum(s.turns for s in self.session_list) / len(self.session_list) if self.session_list
+                     else float(self.turns_cap))
+            return min(len(self.prompts), sessions_for(self.turn_budget(concurrency), turns, self.session_pool))
         if not self.requests_per_slot:
             return len(self.prompts)
         return min(len(self.prompts), max(MIN_LEVEL_REQUESTS, concurrency * self.requests_per_slot))
+
+    def turn_budget(self, concurrency: int) -> int:
+        """Turns a level of a session file sends: it stops issuing new ones once they are spent (see turn_budget)."""
+        return turn_budget(concurrency, self.turns_per_slot, self.session_pool)
 
     def ensure_prompts(self) -> "Workload":
         """Generate or download the prompts if they are not there yet."""
@@ -130,6 +158,13 @@ class Workload:
         return [rng.choice(_WORDS) for _ in range(n_words)]
 
     def _generate(self) -> List[str]:
+        if self.sessions:
+            from rigtune.calibrate import datasets
+
+            self.session_list = datasets.sample_sessions(self.source, self.n_prompts, self.sample_offset,
+                                                         self.turns_cap, self.session_system or None,
+                                                         self.force_sessions)
+            return [s.first_turn for s in self.session_list]
         if self.source != "synthetic":
             from rigtune.calibrate import datasets
 
@@ -146,6 +181,11 @@ class Workload:
         Real-text prompts keep their own length; only those over the cap are cut, from the body so
         their instruction survives."""
         if not counter.available:
+            return self
+        if self.sessions:
+            # A session's turns are never cut: one whose next prompt would not fit is stopped during replay.
+            self.ensure_prompts()
+            self.fitted = True
             return self
         if self.source != "synthetic":
             from rigtune.calibrate import datasets
@@ -224,6 +264,14 @@ class Workload:
         return Path(self.source[len(FILE_PREFIX):]).name if self.source.startswith(FILE_PREFIX) else self.source
 
     def describe(self) -> str:
+        if self.sessions:
+            return (f"{self.name}: {self.turns_per_slot} turns per slot from {self._source_label} sessions of up to "
+                    f"{self.turns_cap} turns with {self.history} history, prompts up to {self.prefill_tokens} "
+                    f"tokens, answers up to {self.decode_tokens} tokens (natural stop), "
+                    f"{f'{self.session_pool} sessions live' if self.session_pool else 'one session per slot'}, "
+                    f"concurrency {'/'.join(str(c) for c in self.concurrencies)}, "
+                    f"TTFT ceiling {self.ttft_ceiling_ms:.0f} ms"
+                    + (f", TPOT ceiling {self.tpot_ceiling_ms:.0f} ms" if self.tpot_ceiling_ms else ""))
         if self.source != "synthetic":
             return (f"{self.name}: {self.n_prompts} {self._source_label} prompts of up to {self.prefill_tokens} tokens, "
                     f"answers up to {self.decode_tokens} tokens{' (natural stop)' if self.natural_stop else ''}, "
@@ -255,7 +303,12 @@ class Workload:
             "natural_stop": self.natural_stop,
             **({"requests_per_slot": self.requests_per_slot} if self.requests_per_slot else {}),
             **({"prompt_tokens_seen": stats} if stats else {}),
+            **(self._session_spec() if self.sessions else {}),
         }
+
+    def _session_spec(self) -> Dict[str, object]:
+        return {"sessions": True, "turns_cap": self.turns_cap, "history": self.history,
+                "session_pool": self.session_pool, "turns_per_slot": self.turns_per_slot}
 
 
 _PRESETS: Dict[str, Workload] = {
@@ -297,17 +350,38 @@ def get_workload(name: str = "default") -> Workload:
     return replace(base, prompts=[], fitted=False)
 
 
-def workload_from_file(path, template: Optional[Workload] = None) -> Workload:
+def workload_from_file(path, template: Optional[Workload] = None, session_pool: Optional[int] = None,
+                       turns_cap: Optional[int] = None, history: Optional[str] = None,
+                       session_system: Optional[str] = None, sessions: bool = False) -> Workload:
     """Your own prompts as a workload, shaped like `template` (default `default`): its concurrency levels
     and latency ceilings are kept, and the prompts come from the file (see datasets.read_prompt_file).
 
     Answers stop when the model does, capped at 512 tokens or the template's decode length if longer.
     The name carries a hash of the file, so a profile calibrated on one version of it is never served for
     another. Each concurrency level gets prompts of its own: sending the same ones again would let the
-    engine's prefix cache make later levels look faster, so a small file sends fewer requests instead."""
+    engine's prefix cache make later levels look faster, so a small file sends fewer requests instead.
+
+    A file whose lines name a session, or any file with `sessions` set, becomes a session workload instead
+    (_session_workload); the session options apply only to one, and a flat file given any of them is refused."""
     from rigtune.calibrate import datasets
 
     p = Path(path).expanduser().resolve()
+    found = datasets.read_sessions(p, force=sessions)
+    if found:
+        return _session_workload(p, found, template or get_workload("default"), session_pool, turns_cap,
+                                 history, session_system, sessions)
+    given = [name for name, v in (("--session-pool", session_pool), ("--session-turns", turns_cap),
+                                  ("--history", history), ("--session-system", session_system)) if v is not None]
+    if given:
+        raise ValueError(f"{p.name} holds no sessions (no line has a \"session\" key), so {', '.join(given)} "
+                         "cannot apply to it")
+    conversations, ignored = datasets.flat_notes(p)
+    if conversations:
+        logger.info("%s: %d conversations are flattened into one prompt each, as before; give each line a "
+                    "\"session\" key to replay them turn by turn", p.name, conversations)
+    if ignored:
+        logger.info("%s: %d lines have a \"session\" key beside a prompt rather than messages; it is ignored, as "
+                    "before", p.name, ignored)
     prompts = datasets.read_prompt_file(p)
     digest = hashlib.sha256(p.read_bytes()).hexdigest()[:8]
     stem = re.sub(r"[^A-Za-z0-9_.-]+", "-", p.stem)[:40] or "prompts"
@@ -329,6 +403,101 @@ def workload_from_file(path, template: Optional[Workload] = None) -> Workload:
                    n_prompts=per_level, prefill_tokens=min(MAX_FILE_PREFILL, -(-longest // 256) * 256),
                    decode_tokens=max(t.decode_tokens, 512), shared_prefix_tokens=0, prefix_text="", prefix_fixed=False,
                    prompts=[], fitted=False, requests_per_slot=per_slot, sample_offset=0)
+
+
+def turn_budget(concurrency: int, turns_per_slot: int = TURNS_PER_SLOT, pool: int = 0) -> int:
+    """Turns a level of a session file sends: TURNS_PER_SLOT per concurrency slot, and with a pool enough for each
+    live session to get TURNS_PER_POOLED_SESSION. A budget of slots alone (6c) left a pool above it with no second
+    turn at all: at c = 8 with a pool of 64, all 48 turns went to first turns and nothing was reused."""
+    return max(MIN_LEVEL_REQUESTS, concurrency * turns_per_slot, TURNS_PER_POOLED_SESSION * pool)
+
+
+def sessions_for(budget: int, mean_turns: float, pool: int = 0) -> int:
+    """Sessions a level needs: twice its turn budget's worth, so it is still admitting new sessions when the budget
+    runs out, and at least twice the pool, so a pool is refilled at least once and reaches its steady spacing."""
+    return max(MIN_LEVEL_SESSIONS, -(-2 * budget // max(1, int(mean_turns))), 2 * pool)
+
+
+def _session_workload(p: Path, sessions: List[Session], t: Workload, session_pool: Optional[int],
+                      turns_cap: Optional[int], history: Optional[str], session_system: Optional[str],
+                      forced: bool) -> Workload:
+    """A file of conversations as a workload, replayed turn by turn.
+
+    prefill_tokens is the longest prompt a session can reach: its system prompt, every user turn, and the answers
+    between them, each budgeted at the length the file recorded (capped at the answer cap; a generated answer
+    that runs longer is caught during replay, which stops the session before a prompt that would not fit and
+    counts it as cut). Budgeting every answer at the full cap instead put an 8-turn session past 4096 tokens and
+    silently dropped every 4k context. An answer the file left empty is budgeted at the median of those it did
+    record (at the cap when it recorded none). Explicit steps are sized by their own messages, counted the way
+    replay estimates a prompt (measure._LiveSession.next_prompt_tokens). The name says it is a session workload
+    and carries every option that changes what is sent, so no profile is ever served across them."""
+    cap = DEFAULT_TURNS_CAP if turns_cap is None else int(turns_cap)
+    hist = history or "generated"
+    pool = int(session_pool or 0)
+    system = (session_system or "").lstrip("\ufeff").strip()
+    if cap < 1:
+        raise ValueError("--session-turns must be at least 1")
+    if hist not in HISTORIES:
+        raise ValueError(f"--history must be one of {', '.join(HISTORIES)}")
+    if pool < 0:
+        raise ValueError("--session-pool cannot be negative")
+    if pool and pool < max(t.concurrencies):
+        logger.warning("--session-pool %d is below the busiest level's concurrency %d; that level keeps one session "
+                       "per slot", pool, max(t.concurrencies))
+    digest = hashlib.sha256(p.read_bytes() + (b"\0system\0" + system.encode() if system else b"")).hexdigest()[:8]
+    stem = re.sub(r"[^A-Za-z0-9_.-]+", "-", p.stem)[:40] or "prompts"
+    name = (f"file-{stem}-{digest}-sessions" + (f"-t{cap}" if cap != DEFAULT_TURNS_CAP else "")
+            + (f"-pool{pool}" if pool else "") + ("-recorded" if hist == "recorded" else ""))
+    decode = max(t.decode_tokens, 512)
+
+    def tokens(text: str) -> int:
+        return len(text) // CHARS_PER_TOKEN + 1
+
+    capped = [s.capped(cap) for s in sessions]
+    recorded = sorted(tokens(st.answer) for s in capped for st in s.steps if st.answer)
+    unrecorded = min(decode, recorded[len(recorded) // 2]) if recorded else decode
+
+    def answer(step) -> int:
+        n = tokens(step.answer) if step.answer else unrecorded
+        return n if hist == "recorded" and step.answer else min(decode, n)
+
+    def longest(s: Session) -> int:
+        sys_text = system or s.system
+        convo = tokens(sys_text) + TURN_OVERHEAD if sys_text else 0  # what the next append step builds on
+        best = 0
+        for step in s.steps:
+            if step.explicit:
+                prompt = sum(tokens(c) + TURN_OVERHEAD for _, c in step.messages)
+            else:
+                prompt = convo + tokens(step.user) + TURN_OVERHEAD
+            best = max(best, prompt)
+            convo = prompt + answer(step) + TURN_OVERHEAD
+        return best
+
+    mean_turns = sum(s.turns for s in capped) / len(capped)
+    levels = len(t.concurrencies)
+    budgets = [turn_budget(c, TURNS_PER_SLOT, pool) for c in t.concurrencies]
+    want = max(sessions_for(b, mean_turns, pool) for b in budgets)
+    # Every level, and every level's close-call re-measure, gets sessions of its own (measure._level_workload).
+    per_level = max(1, min(want, len(sessions) // (2 * levels)))
+    if per_level < want:
+        logger.warning("%s has %d sessions: each of the %d concurrency levels, and its re-measure, gets %d of its own "
+                       "(it could use %d), so the busiest levels may run out of sessions before their turn budget and "
+                       "end below their concurrency", p.name, len(sessions), levels, per_level, want)
+    if per_level * mean_turns < max(budgets):
+        logger.warning("%s: the busiest level's %d sessions hold about %.0f turns, short of its turn budget of %d%s; "
+                       "it will send fewer turns than asked", p.name, per_level, per_level * mean_turns, max(budgets),
+                       f" (a pool of {pool} asks for {TURNS_PER_POOLED_SESSION} turns per live session)" if pool else "")
+    if len(sessions) < 2 * levels:
+        logger.warning("%s has fewer sessions than concurrency levels and re-measures, so levels repeat sessions and "
+                       "the prefix cache can make later levels look faster", p.name)
+    worst = max(longest(s) for s in capped)
+    return replace(t, name=name, source=FILE_PREFIX + str(p), natural_stop=True, n_prompts=per_level,
+                   prefill_tokens=min(MAX_FILE_PREFILL, -(-worst // 256) * 256), decode_tokens=decode,
+                   shared_prefix_tokens=0, prefix_text="", prefix_fixed=False, prompts=[], fitted=False,
+                   requests_per_slot=0, sample_offset=0, sessions=True, force_sessions=forced, turns_cap=cap,
+                   history=hist, session_pool=pool, turns_per_slot=TURNS_PER_SLOT, session_system=system,
+                   session_list=[])
 
 
 def workload_table() -> List[Dict[str, object]]:
