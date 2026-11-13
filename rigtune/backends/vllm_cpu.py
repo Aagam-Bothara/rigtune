@@ -38,6 +38,9 @@ class VllmCpuBackend(VllmBackend):
                       all_methods: bool = False) -> List[Config]:
         return []
 
+    def tier_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
+        return "vLLM on CPU keeps its KV cache in host RAM already"
+
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
         return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "cpu")
 

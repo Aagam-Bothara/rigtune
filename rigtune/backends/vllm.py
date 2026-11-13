@@ -6,6 +6,7 @@ import functools
 import importlib.util
 import json
 import logging
+import os
 import re
 import shutil
 import sys
@@ -262,6 +263,78 @@ def _prompt_tokens_details_flag() -> bool:
     return False
 
 
+# What the vLLM that will run offers for a KV-cache tier, read from its source (importing vLLM costs seconds).
+# The rules below were read in v0.29.0 and have not run on hardware.
+#   "cpu": distributed/kv_transfer/kv_connector/v1/offloading_connector.py has OffloadingConnector, and
+#          v1/kv_offload/base.py reads offload_prompt_only (default True: decode tokens are not offloaded).
+#   "hma": that connector is SupportsHMA, so config/vllm.py VllmConfig.__post_init__ keeps the hybrid KV
+#          cache manager on; without it, hybrid layouts would be planned wrong (sliding layers promoted to
+#          full by v1/core/kv_cache_utils._promote_local_kv_cache_specs) or fail to start (mamba layers).
+#   "shm": v1/kv_offload/cpu/shared_offload_region.py maps the CPU tier from /dev/shm (CPUOffloadingSpec.
+#          create_worker on CUDA, whatever the tensor-parallel size), so free /dev/shm caps the tier too.
+# The filesystem tier behind it (TieringOffloadingSpec) is not offered: every block stored to the CPU tier is
+# cascaded to every secondary tier (v1/kv_offload/tiering/manager.py), and the fs tier takes no size limit and
+# never deletes (tiering/fs/manager.py), so one session trial could write the whole replay to disk.
+OFFLOAD_FEATURES = ("cpu", "hma", "shm")
+VLLM_NO_DISK = "vLLM's disk tier has no size limit in 0.29; not offered"
+
+
+def offload_features_in(sources: dict) -> frozenset:
+    """The OFFLOAD_FEATURES that vLLM source text (relative path -> text) shows."""
+    connector = sources.get("distributed/kv_transfer/kv_connector/v1/offloading_connector.py", "")
+    spec_base = sources.get("v1/kv_offload/base.py", "")
+    out = set()
+    if "class OffloadingConnector" in connector and "offload_prompt_only" in spec_base:
+        out.add("cpu")
+        if "SupportsHMA" in connector:
+            out.add("hma")
+        if "/dev/shm" in sources.get("v1/kv_offload/cpu/shared_offload_region.py", ""):
+            out.add("shm")
+    return frozenset(out)
+
+
+OFFLOAD_SOURCES = ("distributed/kv_transfer/kv_connector/v1/offloading_connector.py", "v1/kv_offload/base.py",
+                   "v1/kv_offload/cpu/shared_offload_region.py")
+
+
+@functools.lru_cache(maxsize=1)
+def _offload_features() -> frozenset:
+    """OFFLOAD_FEATURES of the vLLM the launch command will run; empty when it cannot be found."""
+    root = _vllm_package()
+    if root is None:
+        return frozenset()
+    sources = {}
+    for rel in OFFLOAD_SOURCES:
+        try:
+            sources[rel] = root.joinpath(*rel.split("/")).read_text("utf-8")
+        except OSError:
+            continue
+    return offload_features_in(sources)
+
+
+def _shm_free() -> Optional[int]:
+    """Free bytes in /dev/shm, or None where there is none (not Linux)."""
+    try:
+        return shutil.disk_usage("/dev/shm").free if os.path.isdir("/dev/shm") else None
+    except OSError:
+        return None
+
+
+def vllm_tier_config(cfg: Config, port: int) -> dict:
+    """--kv-transfer-config for cfg.kv_tier: vLLM's native CPU tier (OffloadingConnector). Equivalent to
+    --kv-offloading-size with the native backend (config/vllm.py VllmConfig._post_init_kv_transfer_config sets
+    the same connector, kv_role and cpu_bytes_to_use), plus offload_prompt_only false: an answer is the next
+    turn's prompt; with the default (prompt tokens only, v1/kv_offload/base.py) it is stored only when that
+    turn arrives, by when the GPU may have evicted it. cpu_bytes_to_use is the total over every worker
+    (v1/kv_offload/cpu/spec.py CPUOffloadingSpec); tiers are offered at tensor-parallel size 1 only. A "+disk"
+    tier is refused, never launched as host-only (VLLM_NO_DISK)."""
+    host_gib, disk_gib = cfg.tier_gib
+    if disk_gib:
+        raise ValueError(f"{cfg.kv_tier}: {VLLM_NO_DISK}")
+    extra: dict = {"cpu_bytes_to_use": host_gib * GiB, "offload_prompt_only": False}
+    return {"kv_connector": "OffloadingConnector", "kv_role": "kv_both", "kv_connector_extra_config": extra}
+
+
 class VllmBackend(BaseBackend):
     name = "vllm"
     runtime_workspace_bytes = int(1.5 * GiB)  # CUDA context + CUDA graphs + activation workspace
@@ -444,7 +517,36 @@ class VllmBackend(BaseBackend):
             args += ["--disable-custom-all-reduce"]
         if self.report_reuse and _prompt_tokens_details_flag():
             args += ["--enable-prompt-tokens-details"]
+        if cfg.kv_tier is not None:
+            args += ["--kv-transfer-config", json.dumps(vllm_tier_config(cfg, port))]
         return LaunchSpec(args=args, env=env)
+
+    # ---- KV-cache tier
+
+    def tier_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
+        features = _offload_features()
+        if "cpu" not in features:
+            return ("the vLLM that would run has no OffloadingConnector with offload_prompt_only (read from "
+                    "its source)")
+        if cfg.tp > 1:
+            return "not offered with tensor parallelism (not read for it, and never run)"
+        if "expandable_segments:True" in os.environ.get("PYTORCH_CUDA_ALLOC_CONF", ""):
+            # config/vllm.py VllmConfig._verify_kv_transfer_compat refuses any KV connector with it.
+            return "PYTORCH_CUDA_ALLOC_CONF sets expandable_segments:True, which vLLM refuses with connectors"
+        if model.arch.is_hybrid and "hma" not in features:
+            return ("this vLLM's offloading connector does not support the hybrid KV cache manager, which "
+                    f"{model.arch.architecture} needs")
+        if model.arch.linear_layers and cfg.prefix_cache is False:
+            # distributed/kv_transfer/kv_connector/v1/offloading/config.py build_offloading_config asserts
+            # "Hybrid models (e.g. Mamba+Attention) need --enable-prefix-caching".
+            return "a model with linear-attention layers needs prefix caching on to offload"
+        return None
+
+    def tier_disk_refusal(self) -> Optional[str]:
+        return VLLM_NO_DISK
+
+    def tier_host_cap(self) -> Optional[int]:
+        return _shm_free() if "shm" in _offload_features() else None
 
     # Chunked-prefill token budgets to try. Small budgets interleave prefill with decode and protect
     # per-token latency; large ones finish long prompts in fewer steps and cut time to first token.
@@ -457,7 +559,8 @@ class VllmBackend(BaseBackend):
 
     def disagg_launch_spec(self, cfg: Config, model: PreparedModel, port: int, role: str,
                            kv_transfer_config: dict, gpu_index: int, side_channel_port: int) -> LaunchSpec:
-        spec = self.launch_spec(cfg, model, port)
+        # One --kv-transfer-config per engine: the phases' connector, never a KV-cache tier besides it.
+        spec = self.launch_spec(cfg.model_copy(update={"kv_tier": None}), model, port)
         spec.args += ["--kv-transfer-config", json.dumps(kv_transfer_config)]
         spec.env.update({
             "CUDA_VISIBLE_DEVICES": str(gpu_index),

@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
+from rigtune import kvtier
 from rigtune.backends.base import BaseBackend, free_port
 from rigtune.calibrate.measure import run_trial
 from rigtune.calibrate.objectives import Constraints, pick, rank
@@ -174,6 +175,10 @@ class SubprocessTrialRunner:
         baseline_mb = device_used_mb(hooks.gpu_ids)
         proc = None
         try:
+            if cfg.kv_tier is not None:
+                kvtier.clear(port)  # starts empty: files another engine left are hits this one never earned
+                if cfg.tier_gib[1]:
+                    kvtier.prepare(port)  # a 0700 directory of its own; a full disk fails the trial (OSError)
             proc = backend.launch(cfg, model, port, log_path=log_path)
             if not proc.wait_ready(timeout=self.startup_timeout):
                 tail, log = proc.tail_log(20), proc.tail_log(400)
@@ -216,6 +221,8 @@ class SubprocessTrialRunner:
             self._restore_power()
             if proc is not None:
                 proc.stop()
+            if cfg.kv_tier is not None:
+                kvtier.clear(port)  # its files are the served prompts' KV cache: never kept (SECURITY.md)
 
     def sweep(
         self,
@@ -241,6 +248,10 @@ class SubprocessTrialRunner:
         results: List[TrialResult] = []
         proc = None
         try:
+            if base.kv_tier is not None:
+                kvtier.clear(port)
+                if base.tier_gib[1]:
+                    kvtier.prepare(port)
             proc = backend.launch(base.model_copy(update={"power_limit_w": None, "sm_clock_mhz": None}), model,
                                   port, log_path=log_path)
             if not proc.wait_ready(timeout=self.startup_timeout):
@@ -272,6 +283,8 @@ class SubprocessTrialRunner:
             self._restore_power()
             if proc is not None:
                 proc.stop()
+            if base.kv_tier is not None:
+                kvtier.clear(port)
 
 
 # --------------------------------------------------------------------------- staged search

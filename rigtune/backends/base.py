@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 import httpx
 
-from rigtune.memory import MemoryModel
+from rigtune.memory import HOST_TIER_RESERVE, MemoryModel
 from rigtune.models import Config, HardwareDescriptor, ModelSpec, PreparedModel
 
 logger = logging.getLogger(__name__)
@@ -317,14 +317,39 @@ class BaseBackend:
         """Why `cfg` is expected to fail at start-up or under load, so the search does not try it. Default: never."""
         return None
 
+    # ---- KV-cache tier (--kv-tier; default: this backend offers none)
+
+    def tier_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
+        """Why `cfg` cannot get a host-RAM KV-cache tier (Config.kv_tier), or None when it can. The engines'
+        rules are read from their source; a backend without them offers no tier."""
+        return f"{self.name} has no KV-cache tier"
+
+    def tier_disk_refusal(self) -> Optional[str]:
+        """Why no disk tier can sit behind the host one (under rigtune.kvtier.trial_dir), or None when it can.
+        A disk tier is offered only where the engine bounds its size."""
+        return f"{self.name} has no disk tier"
+
+    def tier_host_cap(self) -> Optional[int]:
+        """Host bytes the engine can give a tier at most, beyond the planner's budget (vLLM: /dev/shm)."""
+        return None
+
+    def tier_host_reserve(self) -> int:
+        """Host RAM the tier must leave free: the planner's reserve, or more where the engine checks it."""
+        return HOST_TIER_RESERVE
+
+    def tier_host_need(self, cfg: Config, host_bytes: int) -> int:
+        """Host RAM a tier of `host_bytes` takes with `cfg`: more than that where the engine adds pools."""
+        return host_bytes
+
     def find_second_models(self, prepared: PreparedModel) -> List[str]:
         """Under --speculative all: look up second models (EAGLE3 heads, drafts) on the Hub and record them in
         `prepared`. Returns notes for the profile, such as a lookup the Hub could not answer. Default: none."""
         return []
 
     def replica_launch_spec(self, cfg: Config, model: PreparedModel, port: int, gpu_index: int) -> LaunchSpec:
-        """One full engine pinned to one GPU, for the replicas layout."""
-        spec = self.launch_spec(cfg, model, port)
+        """One full engine pinned to one GPU, for the replicas layout. Without a KV-cache tier: its host RAM
+        was budgeted for one engine, and every replica would take it again."""
+        spec = self.launch_spec(cfg.model_copy(update={"kv_tier": None}), model, port)
         spec.env = {**spec.env, "CUDA_VISIBLE_DEVICES": str(gpu_index)}
         return spec
 
