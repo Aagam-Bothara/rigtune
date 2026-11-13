@@ -6,13 +6,16 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
+import shutil
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
 
 from rigtune.hfconfig import kv_element_bytes
-from rigtune.models import ArchInfo, Config, HardwareDescriptor, MemoryEstimate, MiB, PreparedModel
+from rigtune.models import ArchInfo, Config, GiB, HardwareDescriptor, MemoryEstimate, MiB, PreparedModel
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +231,55 @@ def spec_state_notes(hw: HardwareDescriptor, model: PreparedModel, mm: MemoryMod
                      f"{need / 2**30:.1f} GiB ({hk.state_slots} states of {per / 2**20:.1f} MiB); the search does "
                      "not lower the batch for a speculation setting")
     return notes
+
+
+# --------------------------------------------------------------------------- KV-cache tiers (--kv-tier)
+
+# Host RAM a KV-cache tier leaves to everything else: the OS, the engine's own host memory (weights pass
+# through it while loading), the load generator. A starting point, not a measurement; SGLang keeps 10 GiB.
+HOST_TIER_RESERVE = 8 * GiB
+
+
+def host_tier_budget(hw: HardwareDescriptor, reserve: int = HOST_TIER_RESERVE) -> int:
+    """Host RAM a KV-cache tier may take: 0.95 x free RAM (which hardware.probe_cpu caps by a container's
+    memory limit) less the safety margin and `reserve`. Never negative."""
+    free = hw.cpu.ram_free_bytes
+    return max(0, int(BUDGET_FRACTION * free) - safety_margin(free) - reserve)
+
+
+def disk_tier_budget(root: Path) -> int:
+    """Disk a KV-cache tier under `root` may take: 0.95 x the free space of the filesystem it is (or would be
+    created) on, less the safety margin; 0 when that cannot be read. SGLang 0.5.19's file backend has no cap
+    unless one is set, so rigtune sets this one (backends/sglang.py) and removes the files after every trial
+    (rigtune.kvtier); vLLM 0.29's fs tier has no cap at all and is not offered."""
+    probe = Path(root)
+    while not probe.exists() and probe.parent != probe:
+        probe = probe.parent
+    try:
+        free = shutil.disk_usage(probe).free
+    except OSError:
+        return 0
+    return max(0, int(BUDGET_FRACTION * free) - safety_margin(free))
+
+
+def working_set_bytes(model: PreparedModel, cfg: Config, tokens: int, sessions: int, mm: MemoryModel) -> int:
+    """Bytes `sessions` conversations holding `tokens` tokens between them take in `cfg`'s KV cache, in the
+    same units as the GPU pool they are compared with: the hybrid planner's per-layer-type rules where the
+    backend has them (full layers hold every token, sliding layers at most a window per conversation, linear
+    layers one state each), the dense formula elsewhere. What sizes the engine's pools for running requests
+    does not apply to what is cached: the start-up floor (HybridKV.min_bytes, one request at max_model_len),
+    speculation's extra states (a running request holds them for its draft tokens), and SGLang's split of its
+    budget between pools (its mamba share and slots per running request, its SWA-to-full ratio).
+
+    For linear-attention layers this is a lower bound: one state per conversation. vLLM 0.29 caches a state at
+    block boundaries for prefix reuse (mamba_cache_mode "align"), and how many of those reach its offloading
+    tier per conversation was not read from its source; the GPU validation measures the tier's occupancy."""
+    held = cfg.model_copy(update={"batch": max(1, int(sessions)), "spec_decode": None})
+    hybrid = mm.hybrid_for(held, model.arch)
+    if hybrid is not None:
+        hybrid = dataclasses.replace(hybrid, min_bytes=0, state_slots=held.batch, state_share=None,
+                                     swa_full_tokens_ratio=None, swa_pool_tokens=None)
+    return kv_cache_bytes(model, held, max(0, int(tokens)), hybrid)
 
 
 def plan(
