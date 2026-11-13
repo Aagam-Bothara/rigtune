@@ -229,6 +229,8 @@ The [benchmarks](benchmarks.md) show where the GPU gain comes from: fewer bytes 
 
 A profile records any non-default options and is cached under its own name, so a `--quant bf16` profile is never served to a caller who asked for `auto`. `--layout` and `--phases` both use the extra GPUs, so only one of them can be set.
 
+`rigtune serve` checks a pick with a KV-cache tier again before it launches it, by the rules calibration used (host RAM and `/dev/shm`, the engine's own, and for a disk tier its filesystem and free space). When the tier no longer fits, it serves the same configuration without the tier and warns, in the log and under `runtime.kv_tier` at `/rigtune/profile` and in `/health`'s `backend`, rather than launch into a failure the check already predicts; that includes an older profile with a vLLM disk tier, which is never launched, and a disk tier whose directory would now be on a network filesystem, which is not launched host-only either. A disk tier is served from an empty directory of its own, deleted when the server restarts or stops. `--layout replicas` and `tp` serve without a tier.
+
 #### Labelled eval sets
 
 `--eval-set` takes `gsm8k` or a JSONL file with one item per line. The whole file is checked before any engine starts, and an error names the line:

@@ -47,6 +47,7 @@ class Supervisor:
         self._lock = threading.Lock()
         self.power = power  # rigtune.power.PowerController when the profile carries a power setting
         self.power_error: Optional[str] = None
+        self.tier_warning: Optional[str] = None  # set when a KV-cache tier pick no longer fits this host
 
     @property
     def base_url(self) -> str:
@@ -56,7 +57,38 @@ class Supervisor:
     def health_url(self) -> str:
         return self.base_url + self.backend.health_path
 
+    @property
+    def _tiered(self) -> bool:
+        return self.cfg.kv_tier is not None and self.gpu_index is None  # replicas launch without a tier
+
+    def _check_tier(self) -> None:
+        """A KV-cache tier was sized for this host when it was calibrated. Check it again before serving, by
+        the same rules calibration used (pipeline.tier_refusal: the engine's own, host RAM and /dev/shm, the
+        disk tier's engine, filesystem and space). When it no longer fits, serve the same configuration
+        without the tier, with a warning, rather than launch into a failure the check already predicts (or
+        swap the host). That covers a profile with a vLLM disk tier, which is no longer offered, and one whose
+        disk tier would now land on a network filesystem: neither is launched, nor launched host-only."""
+        if not self._tiered:
+            return
+        from rigtune.hardware import probe_cpu
+        from rigtune.models import HardwareDescriptor
+        from rigtune.pipeline import tier_refusal
+
+        try:
+            hw = HardwareDescriptor(os="", python="", cpu=probe_cpu())
+            reason = tier_refusal(hw, self.backend, self.model, self.cfg)
+        except Exception as exc:
+            reason = f"its host memory could not be checked ({exc})"
+        if reason:
+            self.tier_warning = f"serving without the {self.cfg.kv_tier} KV-cache tier calibrated: {reason}"
+            logger.warning(self.tier_warning)
+            self.cfg = self.cfg.model_copy(update={"kv_tier": None})
+
     def start(self) -> None:
+        from rigtune import kvtier
+
+        kvtier.sweep()  # disk tiers a killed rigtune left behind
+        self._check_tier()
         self._launch()
         self._apply_power()
         self._thread = threading.Thread(target=self._watch, name="rigtune-supervisor", daemon=True)
@@ -80,6 +112,12 @@ class Supervisor:
 
     def _launch(self) -> None:
         with self._lock:
+            if self._tiered:
+                from rigtune import kvtier
+
+                kvtier.clear(self.port)  # a restarted engine starts with an empty disk tier
+                if self.cfg.tier_gib[1]:
+                    kvtier.prepare(self.port)
             if self.gpu_index is not None:
                 spec = self.backend.replica_launch_spec(self.cfg, self.model, self.port, self.gpu_index)
                 self.process = Process(spec, self.port, self.health_url, log_path=self.log_path).start()
@@ -132,6 +170,10 @@ class Supervisor:
             self._thread.join(timeout=5)
         if self.process is not None:
             self.process.stop()
+        if self._tiered:
+            from rigtune import kvtier
+
+            kvtier.clear(self.port)  # the disk tier holds served prompts' KV cache: never left behind
         if self.power is not None and getattr(self.power, "applied", None) is not None:
             try:
                 self.power.restore()  # type: ignore[attr-defined]
@@ -147,6 +189,8 @@ class Supervisor:
             "alive": bool(self.process and self.process.alive()),
             "restarts": self.restarts,
             "last_error": self.last_error,
+            **({"kv_tier": {"tier": self.cfg.kv_tier, "warning": self.tier_warning}}
+               if self._tiered or self.tier_warning else {}),
             "power": {
                 "applied": (self.power.applied.label()  # type: ignore[attr-defined]
                             if self.power is not None and getattr(self.power, "applied", None) else None),
