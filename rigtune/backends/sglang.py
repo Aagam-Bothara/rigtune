@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import logging
+import subprocess
 import sys
-from typing import List, Optional, Tuple
+from pathlib import Path
+from typing import FrozenSet, List, Optional, Tuple
 
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from rigtune.backends.vllm import KNOWN_ARCHS, PAGED_KV_FRACTION
@@ -28,6 +31,69 @@ def sglang_registry_archs() -> Optional[set]:
     except Exception as exc:
         logger.debug("sglang registry unavailable: %s", exc)
         return None
+
+
+# Which speculative methods an SGLang release has, told by its argument parser's source rather than by importing
+# it (seconds, and often a separate environment: $SGLANG_PYTHON). From the release sources:
+#   0.5.2:  --speculative-algorithm choices=["EAGLE", "EAGLE3", "NEXTN", "STANDALONE"]; no n-gram.
+#   0.5.3:  adds "NGRAM" and the speculative_ngram_* arguments.
+#   0.5.19: no choices list; the help reads "Builtins: EAGLE, EAGLE3, NEXTN, STANDALONE, NGRAM, DFLASH, DSPARK",
+#           and the n-gram settings are applied in srt/arg_groups/speculative_hook.py.
+# What rigtune relies on for a second model (it always runs the V2 overlap worker, draft weights load before the
+# KV pools are sized, the draft's KV is counted inside the fraction) was read in 0.5.19 only, so EAGLE3 and
+# STANDALONE are offered where the source has 0.5.19's DSPARK; which release first had it was not checked.
+# Older releases with n-gram get n-gram only, and releases without STANDALONE (before 0.5.2) nothing.
+SGLANG_SPEC_FROM = "STANDALONE"
+SGLANG_NGRAM_MARKER = "speculative_ngram_max_bfs_breadth"
+SGLANG_SECOND_MODEL_MARKER = "DSPARK"
+
+
+def spec_methods_in(source: str) -> FrozenSet[str]:
+    """rigtune's spec kinds ("ngram", "eagle3", "draft") that SGLang argument-parser source text shows."""
+    if SGLANG_SPEC_FROM not in source:
+        return frozenset()
+    out = {"ngram"} if SGLANG_NGRAM_MARKER in source else set()
+    if SGLANG_SECOND_MODEL_MARKER in source:
+        out |= {"eagle3", "draft"}
+    return frozenset(out)
+
+
+def _sglang_package_dir(python: str) -> Optional[Path]:
+    """Where `python` would import sglang from, found without importing it."""
+    if python == sys.executable:
+        spec = importlib.util.find_spec("sglang")
+        locs = list(spec.submodule_search_locations or []) if spec else []
+        return Path(locs[0]) if locs else None
+    code = ("import importlib.util as u; s = u.find_spec('sglang'); "
+            "print(list(s.submodule_search_locations or [''])[0] if s else '')")
+    try:
+        out = subprocess.run([python, "-c", code], capture_output=True, text=True, timeout=60)
+    except Exception as exc:
+        logger.debug("%s could not locate sglang: %s", python, exc)
+        return None
+    found = out.stdout.strip() if out.returncode == 0 else ""
+    return Path(found) if found else None
+
+
+def _server_args_source(pkg: Path) -> str:
+    """srt/server_args.py, plus srt/arg_groups/*.py where a release has split its arguments out."""
+    files = [pkg / "srt" / "server_args.py"] + sorted((pkg / "srt" / "arg_groups").glob("*.py"))
+    texts = []
+    for f in files:
+        try:
+            texts.append(f.read_text("utf-8"))
+        except OSError:
+            continue
+    return "\n".join(texts)
+
+
+@functools.lru_cache(maxsize=1)
+def sglang_spec_methods() -> FrozenSet[str]:
+    """rigtune's spec kinds ("ngram", "eagle3", "draft") the SGLang that would be launched offers. Empty when
+    SGLang is not found or predates 0.5.2."""
+    python = sglang_python()
+    pkg = _sglang_package_dir(python) if python else None
+    return spec_methods_in(_server_args_source(pkg)) if pkg else frozenset()
 
 
 class SglangBackend(BaseBackend):
