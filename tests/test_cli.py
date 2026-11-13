@@ -66,6 +66,14 @@ def test_session_options_need_a_session_file(tmp_path):
     assert wl.session_system == "Shared system prompt."
 
 
+def test_history_is_refused_for_a_file_of_explicit_requests(tmp_path):
+    agent = tmp_path / "agent.jsonl"
+    agent.write_text(json.dumps({"session": "a", "requests": [{"messages": [{"role": "user", "content": "q"}]}]})
+                     + "\n", encoding="utf-8")
+    r = runner.invoke(app, ["bench", "x/y", "--workload-file", str(agent), "--history", "recorded"])
+    assert r.exit_code == 2 and "--history" in r.output, r.output
+
+
 def test_serve_listens_on_this_machine_only_by_default():
     """0.0.0.0 would put an unauthenticated inference endpoint on every network the host can reach."""
     import typer.main

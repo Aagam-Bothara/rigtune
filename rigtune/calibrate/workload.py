@@ -105,7 +105,9 @@ class Workload:
     sessions: bool = False
     force_sessions: bool = False  # --sessions: every line is a session, whether or not it names one
     turns_cap: int = DEFAULT_TURNS_CAP
-    history: str = "generated"  # what a later turn carries as the earlier answers: "generated" | "recorded"
+    # What a later turn carries as the earlier answers: "generated" | "recorded", or "explicit" for a file that gives
+    # every request's messages whole.
+    history: str = "generated"
     session_pool: int = 0  # sessions live at once per level (0: one per concurrency slot)
     turns_per_slot: int = TURNS_PER_SLOT
     level_turns: int = 0  # a fixed turn budget in place of turn_budget's: one load-generator process's share
@@ -276,7 +278,9 @@ class Workload:
     def describe(self) -> str:
         if self.sessions:
             return (f"{self.name}: {self.turns_per_slot} turns per slot from {self._source_label} sessions of up to "
-                    f"{self.turns_cap} turns with {self.history} history, prompts up to {self.prefill_tokens} "
+                    f"{self.turns_cap} "
+                    + ("requests given whole" if self.history == "explicit" else f"turns with {self.history} history")
+                    + f", prompts up to {self.prefill_tokens} "
                     f"tokens, answers up to {self.decode_tokens} tokens (natural stop), "
                     f"{f'{self.session_pool} sessions live' if self.session_pool else 'one session per slot'}, "
                     f"concurrency {'/'.join(str(c) for c in self.concurrencies)}, "
@@ -452,14 +456,25 @@ def _session_workload(p: Path, sessions: List[Session], t: Workload, session_poo
     silently dropped every 4k context. An answer the file left empty is budgeted at the median of those it did
     record (at the cap when it recorded none). Explicit steps are sized by their own messages, counted the way
     replay estimates a prompt (measure._LiveSession.next_prompt_tokens). The name says it is a session workload
-    and carries every option that changes what is sent, so no profile is ever served across them."""
+    and carries every option that changes what is sent, so no profile is ever served across them.
+
+    A file of explicit requests (an agent's: each request's messages given whole) has no history to choose and no
+    system prompt to replace, so --history and --session-system are refused for it, its history is recorded as
+    "explicit", and its name says so ("-sessions-explicit"), so it can never share a name with a file read before
+    explicit requests existed."""
+    explicit = any(step.explicit for s in sessions for step in s.steps)
+    if explicit:
+        given = [name for name, v in (("--history", history), ("--session-system", session_system)) if v is not None]
+        if given:
+            raise ValueError(f"{p.name} gives each request's messages whole, so {', '.join(given)} cannot apply to it: "
+                             "the file says what every request sends")
     cap = DEFAULT_TURNS_CAP if turns_cap is None else int(turns_cap)
-    hist = history or "generated"
+    hist = "explicit" if explicit else history or "generated"
     pool = int(session_pool or 0)
     system = (session_system or "").lstrip("\ufeff").strip()
     if cap < 1:
         raise ValueError("--session-turns must be at least 1")
-    if hist not in HISTORIES:
+    if hist not in HISTORIES and not explicit:
         raise ValueError(f"--history must be one of {', '.join(HISTORIES)}")
     if pool < 0:
         raise ValueError("--session-pool cannot be negative")
@@ -468,7 +483,8 @@ def _session_workload(p: Path, sessions: List[Session], t: Workload, session_poo
                        "per slot", pool, max(t.concurrencies))
     digest = hashlib.sha256(p.read_bytes() + (b"\0system\0" + system.encode() if system else b"")).hexdigest()[:8]
     stem = re.sub(r"[^A-Za-z0-9_.-]+", "-", p.stem)[:40] or "prompts"
-    name = (f"file-{stem}-{digest}-sessions" + (f"-t{cap}" if cap != DEFAULT_TURNS_CAP else "")
+    name = (f"file-{stem}-{digest}-sessions" + ("-explicit" if explicit else "")
+            + (f"-t{cap}" if cap != DEFAULT_TURNS_CAP else "")
             + (f"-pool{pool}" if pool else "") + ("-recorded" if hist == "recorded" else ""))
     decode = max(t.decode_tokens, 512)
 

@@ -114,6 +114,24 @@ A flat file sends every conversation as one prompt, so calibration never sees th
 
 Session replay is exercised by tests only; no session file has run on hardware.
 
+#### Agent traces: explicit requests
+
+Session replay assumes each turn appends to the conversation before it. An agent rewrites its prompt instead: it edits its memory in place, summarises and drops old messages, and follows a tool call with a request of its own. A file of explicit requests gives every request's whole message list, and rigtune sends exactly those lists:
+
+```jsonl
+{"session": "a1", "requests": [{"messages": [{"role": "system", "content": "..."}, {"role": "user", "content": "hi"}]}, {"messages": [...], "chain": true, "tag": "heartbeat"}]}
+{"session": "a2", "request": 1, "messages": [...]}
+{"session": "a2", "request": 2, "messages": [...], "max_tokens": 64}
+```
+
+- Only a non-empty `requests` list of objects with `messages`, or a whole-number `request` beside `session` and `messages`, makes a file one of explicit requests. Every other file reads as before, with the same requests and the same name: a `requests` or `request` key of any other shape (`"request": "req-7"`, `"requests": []`) is metadata and is ignored, and so is either key beside `prompt` or `text`, as a `session` key there always was. A file of explicit requests is named `...-sessions-explicit`, so it can never take the name of a file read before; in particular a `{"session", "request": 3, "messages"}` line, which used to be a conversation replayed turn by turn, is now one request, under the new name. Every line of an explicit file must take one of the two forms above (errors name the line); the one-request-per-line form groups lines by `session`, and `request` must increase.
+- Messages are kept byte for byte, with no stripping. Each needs a `role` of `system`, `user` or `assistant` and a string `content`, and nothing else: write a tool call as assistant text and its result as a user message, since chat templates and tool parsers differ between engines. Keys on a line other than these (a generator's parameters, say) are ignored.
+- `chain: true` marks a request sent the moment the one before it finished, as an agent's follow-up to a tool call is. `tag` labels a request in what is recorded; `max_tokens` caps its answer in place of the workload's.
+- `--history` and `--session-system` are refused for such a file, since it says what every request sends; the profile records its history as `explicit`. `--session-pool` and `--session-turns` apply as for any session file. Files are read as UTF-8 text; a gzip-compressed file is not accepted. The shortest context the planner keeps is set by the largest request.
+- The warm-up sends the system prompt sessions share, as for any session file: here, the first message of a session's first request when it is a system message.
+
+Explicit requests are exercised by tests only; no such file has run on hardware.
+
 Prompt lengths are exact when the model's tokenizer is available (prompts are fitted to the target token count), and output tokens are counted from the server's `usage` or the tokenizer, never from stream chunks. The planner drops any config whose context cannot hold prefill + decode.
 
 ```bash
