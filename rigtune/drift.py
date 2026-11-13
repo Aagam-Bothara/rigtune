@@ -70,6 +70,13 @@ class TrafficWatch:
         self.prompt_tokens: Deque[int] = deque(maxlen=window)
         self.completion_tokens: Deque[int] = deque(maxlen=window)
         self.concurrency: Deque[int] = deque(maxlen=window)
+        # Prefix reuse, (prompt tokens, cached tokens) per reply, watched for session profiles only: they launch the
+        # engine to report a count and record what calibration achieved. SGLang leaves the count out when nothing
+        # was cached, so a reply without one counts as zero, as it did in calibration. Other profiles' reports keep
+        # the shape they had.
+        self.calibrated_reuse = spec.get("reuse_achieved")
+        self.sessions = bool(spec.get("sessions"))
+        self.reuse: Deque[tuple] = deque(maxlen=window)
         self._warned = False
         self._lock = threading.Lock()
 
@@ -102,6 +109,24 @@ class TrafficWatch:
                 value = usage.get(key)
                 if isinstance(value, int) and value > 0:
                     into.append(value)
+        self._record_reuse(usage)
+
+    def _record_reuse(self, usage: Dict[str, Any]) -> None:
+        details = usage.get("prompt_tokens_details")
+        prompt = usage.get("prompt_tokens")
+        if not self.sessions or not isinstance(prompt, int) or prompt <= 0:
+            return
+        cached = details.get("cached_tokens") if isinstance(details, dict) else None
+        if not isinstance(cached, int):
+            cached = 0
+        with self._lock:
+            self.reuse.append((prompt, cached))
+
+    def live_reuse(self) -> Optional[float]:
+        """Share of prompt tokens served from the prefix cache, over the replies counted."""
+        with self._lock:
+            prompts = sum(p for p, _ in self.reuse)
+            return round(sum(c for _, c in self.reuse) / prompts, 4) if prompts else None
 
     def record_stream_chunk(self, chunk: bytes) -> None:
         """Take token counts out of a streamed reply's usage chunk.
@@ -131,6 +156,7 @@ class TrafficWatch:
                     value = usage.get(key)
                     if isinstance(value, int) and value > 0:
                         into.append(value)
+            self._record_reuse(usage)
 
     def record_ttft(self, ms: float) -> None:
         """Time from the request reaching the proxy to the first streamed chunk leaving it.
@@ -218,6 +244,8 @@ class TrafficWatch:
 
     def report(self) -> Dict[str, Any]:
         findings = self.findings()
+        reuse = {"prefix_reuse": {"live": self.live_reuse(), "calibrated": self.calibrated_reuse,
+                                  "replies_counted": len(self.reuse)}} if self.sessions else {}
         return {
             "calibrated_workload": self.workload_name,
             "requests_seen": self.requests,
@@ -237,6 +265,9 @@ class TrafficWatch:
                         "streamed_requests_timed": len(self.ttft_ms),
                         "findings": self.latency_findings(),
                         "verdict": self.latency_verdict()},
+            # Reported, never warned about: reuse falls with a load spike or a cold cache as well as with a change
+            # in traffic, and only the last is something re-tuning would fix.
+            **reuse,
             "drift": findings,
             "verdict": ("not enough traffic yet" if not self.enough_data else
                         "drifted from the calibrated workload" if findings else

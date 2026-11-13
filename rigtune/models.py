@@ -305,6 +305,10 @@ class TrialMetrics(BaseModel):
     idle_gap: Optional[float] = None  # median of those dispatched after its previous step finished (P - c)
     working_set_tokens: Optional[int] = None  # peak of the live sessions' last prompts and answers, in tokens
     ttft_by_turn_ms: Dict[str, float] = Field(default_factory=dict)  # median time to first token, by step number
+    # The engine's prompt counts for the steps served (p50/p90/max/mean), and steps reached per session (mean/max):
+    # what a session profile records for the drift watch, from the level its winning trial was scored at.
+    prompt_tokens_seen: Dict[str, int] = Field(default_factory=dict)
+    turns_seen: Dict[str, float] = Field(default_factory=dict)
 
     # A trial is not invalidated by a couple of degenerate requests. Small models sometimes emit
     # end-of-sequence immediately, producing no tokens; a backend that is actually broken fails

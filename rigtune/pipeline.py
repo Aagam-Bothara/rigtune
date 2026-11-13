@@ -302,6 +302,15 @@ def search_space(hw: HardwareDescriptor, plan: "PlanResult", reg: Dict[str, Base
     return list(out.values())
 
 
+def scored_level(winner, results, objective: str, constraints: Constraints):
+    """The concurrency level the objective scored the winning trial at (objectives.Ranked.metrics): what a session
+    profile records as served, rather than the trial's highest-throughput level, which the objective may have
+    rejected for breaking a ceiling. Falls back to the trial's summary when the winner is not among the ranked."""
+    from rigtune.calibrate.objectives import rank
+
+    return next((r.metrics for r in rank(results, objective, constraints) if r.result is winner), winner.metrics)
+
+
 def select(
     hw: HardwareDescriptor, spec: ModelSpec, force: Optional[str] = None, workload: Optional[Workload] = None,
     report_reuse: bool = False,
@@ -479,6 +488,7 @@ def _profile_for(
     notes: Optional[List[str]] = None,
     workload: Optional[Workload] = None,
     prepared_all: Optional[Dict[str, PreparedModel]] = None,
+    served: Optional[object] = None,
 ) -> Profile:
     launch = backend.launch_spec(cfg, prepared, 0)
     workload = workload or get_workload("default")
@@ -489,7 +499,7 @@ def _profile_for(
         model_id=spec.hf_id,
         objective=objective,
         workload=workload.name,
-        workload_spec=workload.spec(),
+        workload_spec=workload.spec(served),
         backend=backend.name,
         backend_version=backend.version(hw),
         config=cfg,
@@ -611,7 +621,8 @@ def calibrate(
     backend = reg[winner.config.backend]
     prepared = plan.prepared[winner.config.backend]
     profile = _profile_for(hw, spec, objective, backend, winner.config, prepared, table=search.results,
-                           notes=notes, workload=workload, prepared_all=plan.prepared)
+                           notes=notes, workload=workload, prepared_all=plan.prepared,
+                           served=scored_level(winner, search.results, objective, constraints))
     profile.calibration_seconds = elapsed
     profile.calibration_trials = len(search.results)
     profile.power_mode = power_mode

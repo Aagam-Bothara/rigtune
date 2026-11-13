@@ -692,6 +692,16 @@ def _session_stats(outcomes: List[RequestOutcome], wall_s: float) -> Dict[str, A
         if values:
             out["reuse_distance" if name == "distance" else name] = statistics.median(values)
     served = [o for o in sent if o.ok and o.prompt_tokens is not None]
+    if served:  # what live traffic will be compared with: a later step's prompt holds its history
+        lengths = sorted(o.prompt_tokens for o in served)
+        out["prompt_tokens_seen"] = {"p50": _nearest_rank(lengths, 50), "p90": _nearest_rank(lengths, 90),
+                                     "max": lengths[-1], "mean": int(round(sum(lengths) / len(lengths)))}
+    reached: Dict[str, int] = {}
+    for o in sent:
+        if o.ok:
+            reached[o.session] = max(reached.get(o.session, 0), o.turn)
+    if reached:
+        out["turns_seen"] = {"mean": round(sum(reached.values()) / len(reached), 2), "max": max(reached.values())}
     out["prompt_tokens_total"] = 0
     if any(o.cached_tokens is not None for o in served):  # SGLang's way of saying zero, once it says anything
         out.update(_reuse(served, ""))
@@ -713,6 +723,10 @@ def _session_stats(outcomes: List[RequestOutcome], wall_s: float) -> Dict[str, A
             ttfts.setdefault(o.turn, []).append(o.ttft_s * 1000)
     out["ttft_by_turn_ms"] = {str(t): round(statistics.median(v), 1) for t, v in sorted(ttfts.items())}
     return out
+
+
+def _nearest_rank(ordered: List[int], pct: float) -> int:
+    return int(ordered[min(len(ordered) - 1, max(0, int(round(pct / 100 * (len(ordered) - 1)))))])
 
 
 def _reuse(served: List[RequestOutcome], part: str) -> Dict[str, Any]:
@@ -773,7 +787,8 @@ def _engine_reuse(m: TrialMetrics, before: Optional[Counters], after: Optional[C
 _REUSE_FIELDS = ("prompt_tokens_total", "cached_tokens_total", "prefix_reuse", "prefix_reuse_first",
                  "prefix_reuse_later", "reuse_expected", "reuse_expected_first", "reuse_expected_later",
                  "reuse_source", "sessions", "sessions_cut", "sessions_truncated", "mean_in_flight", "effective_pool",
-                 "reuse_distance", "idle_gap", "working_set_tokens", "ttft_by_turn_ms")
+                 "reuse_distance", "idle_gap", "working_set_tokens", "ttft_by_turn_ms", "prompt_tokens_seen",
+                 "turns_seen")
 
 
 def _level_workload(workload: Workload, k: int, counter: TokenCounter) -> Workload:

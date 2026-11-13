@@ -296,8 +296,11 @@ class Workload:
             + (f", TPOT ceiling {self.tpot_ceiling_ms:.0f} ms" if self.tpot_ceiling_ms else "")
         )
 
-    def spec(self) -> Dict[str, object]:
-        """Serialisable description stored in profiles and benchmark results."""
+    def spec(self, served: Optional[object] = None) -> Dict[str, object]:
+        """Serialisable description stored in profiles and benchmark results. For a session file, `served` (the
+        winning trial's TrialMetrics) supplies what replay served: prompt lengths from the engine's own counts,
+        turns reached, and the reuse achieved. They come from that one trial, not from every trial, so neither a
+        losing configuration nor a prefix-cache-off variant colours what live traffic is compared with."""
         stats = self.prompt_token_stats()
         return {
             "name": self.name,
@@ -313,12 +316,21 @@ class Workload:
             "natural_stop": self.natural_stop,
             **({"requests_per_slot": self.requests_per_slot} if self.requests_per_slot else {}),
             **({"prompt_tokens_seen": stats} if stats else {}),
-            **(self._session_spec() if self.sessions else {}),
+            **(self._session_spec(served) if self.sessions else {}),
         }
 
-    def _session_spec(self) -> Dict[str, object]:
-        return {"sessions": True, "turns_cap": self.turns_cap, "history": self.history,
-                "session_pool": self.session_pool, "turns_per_slot": self.turns_per_slot}
+    def _session_spec(self, served: Optional[object] = None) -> Dict[str, object]:
+        out: Dict[str, object] = {"sessions": True, "turns_cap": self.turns_cap, "history": self.history,
+                                  "session_pool": self.session_pool, "turns_per_slot": self.turns_per_slot}
+        if served is not None:
+            if getattr(served, "prompt_tokens_seen", None):  # replaces the first-turn counts
+                out["prompt_tokens_seen"] = dict(served.prompt_tokens_seen)
+            for key, name in (("turns_seen", "turns_seen"), ("prefix_reuse", "reuse_achieved"),
+                              ("effective_pool", "effective_pool"), ("reuse_distance", "reuse_distance")):
+                value = getattr(served, key, None)
+                if value not in (None, {}):
+                    out[name] = value
+        return out
 
 
 _PRESETS: Dict[str, Workload] = {
