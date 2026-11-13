@@ -165,6 +165,26 @@ def level_rule(objective: str, constraints: Constraints, opts: SearchOptions,
     return enough_level(objective, constraints)
 
 
+def spec_state_notes_for(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult", cfg: Config,
+                         opts: SearchOptions) -> List[str]:
+    """Notes for the speculation settings a hybrid model's recurrent state keeps from the pick's batch
+    (rigtune.memory.spec_state_notes). Empty for models without linear-attention layers."""
+    pm = plan.prepared.get(cfg.backend)
+    if not opts.speculative or pm is None or not pm.arch.linear_layers:
+        return []
+    from rigtune.memory import spec_state_notes
+
+    be = reg[cfg.backend]
+    gmu = cfg.gmu_before_spec if cfg.gmu_before_spec is not None else cfg.gpu_memory_utilization
+    base = cfg.model_copy(update={"spec_decode": None, "gpu_memory_utilization": gmu, "gmu_before_spec": None})
+    try:
+        variants = be.spec_variants(base, pm, hw, opts.speculative_all)
+        return spec_state_notes(hw, pm, be.memory_model(hw), base, variants)
+    except Exception as exc:
+        logger.debug("no speculation state notes for %s: %s", cfg.key(), exc)
+        return []
+
+
 def combination_fits(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult"):
     """Whether a combined config can run: it must fit in memory, and on vLLM and SGLang the prefill
     budget must cover the batch (each stage keeps that true on its own; a combination may not)."""
@@ -575,6 +595,7 @@ def calibrate(
         raise RuntimeError("calibration failed: " + "; ".join(notes))
     elapsed = time.monotonic() - t0
     notes = power_notes + list(plan.notes) + notes
+    notes += spec_state_notes_for(hw, reg, plan, winner.config, opts)
     notes.append(f"calibration took {elapsed:.0f}s over {len(search.results)} trials")
     notes.append(f"workload: {workload.describe()}")
     backend = reg[winner.config.backend]

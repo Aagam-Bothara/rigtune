@@ -184,6 +184,52 @@ def estimate(
     )
 
 
+def layout_note(model: PreparedModel, mm: MemoryModel) -> Optional[str]:
+    """Why this plan sizes a hybrid-looking model's KV as if every layer kept a full cache; None when it does not.
+
+    Three cases: the config's layer layout was not recognised (ArchInfo.layout_note); this backend has no hybrid
+    rules read from its engine's source (MemoryModel.hybrid_fn); or the engine itself keeps every layer full for
+    this architecture (MemoryModel.full_kv_fn: SGLang for Gemma 2 and 3). Dense models get None.
+    """
+    arch = model.arch
+    if arch.layout_note:
+        return (f"{arch.architecture}: {arch.layout_note}; KV is planned as if every layer kept a full cache, "
+                "which overstates it for sliding-window layers and leaves out any recurrent state")
+    if arch.is_hybrid and mm.hybrid_fn is None:
+        return (f"{arch.architecture} has a hybrid attention layout, but {model.backend}'s hybrid KV rules are not "
+                "verified; KV is planned as if every layer kept a full cache")
+    reason = mm.full_kv_reason(arch)
+    if reason:
+        return f"{reason}; KV is planned that way"
+    return None
+
+
+def spec_state_notes(hw: HardwareDescriptor, model: PreparedModel, mm: MemoryModel, base: Config,
+                     variants: Sequence[Config]) -> List[str]:
+    """Notes for speculation settings the planner does not fit at `base`'s batch because of recurrent state.
+
+    Only models with linear-attention layers can need this: each speculative token adds a state per sequence
+    (see the backends' hybrid rules), so a method that fits a dense model can be refused for state memory. The
+    search does not step the batch down for a speculation setting (that would change dense searches too), so
+    the note says what the method would need.
+    """
+    if not model.arch.linear_layers or not estimate(hw, model, base, mm).feasible:
+        return []
+    notes = []
+    for v in variants:
+        if not v.spec_decode or estimate(hw, model, v, mm).feasible:
+            continue
+        hk = mm.hybrid_for(v, model.arch)
+        if hk is None:
+            continue
+        per = hk.state_bytes if hk.state_bytes is not None else model.arch.linear_state_bytes
+        need = per * hk.state_slots
+        notes.append(f"{v.backend} {v.spec_decode} at batch {v.batch} does not fit: its recurrent state alone is "
+                     f"{need / 2**30:.1f} GiB ({hk.state_slots} states of {per / 2**20:.1f} MiB); the search does "
+                     "not lower the batch for a speculation setting")
+    return notes
+
+
 def plan(
     hw: HardwareDescriptor,
     model: PreparedModel,
@@ -191,11 +237,9 @@ def plan(
     mm: MemoryModel,
 ) -> List[Tuple[Config, MemoryEstimate]]:
     """Return (config, estimate) pairs that fit. Also checks host RAM for CPU-offloaded layers."""
-    if model.arch.is_hybrid and mm.hybrid_fn is None:
-        logger.info("%s: %s has a hybrid attention layout, but this backend's hybrid KV rules are not verified; "
-                    "planning KV as if every layer kept a full cache", model.backend, model.arch.architecture)
-    elif mm.full_kv_reason(model.arch):
-        logger.info("%s: %s", model.backend, mm.full_kv_reason(model.arch))
+    note = layout_note(model, mm)
+    if note:
+        logger.info("%s: %s", model.backend, note)
     kept: List[Tuple[Config, MemoryEstimate]] = []
     for cfg in configs:
         est = estimate(hw, model, cfg, mm)

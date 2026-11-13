@@ -355,3 +355,83 @@ def test_vllm_log_kv_tokens_line_still_parses():
     m = parse_vllm("Available KV cache memory: 9.81 GiB\nGPU KV cache size: 74,976 tokens, Maximum concurrency "
                    "for 4,096 tokens per request: 18.30x\n")
     assert m.kv_mb == pytest.approx(9.81 * 1024) and m.kv_tokens == 74_976
+
+
+# ---------------------------------------------------------------- the note in the plan
+
+
+def test_layout_note_only_when_the_estimate_falls_back(hw_rtx4090):
+    from rigtune.memory import layout_note
+
+    vllm_mm = VllmBackend().memory_model(hw_rtx4090)
+    assert layout_note(qwen25(), vllm_mm) is None  # dense
+    assert layout_note(qwen35(), vllm_mm) is None  # hybrid, rules verified
+    assert layout_note(gemma3("vllm"), vllm_mm) is None  # vLLM frees Gemma 3's sliding layers
+    assert "rules are not verified" in layout_note(qwen35("llamacpp-cuda"), LlamaCppCudaBackend().memory_model(
+        hw_rtx4090))
+    note = layout_note(gemma3("sglang"), SglangBackend().memory_model(hw_rtx4090))
+    assert note.startswith("SGLang keeps a full KV cache on every layer of Gemma3ForConditionalGeneration")
+    odd = qwen35()
+    odd.arch = odd.arch.model_copy(update={"full_attention_layers": None, "linear_layers": 0, "linear_state_bytes": 0,
+                                           "layout_note": "unrecognised layer types mamba"})
+    assert layout_note(odd, vllm_mm).startswith("Qwen3_5ForConditionalGeneration: unrecognised layer types mamba")
+
+
+def test_plan_command_notes_an_unrecognised_layout(hw_a100, monkeypatch):
+    import rigtune.backends.vllm as vl
+    import rigtune.hardware as hwmod
+    from typer.testing import CliRunner
+
+    from rigtune.cli import app
+
+    config = json.loads((FIXTURES / "qwen3_5_9b_config.json").read_text(encoding="utf-8"))
+    config["text_config"]["layer_types"] = ["mamba"] * 24 + ["full_attention"] * 8
+    arch = arch_from_config(config)
+    monkeypatch.setattr(hwmod, "probe", lambda: hw_a100)
+    monkeypatch.setattr(vl, "load_arch", lambda spec, token=None: arch)
+    monkeypatch.setattr(vl, "vllm_registry_archs", lambda: {arch.architecture})
+    r = CliRunner().invoke(app, ["plan", "Qwen/Qwen3.5-9B", "--backend", "vllm", "--json"])
+    assert r.exit_code == 0, r.output
+    assert "unrecognised layer types mamba" in json.loads(r.output)["_notes"]["vllm"]
+    r = CliRunner().invoke(app, ["plan", "Qwen/Qwen3.5-9B", "--backend", "vllm"])
+    assert r.exit_code == 0 and "note: " in r.output
+
+
+def test_plan_command_has_no_notes_for_a_dense_model(hw_a100, monkeypatch):
+    import rigtune.hardware as hwmod
+    from typer.testing import CliRunner
+
+    from rigtune.cli import app
+
+    monkeypatch.setattr(hwmod, "probe", lambda: hw_a100)
+    r = CliRunner().invoke(app, ["plan", "meta-llama/Llama-3.2-3B-Instruct", "--backend", "vllm", "--json"])
+    assert r.exit_code == 0 and "_notes" not in json.loads(r.output)
+
+
+def test_a_speculation_setting_refused_for_state_memory_is_noted(hw_rtx4090):
+    from rigtune.memory import spec_state_notes
+
+    mm = VllmBackend().memory_model(hw_rtx4090)
+    model = qwen35(weights={"fp8": 9_653_100_528})
+    base = Config(backend="vllm", quant="fp8", ctx=4096, batch=16, gpu_memory_utilization=0.95)
+    suffix = base.model_copy(update={"spec_decode": "suffix:24"})
+    assert estimate(hw_rtx4090, model, base, mm).feasible and not estimate(hw_rtx4090, model, suffix, mm).feasible
+    notes = spec_state_notes(hw_rtx4090, model, mm, base, [suffix])
+    # 16 sequences x 25 states x 24 layers x 2,555,904 B = 24,536,678,400 B (22.9 GiB).
+    assert notes == ["vllm suffix:24 at batch 16 does not fit: its recurrent state alone is 22.9 GiB (400 states "
+                     "of 58.5 MiB); the search does not lower the batch for a speculation setting"]
+    dense = qwen25()
+    plain = base.model_copy(update={"ctx": 4096})
+    assert spec_state_notes(hw_rtx4090, dense, mm, plain, [plain.model_copy(update={"spec_decode": "suffix:24"})]) == []
+
+
+def test_profile_notes_for_speculation_skip_dense_models(hw_rtx4090):
+    from rigtune.pipeline import PlanResult, SearchOptions, spec_state_notes_for
+
+    reg = {"vllm": VllmBackend()}
+    pick = Config(backend="vllm", quant="bf16", ctx=4096, batch=16, gpu_memory_utilization=0.95)
+    dense = PlanResult(hw=hw_rtx4090, spec=ModelSpec(hf_id="x"), candidates=["vllm"], prepared={"vllm": qwen25()})
+    assert spec_state_notes_for(hw_rtx4090, reg, dense, pick, SearchOptions()) == []
+    hybrid = PlanResult(hw=hw_rtx4090, spec=ModelSpec(hf_id="x"), candidates=["vllm"],
+                        prepared={"vllm": qwen35(weights={"bf16": 19_306_201_056})})
+    assert spec_state_notes_for(hw_rtx4090, reg, hybrid, pick, SearchOptions(speculative=False)) == []

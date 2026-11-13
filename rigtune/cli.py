@@ -464,12 +464,18 @@ def plan(
         err.print("[red]no candidate backends for this machine/model[/]")
         raise typer.Exit(2)
     result = prepare_and_plan(hw, spec, candidates, reg, workload=wl)
+    from rigtune.memory import layout_note
+
+    # A hybrid-attention model whose KV fell back to the every-layer-full estimate (rigtune/memory.py).
+    notes = {name: n for name, p in result.prepared.items() if (n := layout_note(p, reg[name].memory_model(hw)))}
     if as_json:
         out = {
             name: [{"config": c.model_dump(), "estimate": e.model_dump()} for c, e in cfgs]
             for name, cfgs in result.feasible.items()
         }
         out["_errors"] = result.errors
+        if notes:
+            out["_notes"] = notes
         console.print_json(json.dumps(out))
         return
     console.print(f"candidates: {', '.join(candidates)}   budget: {hw.available_memory_bytes / GiB:.1f} GiB   "
@@ -487,6 +493,8 @@ def plan(
             t.add_row(c.key(), f"{e.weights / GiB:.2f}", f"{e.kv_cache / GiB:.2f}", f"{e.runtime_workspace / GiB:.2f}",
                       f"{e.safety_margin / GiB:.2f}", f"{e.total / GiB:.2f}", f"{e.budget / GiB:.2f}")
         console.print(t)
+        if name in notes:
+            console.print(f"note: {notes[name]}", style="yellow", markup=False)
 
 
 @app.command()
