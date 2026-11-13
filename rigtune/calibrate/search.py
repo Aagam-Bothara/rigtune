@@ -423,6 +423,10 @@ class StagedSearch:
             if not self.predictor.is_fitted(cfg.backend):  # type: ignore[attr-defined]
                 return None
             wl = self.workload or Workload()
+            if wl.sessions:
+                # A session file's prefill_tokens is its longest possible prompt, mostly history the prefix cache
+                # serves; the roofline would price all of it as uncached prefill and prune what may well win.
+                return None
             ceiling = self.constraints.ttft_ceiling_ms if self.objective == "balanced" else None
             kwargs = {}
             if self.constraints.tpot_ceiling_ms is not None:

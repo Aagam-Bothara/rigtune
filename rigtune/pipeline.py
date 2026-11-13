@@ -284,7 +284,7 @@ def search_space(hw: HardwareDescriptor, plan: "PlanResult", reg: Dict[str, Base
         stages.append(lambda c: reg[c.backend].prefill_variants(c))
     if opts.kv_quant:
         stages.append(kv_variants_fn(hw, reg, plan))
-    if opts.prefix_cache and workload.shared_prefix_tokens > 0:
+    if opts.prefix_cache and workload.reuses_prefix:
         stages.append(lambda c: reg[c.backend].prefix_variants(c))
     if opts.speculative:
         stages.append(lambda c: reg[c.backend].spec_variants(c, plan.prepared[c.backend], hw, opts.speculative_all))
@@ -555,7 +555,7 @@ def calibrate(
     stages = []
     if opts.kv_quant:
         stages.append(("kv", kv_variants_fn(hw, reg, plan)))
-    if opts.prefix_cache and workload.shared_prefix_tokens > 0:
+    if opts.prefix_cache and workload.reuses_prefix:
         stages.append(("prefix", lambda c: reg[c.backend].prefix_variants(c)))
     if opts.speculative:
         stages.append(("spec", lambda c: reg[c.backend].spec_variants(c, plan.prepared[c.backend], hw,

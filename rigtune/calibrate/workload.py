@@ -130,6 +130,11 @@ class Workload:
             return len(self.prompts)
         return min(len(self.prompts), max(MIN_LEVEL_REQUESTS, concurrency * self.requests_per_slot))
 
+    @property
+    def reuses_prefix(self) -> bool:
+        """Whether requests repeat a prefix an engine can cache: a shared one, or a session's own history."""
+        return self.shared_prefix_tokens > 0 or self.sessions
+
     def head(self, n: int) -> "Workload":
         """A copy sending only the first n prompts, or for a session file drawing on only the first n sessions."""
         return replace(self, prompts=self.prompts[:n], n_prompts=n, session_list=self.session_list[:n])

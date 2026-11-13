@@ -112,8 +112,8 @@ def strategy_variants(pick: Config, backend: BaseBackend, hw: HardwareDescriptor
         for kd in backend.kv_dtypes(hw):
             out.append(variant(f"+kv:{kd}", "kv", pick.model_copy(update={"kv_dtype": kd})))
 
-    # Prefix caching matters only when prompts share a prefix.
-    if workload.shared_prefix_tokens > 0:
+    # Prefix caching matters only when prompts share a prefix, or a session resends its history.
+    if workload.reuses_prefix:
         if any(k in pick.extra for k in PREFIX_EXTRAS):
             extra = {k: v for k, v in pick.extra.items() if k not in PREFIX_EXTRAS}
             out.append(variant("-prefix", "prefix", pick.model_copy(update={"extra": extra})))
