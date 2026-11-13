@@ -79,7 +79,7 @@ Every trial uses the same fixed workload — 16 prompts × ~256-token prefill ×
 
 ## 4. Measurement and the energy objective
 
-Request timing (TTFT, TPOT, tok/s) is measured at the HTTP client, the only vantage point shared by all backends. Device telemetry comes from llmtrace's `GPUSampler` (NVML at 100 ms: power, utilisation, memory), falling back to bare `pynvml`, and on CPU to process RSS plus RAPL package energy when readable. Energy is the trapezoidal integral of sampled power over the trial window; joules/token divides it by output tokens.
+Request timing (TTFT, TPOT, tok/s) is measured at the HTTP client, the only vantage point shared by all backends. Device telemetry comes from llmtrace's `GPUSampler` (NVML at 100 ms: power, utilisation, memory), falling back to bare `pynvml`, and on CPU to process RSS plus RAPL package energy when readable. Energy is the trapezoidal integral of sampled power over the trial window; joules/token divides it by output tokens. Beside the samples, each window also reads NVML's total-energy counter (`nvmlDeviceGetTotalEnergyConsumption`, millijoules, Volta and newer, where the driver reports it) at its start and end, and records the difference as `counter_energy_j`. On an A100 the sampled power is itself a board average over about a second, so its integral is right over a long window and smears anything shorter; the counter is exact over any window. Joules/token stays the trapezoid, so no recorded number moves, and the two side by side are a free check of every J/tok measured so far. A counter that is missing or did not advance (a driver reload resets it) is recorded as absent.
 
 The four objectives are all constrained argmax:
 

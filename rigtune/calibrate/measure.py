@@ -44,6 +44,10 @@ class TelemetrySummary:
     sm_clock_mhz: Optional[float] = None
     energy_j: Optional[float] = None
     samples: int = 0
+    # The same window's energy from NVML's total-energy counter (Volta and newer, where the driver reports it),
+    # or None. Sampled power on an A100 is a ~1 s board average read every 100 ms: its
+    # integral is right over a long window and smears anything shorter, which the counter does not.
+    counter_energy_j: Optional[float] = None
 
 
 @dataclass
@@ -91,6 +95,9 @@ class Telemetry:
         self._llmtrace_sampler: Any = None
         self._source = "none"
         self._rapl_start: Optional[float] = None
+        self._nvml: Any = None  # pynvml, while the energy counter is open
+        self._counter_handles: List[Any] = []
+        self._counter_start: Optional[float] = None
         self.summary = TelemetrySummary()
 
     # ---- start/stop
@@ -103,6 +110,8 @@ class Telemetry:
         self.stop()
 
     def start(self) -> None:
+        if self.hooks.gpu_ids:
+            self._open_counter()
         if self.hooks.gpu_ids and self._start_llmtrace():
             return
         if self.hooks.gpu_ids and self._start_pynvml():
@@ -110,6 +119,41 @@ class Telemetry:
         self._start_process()
 
     def stop(self) -> None:
+        self._stop_sampling()
+        self.summary.counter_energy_j = self._close_counter()
+
+    # ---- the energy counter, read beside whichever sampler runs
+
+    def _open_counter(self) -> None:
+        try:
+            import pynvml  # type: ignore
+
+            pynvml.nvmlInit()
+        except Exception:
+            return
+        try:
+            handles = [pynvml.nvmlDeviceGetHandleByIndex(i) for i in self.hooks.gpu_ids]
+            start = _counter_mj(pynvml, handles)
+        except Exception:
+            start = None
+        if start is None:
+            _shutdown(pynvml)
+            return
+        self._nvml, self._counter_handles, self._counter_start = pynvml, handles, start
+
+    def _counter_now(self) -> Optional[float]:
+        return _counter_mj(self._nvml, self._counter_handles) if self._nvml is not None else None
+
+    def _close_counter(self) -> Optional[float]:
+        """Joules the counter saw over the window, or None when it is missing or did not move forward."""
+        if self._nvml is None:
+            return None
+        end = self._counter_now()
+        _shutdown(self._nvml)
+        self._nvml = None
+        return _counter_delta_j(self._counter_start, end)
+
+    def _stop_sampling(self) -> None:
         if self._llmtrace_sampler is not None:
             samp = self._llmtrace_sampler
             samp.stop()
@@ -231,6 +275,30 @@ class Telemetry:
 
         self._thread = threading.Thread(target=loop, name="rigtune-telemetry", daemon=True)
         self._thread.start()
+
+
+def _counter_mj(nvml: Any, handles: List[Any]) -> Optional[float]:
+    """Total energy since the driver loaded, summed over the devices, in millijoules; None if unsupported."""
+    if not handles:
+        return None
+    try:
+        return float(sum(nvml.nvmlDeviceGetTotalEnergyConsumption(h) for h in handles))
+    except Exception:  # NVMLError_NotSupported: pre-Volta, or a driver that does not report it
+        return None
+
+
+def _counter_delta_j(start: Optional[float], end: Optional[float]) -> Optional[float]:
+    """A counter that did not advance (a driver reload resets it) is not trusted: the trapezoid stands."""
+    if start is None or end is None or end <= start:
+        return None
+    return (end - start) / 1000.0
+
+
+def _shutdown(nvml: Any) -> None:
+    try:
+        nvml.nvmlShutdown()
+    except Exception:
+        pass
 
 
 def _rapl_energy_j() -> Optional[float]:
@@ -1185,6 +1253,7 @@ def run_trial(
         m.gpu_util_pct = s.gpu_util_pct
         m.power_w = s.power_w
         m.sm_clock_mhz = s.sm_clock_mhz
+        m.counter_energy_j = s.counter_energy_j
         if s.sm_clock_mhz is not None:
             clocks.append(s.sm_clock_mhz)
         if s.energy_j is not None and m.output_tokens:
@@ -1204,6 +1273,7 @@ def run_trial(
 
     best = max(per_level.values(), key=lambda x: x.tok_s)
     total_tokens = sum(x.output_tokens for x in per_level.values())
+    counted = [x.counter_energy_j for x in per_level.values()]
     summary = TrialMetrics(
         tok_s=best.tok_s,
         ttft_ms=best.ttft_ms,
@@ -1214,6 +1284,7 @@ def run_trial(
         power_w=statistics.fmean(powers) if powers else None,
         sm_clock_mhz=statistics.fmean(clocks) if clocks else None,
         joules_per_token=(total_energy / total_tokens) if (energy_known and total_tokens) else None,
+        counter_energy_j=sum(counted) if all(e is not None for e in counted) else None,  # type: ignore[misc]
         duration_s=sum(x.duration_s for x in per_level.values()),
         requests=sum(x.requests for x in per_level.values()),
         failed=sum(x.failed for x in per_level.values()),

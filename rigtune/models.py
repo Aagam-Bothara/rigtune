@@ -297,6 +297,10 @@ class TrialMetrics(BaseModel):
     power_w: Optional[float] = None  # mean device power during the trial
     sm_clock_mhz: Optional[float] = None  # mean observed SM clock; confirms a clock lock took effect
     joules_per_token: Optional[float] = None
+    # The same window's energy from NVML's total-energy counter, where the driver reports it (Volta and newer).
+    # joules_per_token stays the integral of sampled power, so no recorded number moves; the two
+    # side by side check every J/tok measured that way.
+    counter_energy_j: Optional[float] = None
     duration_s: float = 0.0
     requests: int = 0
     failed: int = 0
