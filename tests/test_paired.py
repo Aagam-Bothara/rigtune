@@ -145,3 +145,24 @@ def test_items_needed_gives_the_promised_power():
         draws = [rng.random() for _ in range(n)]
         hits += certifies(sum(u < 0.02 for u in draws), 0, n, 0.03)
     assert 0.72 <= hits / 300 <= 0.88
+
+
+def test_the_bounds_behind_the_hardware_predictions():
+    """docs/benchmarks.md, Not yet measured: the bounds its predictions quote, from counts."""
+    def lower(b, c, n):
+        return round(score_bounds(b, c, n)[0] * 100, 1)
+
+    # 14B, 200 problems, GPTQ with 3-6 lost and 0-1 gained: -3.9 at best, -6.4 at worst; refused at 3 points.
+    counts = [(b, c) for b in range(3, 7) for c in (0, 1)]
+    assert min(lower(b, c, 200) for b, c in counts) == -6.4 and max(lower(b, c, 200) for b, c in counts) == -3.9
+    assert not any(certifies(b, c, 200, 0.03) for b, c in counts)
+    assert [(b, c) for b, c in counts if not certifies(b, c, 200, 0.06)] == [(6, 0)]  # all but one admitted at 6
+    # 3B at 300 items, at the 1319-problem rates: fp8 65/34 -> 15/8, AWQ 119/53 -> 27/12.
+    assert (round(65 * 300 / 1319), round(34 * 300 / 1319)) == (15, 8)
+    assert (round(119 * 300 / 1319), round(53 * 300 / 1319)) == (27, 12)
+    assert lower(15, 8, 300) == -5.8 and not certifies(15, 8, 300, 0.03) and certifies(15, 8, 300, 0.06)
+    assert lower(27, 12, 300) == -9.3 and not certifies(27, 12, 300, 0.06)
+    # The 14B protocol's grading: each 200-item pass may take up to 460 s.
+    from rigtune.accuracy_gate import pass_wall_seconds
+
+    assert pass_wall_seconds(200) == 460.0
