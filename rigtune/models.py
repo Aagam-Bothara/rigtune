@@ -314,6 +314,11 @@ class TrialMetrics(BaseModel):
     # sent before but placed behind a change, so the engine prefilled them again. Only what a rewriting layout refills
     # beyond an appending one of the same events is the layout's doing; eviction refills either way.
     refill_behind_edit: Optional[float] = None
+    # By tag (a request's kind unless the file tagged it): requests, prompt_tokens, reuse_expected, prefix_reuse,
+    # refill_behind_edit and median ttft_ms; and the median time from a chain's first send to its last request's first
+    # token (_by_kind). Report only: no objective reads them.
+    reuse_by_kind: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    chain_latency_ms: Optional[float] = None
 
     # A trial is not invalidated by a couple of degenerate requests. Small models sometimes emit
     # end-of-sequence immediately, producing no tokens; a backend that is actually broken fails

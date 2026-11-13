@@ -280,6 +280,7 @@ class RequestOutcome:
     primer: bool = False  # a window's primer (Step.primer): it loads the GPU like any request, but is not measured
     lcp: Optional[float] = None  # an explicit step's Step.lcp and Step.new, from the file
     new: Optional[float] = None
+    started_s: Optional[float] = None  # perf_counter when it was sent (session replay): for a chain's latency
     live: int = 0  # sessions live when it was dispatched
     request_chars: int = 0  # length of the request's messages, rendered for comparison
     reusable_chars: int = 0  # how much of that is a prefix of what the engine saw before (see _SessionScheduler)
@@ -622,7 +623,10 @@ async def _drive_sessions(base_url: str, hooks: LlmtraceHooks, workload: Workloa
                 body["stream_options"] = {"include_usage": True}
             if body_hook is not None:
                 body_hook(body, state, messages)
-            return await _one_request(client, url, body, timeout, counter, keep_text=True)
+            started = time.perf_counter()
+            out = await _one_request(client, url, body, timeout, counter, keep_text=True)
+            out.started_s = started
+            return out
 
         pending: Dict[asyncio.Future, Tuple[_LiveSession, Messages, RequestOutcome]] = {}
         while True:
@@ -735,6 +739,7 @@ def _session_stats(outcomes: List[RequestOutcome], wall_s: float) -> Dict[str, A
             expected = sum(o.prompt_tokens * o.reusable_chars / o.request_chars for o in steps_ if o.request_chars)
             out[f"reuse_expected{part}"] = round(expected / total, 4)
     out.update(_behind_edit(served))
+    out.update(_by_kind(sent))
     ttfts: Dict[int, List[float]] = {}
     for o in sent:
         if o.ok:
@@ -755,6 +760,54 @@ def _behind_edit(served: List[RequestOutcome]) -> Dict[str, float]:
         return {}
     refill = sum(o.prompt_tokens * max(0.0, 1.0 - o.lcp - o.new) for o in steps)
     return {"refill_behind_edit": round(refill / total, 4)}
+
+
+def _by_kind(sent: List[RequestOutcome]) -> Dict[str, Any]:
+    """For explicit requests, by tag (a request's kind unless the file tagged it): how many were sent, their prompt
+    tokens, the reuse their structure allowed (reuse_expected) and the engine reported (prefix_reuse, when any reply
+    in the level carried a count; a reply without one is zero, as in _session_stats), the avoidable share, and their
+    median time to first token, so rewritten requests can be set beside appended ones. Also chain_latency_ms: the
+    median time from a chain's first send to its last request's first token, which an agent waits through and no
+    single request's time to first token shows. Report only: the constraint stays each request's TTFT."""
+    steps = [o for o in sent if o.lcp is not None]
+    if not steps:
+        return {}
+    served = [o for o in steps if o.ok and o.prompt_tokens is not None]
+    counted = any(o.cached_tokens is not None for o in served)
+    kinds: Dict[str, Dict[str, Any]] = {}
+    for tag in sorted({o.tag for o in steps}):
+        group = [o for o in served if o.tag == tag]
+        total = sum(o.prompt_tokens for o in group)
+        entry: Dict[str, Any] = {"requests": sum(o.tag == tag for o in steps), "prompt_tokens": total}
+        ttfts = [o.ttft_s * 1000 for o in steps if o.tag == tag and o.ok]
+        if ttfts:
+            entry["ttft_ms"] = round(statistics.median(ttfts), 1)
+        if total:
+            entry["reuse_expected"] = round(sum(o.prompt_tokens * o.reusable_chars / o.request_chars
+                                                for o in group if o.request_chars) / total, 4)
+            if counted:
+                entry["prefix_reuse"] = round(sum(o.cached_tokens or 0 for o in group) / total, 4)
+            entry.update(_behind_edit(group))
+        kinds[tag] = entry
+    out: Dict[str, Any] = {"reuse_by_kind": kinds}
+    by_session: Dict[str, List[RequestOutcome]] = {}
+    for o in steps:
+        by_session.setdefault(o.session, []).append(o)
+    chains: List[float] = []
+    for sid in sorted(by_session):
+        run = sorted(by_session[sid], key=lambda o: o.turn)
+        i = 0
+        while i < len(run):
+            j = i
+            while j + 1 < len(run) and run[j + 1].chained and run[j + 1].turn == run[j].turn + 1:
+                j += 1
+            links = run[i:j + 1]
+            if j > i and all(o.ok and o.started_s is not None for o in links):
+                chains.append((links[-1].started_s + links[-1].ttft_s - links[0].started_s) * 1000)
+            i = j + 1
+    if chains:
+        out["chain_latency_ms"] = round(statistics.median(chains), 1)
+    return out
 
 
 def _nearest_rank(ordered: List[int], pct: float) -> int:
@@ -821,7 +874,7 @@ _REUSE_FIELDS = ("prompt_tokens_total", "cached_tokens_total", "prefix_reuse", "
                  "reuse_source", "sessions", "sessions_cut", "sessions_truncated", "mean_in_flight", "effective_pool",
                  "reuse_distance", "idle_gap", "working_set_tokens", "ttft_by_turn_ms", "prompt_tokens_seen",
                  "turns_seen")
-_REUSE_FIELDS += ("refill_behind_edit",)  # explicit requests (agent traces)
+_REUSE_FIELDS += ("refill_behind_edit", "reuse_by_kind", "chain_latency_ms")  # explicit requests (agent traces)
 
 
 def _level_workload(workload: Workload, k: int, counter: TokenCounter) -> Workload:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import statistics
 from collections import defaultdict
 
 from fastapi import FastAPI, Request
@@ -246,3 +247,102 @@ def test_the_shared_system_prompt_is_the_common_start_of_first_messages():
     assert {s.system for s in M._session_warmup(wl, synthetic).session_list} == {M._shared_system(wl)}
     alone = Workload(sessions=True, source="file:x", history="explicit", session_list=[session("a", "x")])
     assert M._shared_system(alone) == ""
+
+
+# --------------------------------------------------------------------------- by kind
+
+
+def _out(sid, turn, tag, prompt, cached, ttft, lcp, new, started, chained=False, reusable=0):
+    return M.RequestOutcome(ok=True, ttft_s=ttft, duration_s=ttft + 0.1, tokens=3, token_source="usage",
+                            prompt_tokens=prompt, cached_tokens=cached, session=sid, turn=turn, tag=tag, lcp=lcp,
+                            new=new, started_s=started, chained=chained, request_chars=prompt, reusable_chars=reusable)
+
+
+def test_reuse_and_time_to_first_token_are_split_by_kind():
+    outs = [_out("a", 1, "first", 100, 0, 0.10, 0.0, 1.0, 10.0),
+            _out("a", 2, "append", 200, 100, 0.02, 0.5, 0.5, 10.2, reusable=100),
+            _out("a", 3, "heartbeat", 300, 200, 0.03, 0.66, 0.34, 10.25, chained=True, reusable=200),
+            _out("a", 4, "core_edit", 300, 30, 0.30, 0.1, 0.2, 10.4, reusable=30),
+            _out("b", 1, "first", 100, None, 0.12, 0.0, 1.0, 20.0),  # no count: zero, as in the level
+            _out("b", 2, "append", 200, 100, 0.04, 0.5, 0.5, 20.3, chained=True, reusable=100),
+            _out("b", 3, "append", 300, 200, 0.06, 0.6, 0.4, 20.5, chained=True, reusable=200),
+            M.RequestOutcome(ok=False, skipped="truncated", session="b", turn=4)]
+    m = M._metrics_from(outs, 1.0, 2)
+    by = m.reuse_by_kind
+    assert list(by) == ["append", "core_edit", "first", "heartbeat"]
+    assert by["core_edit"] == {"requests": 1, "prompt_tokens": 300, "ttft_ms": 300.0, "reuse_expected": 0.1,
+                               "prefix_reuse": 0.1, "refill_behind_edit": 0.7}
+    assert by["append"]["requests"] == 3 and by["append"]["ttft_ms"] == 40.0
+    assert by["append"]["prefix_reuse"] == round(400 / 700, 4) == by["append"]["reuse_expected"]
+    assert by["first"]["prefix_reuse"] == 0.0 and by["first"]["refill_behind_edit"] == 0.0
+    # a's chain: turn 2 sent at 10.2, the heartbeat's first token at 10.25 + 0.03; b's: 20.0 to 20.5 + 0.06.
+    assert m.chain_latency_ms == round(statistics.median([80.0, 560.0]), 1)
+
+
+def test_a_turn_based_level_reports_nothing_by_kind():
+    m = M._metrics_from([M.RequestOutcome(ok=True, ttft_s=0.1, duration_s=0.2, tokens=3, prompt_tokens=50,
+                                          cached_tokens=10, session="s", turn=1, request_chars=10)], 1.0, 1)
+    assert m.reuse_by_kind == {} and m.chain_latency_ms is None and m.refill_behind_edit is None
+
+
+def scripted_engine(counts) -> FastAPI:
+    """Answers "done" and reports, for the n-th request it receives, the (prompt, cached) counts it is given: written
+    by hand below, so what replay records is checked against arithmetic rather than against a second copy of it."""
+    app = FastAPI()
+    app.state.bodies = []
+
+    @app.post("/v1/chat/completions")
+    async def chat(req: Request):
+        body = await req.json()
+        prompt, cached = counts[len(app.state.bodies)]
+        app.state.bodies.append(body)
+
+        async def gen():
+            yield f"data: {json.dumps({'choices': [{'delta': {'content': 'done'}}]})}\n\n"
+            usage = {"prompt_tokens": prompt, "completion_tokens": 1, "prompt_tokens_details": {"cached_tokens": cached}}
+            yield f"data: {json.dumps({'choices': [], 'usage': usage})}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    return app
+
+
+def test_by_kind_matches_hand_counted_characters(tmp_path):
+    """One session of three requests, counted by hand. A rendered message is 2 + len(role) + len(content) characters.
+
+      1  [system "Agent rules.", user "hello"]                           20 + 11 = 31      first
+      2  1 + [assistant "ok", user "more"]                               31 + 13 + 10 = 54 append
+      3  2 with the system message "Agent rulez.", sent at once (chain)  54                rewrite_head
+
+    Reusable, as a never-evicting engine would cache it: 0 for the first (no other session shares its system prompt);
+    for the second, the first and the header of the engine's answer, "\\x00assistant\\x01" (31 + 11 = 42); for the
+    third, "\\x00system\\x01Agent rule" (18). The third's refill behind the edit: the "." after the edit and the three
+    messages it kept (1 + 11 + 13 + 10 = 35 of 54); its only new character is the "z". The engine reports
+    characters as tokens."""
+    def m(role, content):
+        return {"role": role, "content": content}
+
+    one = [m("system", "Agent rules."), m("user", "hello")]
+    two = one + [m("assistant", "ok"), m("user", "more")]
+    three = [m("system", "Agent rulez.")] + two[1:]
+    p = tmp_path / "hand.jsonl"
+    p.write_text(json.dumps({"session": "h", "requests": [{"messages": one}, {"messages": two},
+                                                          {"messages": three, "chain": True}]}) + "\n",
+                 encoding="utf-8")
+    out = drive(scripted_engine([(31, 0), (54, 42), (54, 18)]), level(p, 1, per_slot=10), 1)
+    got = M._metrics_from(out, 1.0, 1)
+    by = got.reuse_by_kind
+    assert {k: (v["requests"], v["prompt_tokens"], v["reuse_expected"], v["prefix_reuse"], v["refill_behind_edit"])
+            for k, v in by.items()} == {"first": (1, 31, 0.0, 0.0, 0.0), "append": (1, 54, 0.7778, 0.7778, 0.0),
+                                        "rewrite_head": (1, 54, 0.3333, 0.3333, 0.6481)}
+    assert got.refill_behind_edit == round(35 / 139, 4) and got.prefix_reuse == round(60 / 139, 4)
+    assert got.chain_latency_ms is not None and got.chain_latency_ms > 0  # requests 2 and 3
+
+
+def test_the_profile_records_refill_and_chain_latency_beside_reuse(tmp_path):
+    served = M.TrialMetrics(refill_behind_edit=0.12, chain_latency_ms=345.6, prefix_reuse=0.7)
+    spec = workload_from_file(write_agent_file(tmp_path), get_workload("chat")).spec(served)
+    assert (spec["refill_behind_edit"], spec["chain_latency_ms"], spec["reuse_achieved"]) == (0.12, 345.6, 0.7)
+    turn_based = get_workload("chat").spec(served)
+    assert "refill_behind_edit" not in turn_based

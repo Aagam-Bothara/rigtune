@@ -341,7 +341,8 @@ class Workload:
             if getattr(served, "prompt_tokens_seen", None):  # replaces the first-turn counts
                 out["prompt_tokens_seen"] = dict(served.prompt_tokens_seen)
             for key, name in (("turns_seen", "turns_seen"), ("prefix_reuse", "reuse_achieved"),
-                              ("effective_pool", "effective_pool"), ("reuse_distance", "reuse_distance")):
+                              ("effective_pool", "effective_pool"), ("reuse_distance", "reuse_distance"),
+                              ("refill_behind_edit", "refill_behind_edit"), ("chain_latency_ms", "chain_latency_ms")):
                 value = getattr(served, key, None)
                 if value not in (None, {}):
                     out[name] = value
