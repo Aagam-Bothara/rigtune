@@ -268,6 +268,56 @@ def _cpu_quota(root: str = "/sys/fs/cgroup") -> Optional[float]:
         return None
 
 
+_CGROUP_UNLIMITED = 1 << 60  # cgroup v1 writes "no limit" as a page-rounded 2**63 - 1
+
+
+def _memory_limit(root: str = "/sys/fs/cgroup") -> Optional[int]:
+    """Bytes this process's cgroup may still use under its memory limit (containers), or None when unlimited
+    or unknown.
+
+    Usage leaves out the file cache, active and inactive, which the kernel reclaims before it enforces the
+    limit: a container that has just downloaded a model's weights holds them as page cache, and counting that
+    would report it as full and refuse plans that fit. psutil's available memory, which this is compared with,
+    counts the host's file cache as available too."""
+    v1 = os.path.join(root, "memory")
+    for limit_file, usage_file, stat_file, file_keys in (
+        (os.path.join(root, "memory.max"), os.path.join(root, "memory.current"),
+         os.path.join(root, "memory.stat"), ("active_file", "inactive_file")),  # cgroup v2
+        (os.path.join(v1, "memory.limit_in_bytes"), os.path.join(v1, "memory.usage_in_bytes"),
+         os.path.join(v1, "memory.stat"), ("total_active_file", "total_inactive_file")),  # cgroup v1
+    ):
+        try:
+            with open(limit_file, encoding="utf-8") as fh:
+                raw = fh.read().strip()
+        except OSError:
+            continue
+        if raw == "max":
+            return None
+        try:
+            limit = int(raw)
+        except ValueError:
+            return None
+        if limit <= 0 or limit >= _CGROUP_UNLIMITED:
+            return None
+        usage = 0
+        try:
+            with open(usage_file, encoding="utf-8") as fh:
+                usage = int(fh.read().strip())
+        except (OSError, ValueError):
+            pass
+        cache = 0
+        try:
+            with open(stat_file, encoding="utf-8") as fh:
+                for line in fh:
+                    key, _, value = line.partition(" ")
+                    if key in file_keys:
+                        cache += int(value)
+        except (OSError, ValueError):
+            pass
+        return max(0, limit - max(0, usage - cache))
+    return None
+
+
 def _usable_cpus() -> Optional[int]:
     """Whole CPUs this process may run on: its affinity mask, capped by a cgroup quota."""
     limits: List[int] = []
@@ -292,6 +342,15 @@ def probe_cpu() -> CPUInfo:
     usable = _usable_cpus()
     if usable is not None:
         physical, logical = min(physical, usable), min(logical, usable)
+    # Likewise memory: psutil reads /proc/meminfo, which a container shares with its host, so a pod reports
+    # the host's free RAM whatever its own limit, and the host-RAM check for llama.cpp's offloaded layers
+    # could pass a config the limit then kills. Free RAM is capped by what the cgroup still allows. Total RAM
+    # stays the host's: it is part of the hardware hash, and changing it would orphan every profile already
+    # cached in a container.
+    free = int(vm.available)
+    room = _memory_limit()
+    if room is not None:
+        free = min(free, room)
     return CPUInfo(
         model_name=name,
         physical_cores=physical,
@@ -299,7 +358,7 @@ def probe_cpu() -> CPUInfo:
         avx2="avx2" in flags,
         avx512=any(f.startswith("avx512") for f in flags),
         ram_total_bytes=int(vm.total),
-        ram_free_bytes=int(vm.available),
+        ram_free_bytes=free,
         arch=platform.machine() or "unknown",
     )
 
