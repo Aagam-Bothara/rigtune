@@ -297,6 +297,10 @@ class BaseBackend:
         `all_methods` (--speculative all) adds the methods that have not run on hardware yet."""
         return []
 
+    def known_failure(self, cfg: Config) -> Optional[str]:
+        """Why `cfg` is expected to fail at start-up or under load, so the search does not try it. Default: never."""
+        return None
+
     def find_second_models(self, prepared: PreparedModel) -> List[str]:
         """Under --speculative all: look up second models (EAGLE3 heads, drafts) on the Hub and record them in
         `prepared`. Returns notes for the profile, such as a lookup the Hub could not answer. Default: none."""

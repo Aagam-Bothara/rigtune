@@ -179,7 +179,7 @@ def combination_fits(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: 
         if c.backend == "sglang" and small_gpu and (c.prefill_budget or 0) >= 8192:
             return False
         pm = plan.prepared.get(c.backend)
-        if pm is None:
+        if pm is None or reg[c.backend].known_failure(c):
             return False
         # SGLang: a draft or EAGLE3 head needs its weights' room outside the reservation (SglangBackend.spec_fraction);
         # a second model of unknown size gets a limit of 0, so it is never combined in.
@@ -219,6 +219,8 @@ def kv_variants_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "P
         mm = be.memory_model(hw)
 
         def fits(x: Config) -> bool:
+            if be.known_failure(x):
+                return False
             try:
                 return estimate(hw, pm, x, mm).feasible
             except Exception:

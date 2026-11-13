@@ -68,6 +68,9 @@ VLLM_DRAFT_MIN = (0, 12)
 # Both methods are in vLLM 0.29's SpeculativeConfig; earlier releases were not checked.
 VLLM_NGRAM_GPU_MIN = (0, 29)
 VLLM_SUFFIX_MIN = (0, 29)
+# vLLM 0.29's model registry maps LlamaForCausalLMEagle3 to its Eagle3 Llama model and its SpeculativeConfig takes
+# method "eagle3"; earlier releases were not checked.
+VLLM_EAGLE3_MIN = (0, 29)
 
 NGRAM_TOKENS = 4
 NGRAM_TOKENS_LLAMACPP = 64  # llama.cpp's ngram-mod default
@@ -206,6 +209,11 @@ def vllm_supports_draft(version: Optional[str] = None) -> bool:
 def vllm_supports_ngram_gpu(version: Optional[str] = None) -> bool:
     """Whether the installed (or given) vLLM runs n-gram lookup on the GPU."""
     return _vllm_at_least(VLLM_NGRAM_GPU_MIN, version)
+
+
+def vllm_supports_eagle3(version: Optional[str] = None) -> bool:
+    """Whether the installed (or given) vLLM is one checked to run an EAGLE3 head."""
+    return _vllm_at_least(VLLM_EAGLE3_MIN, version)
 
 
 def vllm_supports_suffix(version: Optional[str] = None) -> bool:

@@ -177,7 +177,37 @@ class VllmBackend(BaseBackend):
         draft = speculative.draft_for(model.spec.hf_id)
         if draft and speculative.vllm_supports_draft():
             specs.append(speculative.draft(draft, speculative.DRAFT_TOKENS_VLLM))
-        return [cfg.model_copy(update={"spec_decode": s}) for s in specs if s != cfg.spec_decode]
+        head = model.spec_repos.get("eagle3")
+        if all_methods and head and speculative.vllm_supports_eagle3():  # the head and tokens SGLang is offered
+            specs.append(speculative.eagle3(head, speculative.EAGLE3_TOKENS))
+        out = [cfg.model_copy(update={"spec_decode": s}) for s in specs if s != cfg.spec_decode]
+        return [v for v in out if self.known_failure(v) is None]
+
+    def known_failure(self, cfg: Config) -> Optional[str]:
+        """Why `cfg` is expected to fail, when it is. On an A40, vLLM 0.29's draft model on the fp8 KV cache through
+        FlashInfer (the Ampere route) failed most requests with "CUDA error: an illegal memory access", each working
+        alone; those trials were measured and dropped as failures. An EAGLE3 head takes the same proposer path, so
+        that pair is not tried at all (the draft-model pair is still tried, as before)."""
+        if (cfg.spec_decode or "").startswith("eagle3:") and cfg.kv_dtype == AMPERE_FP8_KV:
+            return "EAGLE3 with the fp8 KV cache through FlashInfer (the draft model failed so on an A40)"
+        return None
+
+    def find_second_models(self, prepared: PreparedModel) -> List[str]:
+        """Under --speculative all: the verified EAGLE3 head for this model, the one SGLang gets, so the two engines
+        are compared on one proposer. vLLM plans no memory for it, so its size is recorded but not needed."""
+        if not speculative.vllm_supports_eagle3() or not speculative.eagle3_heads_for(prepared.spec.hf_id):
+            return []
+        try:
+            found = speculative.find_eagle3_head(prepared.spec, prepared.arch)
+        except Exception as exc:
+            note = f"vllm: no EAGLE3 head tried, the Hub could not be asked ({exc})"
+            logger.warning(note)
+            return [note]
+        if found:
+            prepared.spec_repos["eagle3"] = found[0]
+            if found[1]:
+                prepared.spec_bytes[found[0]] = int(found[1])
+        return []
 
     def materialize(self, model: PreparedModel, quants: List[str]) -> PreparedModel:
         return model  # vLLM pulls HF weights itself at launch
