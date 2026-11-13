@@ -106,6 +106,8 @@ The floor defaults to 50% of the best tok/s observed in the same calibration, so
 
 Why efficiency is its own objective rather than a tie-breaker: on the same GPU, J/token varies by 2–3× across batch sizes because idle power is amortised over more tokens at higher concurrency, while TTFT gets worse. `efficiency` picks the point on that curve that still meets a throughput floor. Whether that is the same point `balanced` picks is an empirical question the benchmark table answers per machine.
 
+That amortisation is also the objective's blind spot: it assumes the server is always full. With `--arrival-rate λ`, `efficiency` scores joules per request at λ instead, P̄(n)/λ + E_hold·e^(−n)(1 − e^(−λτ))/(λτ), the card's mean power over the Poisson count in flight plus the wind-down, as derived above. Requests are counted in one size for every configuration, the median answer length at the lowest level, because natural-stop answers differ in length and a shorter answer is not a cheaper request. Latency is judged on every measured level from n's up to the one covering the 95th percentile of what an arrival is served with (the others in flight, a Poisson count with mean n, plus itself), and a rate whose percentile is past the busiest level measured is not eligible. It never extrapolates: a λ above 80% of the lowest request rate served from the level covering the 95th percentile of requests in flight upward is infeasible ([usage](usage.md#energy-at-your-arrival-rate)).
+
 ## 5. Calibrating the planner against itself
 
 The memory planner is a formula; the question is how wrong it is. Every trial now records the

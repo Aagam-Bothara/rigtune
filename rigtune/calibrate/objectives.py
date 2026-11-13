@@ -6,6 +6,7 @@
 | latency     | min request latency (TTFT + TPOT x tokens) s.t. tok/s >= floor |
 | balanced    | max tok/s  s.t. TTFT p95 <= ceiling    |
 | efficiency  | min J/tok  s.t. tok/s >= floor         |
+| efficiency at --arrival-rate λ | min J/request at λ  s.t. λ sustainable, TTFT p95 <= ceiling |
 
 Floors default to a fraction of the best observed tok/s; the ceiling defaults to an absolute
 TTFT. If nothing satisfies the constraint, the least-violating candidate is chosen and the
@@ -23,9 +24,11 @@ measurement noise and a bigger context window is a real capability.
 from __future__ import annotations
 
 import math
+import statistics
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+from rigtune.calibrate.rate import Composition, compose, lowest_level
 from rigtune.calibrate.tail import quantile_interval
 from rigtune.models import OBJECTIVES, TrialMetrics, TrialResult
 
@@ -47,6 +50,10 @@ class Constraints:
     # score and still be chosen, when it uses less energy. The default keeps savings "free":
     # within run-to-run noise of the uncapped result.
     power_max_loss: float = 0.02
+    # efficiency only: score each trial by joules per request at this many requests per second, idle draw and
+    # wind-down included (calibrate/rate.py), in place of J/token above a throughput floor. None = J/token.
+    arrival_rate: Optional[float] = None
+    max_utilisation: float = 0.8  # the arrival rate may use at most this share of the busiest level's rate
 
     def tok_s_floor(self, results: Sequence[TrialResult]) -> float:
         if self.tok_s_floor_abs is not None:
@@ -62,6 +69,10 @@ class Ranked:
     score: float  # lower is better
     feasible: bool
     violation: float  # how far outside the constraint (0 if feasible)
+    rate: Optional[Composition] = None  # efficiency at an arrival rate: the J/request breakdown behind the score
+    # Efficiency at an arrival rate: (not eligible for want of idle data, past sustainability, past latency), ordered
+    # lexicographically when nothing is feasible, since requests per second and milliseconds do not add up.
+    violation_key: Optional[Tuple[float, ...]] = None
 
     @property
     def concurrency(self) -> int:
@@ -177,8 +188,10 @@ def close_call_level(objective: str, cons: Optional[Constraints] = None,
     return close
 
 
-def _sort_key(x: Ranked) -> Tuple[bool, float, float]:
-    return (not x.feasible, x.violation if not x.feasible else 0.0, x.score)
+def _sort_key(x: Ranked) -> Tuple[bool, Tuple[float, ...], float]:
+    if x.feasible:
+        return (False, (), x.score)
+    return (True, x.violation_key if x.violation_key is not None else (x.violation,), x.score)
 
 
 def _capability(r: TrialResult) -> Tuple[int, int, float]:
@@ -243,12 +256,124 @@ def _break_ties(ranked: List[Ranked], cons: Constraints) -> List[Ranked]:
     return cluster + rest
 
 
+def _rank_at_rate(ok: Sequence[TrialResult], cons: Constraints) -> List[Ranked]:
+    """`efficiency` at an arrival rate: one score per trial, its joules per request at that rate.
+
+    A trial is not scored at one of its levels but at the operating point the rate puts it at, composed from
+    every level (calibrate/rate.py). Latency is judged on every measured level from that point up to what 95% of
+    arrivals are served with, and `metrics` is the worst of them. The throughput floor does not apply: what the
+    rate needs is the trial's capacity, which `max_utilisation` checks.
+
+    Every trial is counted in one request size (shared_request_size), so a configuration cannot win by answering
+    shorter. Idle power is pooled per engine and power setting (idle_pools), so two configurations of one engine
+    differ in idle only by more than its readings spread. And when any trial carries an idle measurement, one
+    without it is not eligible: its fallback leaves out the idle draw, about P_idle / λ per request, and would beat
+    every trial that counts it. Replica and disaggregated trials never carry one, so at a rate a layout stage
+    cannot pick them on that omission.
+    """
+    assert cons.arrival_rate is not None
+    size = shared_request_size(ok)
+    lowest = min((x.concurrency for r in ok for x in _levels(r)), default=None)
+    pools = idle_pools(ok)
+    comps = [compose(r.metrics, cons.arrival_rate, cons.max_utilisation, tokens_per_request=size[0] if size else None,
+                     workload_lowest=lowest, idle_w=pooled_idle(r, pools)) for r in ok]
+    any_idle = any(c.total_j is not None and not c.fallback for c in comps)
+    out: List[Ranked] = []
+    for r, comp in zip(ok, comps):
+        judged = comp.latency_levels or [comp.operating]
+        worst = max(judged, key=lambda m: _latency_excess(m, cons))
+        latency = _latency_excess(worst, cons) + (LATENCY_UNKNOWN if comp.latency_beyond_top else 0.0)
+        no_idle = 1.0 if (any_idle and comp.fallback) else 0.0
+        key = (no_idle, comp.violation, latency)
+        # No energy telemetry: order by tok/s, as J/token efficiency does.
+        score = comp.total_j if comp.total_j is not None else 1e9 - worst.tok_s
+        out.append(Ranked(result=r, metrics=worst, score=score, feasible=key == (0.0, 0.0, 0.0),
+                          violation=no_idle * NO_IDLE_VIOLATION + comp.violation + latency, rate=comp,
+                          violation_key=key))
+    out.sort(key=_sort_key)
+    return out
+
+
+NO_IDLE_VIOLATION = 1e6  # a trial without idle data, ranked beside trials with it: last among the infeasible
+LATENCY_UNKNOWN = 1e6  # ms: the rate needs a level that was never measured, so its latency is not known
+IDLE_BAND_FLOOR_W = 2.0  # NVML reads power in whole watts or so; two configurations closer than this idle alike
+OUTPUT_CHANGE = 0.25  # answers this much longer or shorter than the median: the configuration changes the output
+
+
+def _latency_excess(m: TrialMetrics, cons: Constraints) -> float:
+    tpot = m.tpot_ms if (m.tpot_ms is not None and math.isfinite(m.tpot_ms)) else 0.0
+    return (max(0.0, _ttft_for(m, cons.ttft_percentile) - cons.ttft_ceiling_ms)
+            + (max(0.0, tpot - cons.tpot_ceiling_ms) if cons.tpot_ceiling_ms is not None else 0.0))
+
+
+@dataclass(frozen=True)
+class IdlePool:
+    median_w: float
+    low_w: float
+    high_w: float
+    band_w: float  # a reading this far from the median is the configuration's own, not noise
+    trials: int
+
+
+def _idle_group(r: TrialResult) -> Tuple[str, Optional[int], Optional[int]]:
+    return (r.config.backend, r.config.power_limit_w, r.config.sm_clock_mhz)
+
+
+def idle_pools(ok: Sequence[TrialResult]) -> Dict[Tuple[str, Optional[int], Optional[int]], IdlePool]:
+    """Idle power per (engine, power setting), pooled over every trial that read it: one 1-second reading per trial
+    is noisy, and the idle draw belongs to the card and the loaded engine far more than to one configuration of it.
+    The band is three robust standard deviations (1.4826 x the median absolute deviation), at least 2 W."""
+    groups: Dict[Tuple[str, Optional[int], Optional[int]], List[float]] = {}
+    for r in ok:
+        if r.metrics.idle_power_w is not None:
+            groups.setdefault(_idle_group(r), []).append(r.metrics.idle_power_w)
+    pools = {}
+    for g, vals in groups.items():
+        med = statistics.median(vals)
+        mad = statistics.median(abs(v - med) for v in vals)
+        pools[g] = IdlePool(median_w=med, low_w=min(vals), high_w=max(vals),
+                            band_w=max(IDLE_BAND_FLOOR_W, 3 * 1.4826 * mad), trials=len(vals))
+    return pools
+
+
+def pooled_idle(r: TrialResult, pools: Dict[Tuple[str, Optional[int], Optional[int]], IdlePool]) -> Optional[float]:
+    """The idle power a trial is scored with: its engine's pooled median, unless its own reading is outside the band."""
+    own = r.metrics.idle_power_w
+    pool = pools.get(_idle_group(r))
+    if own is None or pool is None or pool.trials < 2:
+        return own
+    return own if abs(own - pool.median_w) > pool.band_w else pool.median_w
+
+
+def _answer_tokens(r: TrialResult) -> Optional[float]:
+    low = lowest_level(r.metrics)
+    return low.output_tokens / (low.requests - low.failed) if low and low.requests > low.failed else None
+
+
+def shared_request_size(ok: Sequence[TrialResult]) -> Optional[Tuple[float, int, int]]:
+    """(tokens per request, the concurrency it was read at, trials it came from): the median of the answers'
+    mean length at the lowest concurrency level the trials measured. Real-text answers stop when the model does,
+    and on Dolly prompts on an A40, scored by its own answers' length, the J/request pick answered in 194 tokens where the J/token pick took 373;
+    counted per request of its own length, the shorter answers looked like saved energy."""
+    lowest = min((x.concurrency for r in ok for x in _levels(r)), default=None)
+    sizes = []
+    for r in ok:
+        at = [x for x in _levels(r) if x.concurrency == lowest and x.requests > x.failed and x.output_tokens]
+        if at:
+            sizes.append(at[0].output_tokens / (at[0].requests - at[0].failed))
+    if not sizes or lowest is None:
+        return None
+    return statistics.median(sizes), lowest, len(sizes)
+
+
 def rank(results: Sequence[TrialResult], objective: str, cons: Optional[Constraints] = None) -> List[Ranked]:
     """Best first. Feasible candidates always precede infeasible ones."""
     cons = cons or Constraints()
     ok = _ok_results(results)
     if not ok:
         return []
+    if objective == "efficiency" and cons.arrival_rate is not None:
+        return _break_ties(_rank_at_rate(ok, cons), cons)
     score, violation = _score_and_constraint(objective, cons, ok)
     if cons.tpot_ceiling_ms is not None:
         phase_violation, ceiling = violation, cons.tpot_ceiling_ms
@@ -283,7 +408,8 @@ def pick(
             f"no config satisfied the {objective} constraint; picked the least-violating one "
             f"(violation {top.violation:.1f})"
         )
-    if objective == "efficiency" and top.metrics.joules_per_token is None:
+    no_energy = top.rate.total_j is None if top.rate is not None else top.metrics.joules_per_token is None
+    if objective == "efficiency" and no_energy:
         notes.append("no energy telemetry available; efficiency objective fell back to tok/s ordering")
     m = top.metrics
     notes.append(
@@ -291,4 +417,92 @@ def pick(
         f"TTFT {m.ttft_ms:.0f} ms" + (f" (p95 {m.ttft_p95_ms:.0f})" if m.ttft_p95_ms is not None else "")
         + (f", {m.joules_per_token:.3f} J/tok" if m.joules_per_token else "")
     )
+    if top.rate is not None:
+        notes.append(top.rate.note() + _size_note(results) + _own_length_note(top, cons) + _spread(ranked)
+                     + _idle_advice(top.rate) + _no_idle_note(ranked))
+        for extra in (_idle_pool_note(results), _output_change_note(ranked, results)):
+            if extra:
+                notes.append(extra)
     return top.result, notes
+
+
+def _own_length_note(top: Ranked, cons: Optional[Constraints]) -> str:
+    """The winner's J/request at its own answers' length: what its requests cost, beside the normalised score."""
+    c, own = top.rate, _answer_tokens(top.result)
+    if c is None or c.total_j is None or not c.tokens_per_request or own is None or cons is None:
+        return ""
+    mine = compose(top.result.metrics, c.arrival_rate, cons.max_utilisation, tokens_per_request=own, idle_w=c.idle_w)
+    if mine.total_j is None:
+        return ""
+    return f"; at its own answers' length, {own:.0f} tokens, that is {mine.total_j:.1f} J/request"
+
+
+def _idle_pool_note(results: Sequence[TrialResult]) -> str:
+    pools = idle_pools(_ok_results(results))
+    if not pools:
+        return ""
+    parts = []
+    for (backend, cap, clock), p in sorted(pools.items(), key=lambda kv: (kv[0][0], kv[0][1] or 0, kv[0][2] or 0)):
+        label = backend + (f" capped at {cap} W" if cap else "") + (f" at {clock} MHz" if clock else "")
+        parts.append(f"{label} {p.median_w:.1f} W, the median of {p.trials} trials ({p.low_w:.1f}-{p.high_w:.1f}; "
+                     f"a configuration within {p.band_w:.1f} W of it is scored at the median)")
+    return "idle power pooled per engine: " + "; ".join(parts)
+
+
+def _output_change_note(ranked: Sequence[Ranked], results: Sequence[TrialResult]) -> str:
+    """Configurations whose answers are far longer or shorter than the median: they change the output, so their
+    energy per request compares different work, and their answers deserve a quality check."""
+    size = shared_request_size(_ok_results(results))
+    if size is None:
+        return ""
+    changed = []
+    for x in ranked:
+        t = _answer_tokens(x.result)
+        if t is not None and abs(t / size[0] - 1) > OUTPUT_CHANGE:
+            changed.append((x, t))
+    if not changed:
+        return ""
+    shown = "; ".join(f"{x.result.config.key()} ({t:.0f} tokens)" for x, t in changed[:3])
+    more = f"; and {len(changed) - 3} more" if len(changed) > 3 else ""
+    lead = " The winner is one of them." if any(x is ranked[0] for x, _ in changed) else ""
+    return (f"output-changing: {len(changed)} configuration{'s answer' if len(changed) > 1 else ' answers'} more "
+            f"than {OUTPUT_CHANGE:.0%} longer or shorter than the median {size[0]:.0f} tokens at {size[1]} users, so "
+            f"they change what is generated, not only how fast: {shown}{more}.{lead}")
+
+
+def _size_note(results: Sequence[TrialResult]) -> str:
+    size = shared_request_size(_ok_results(results))
+    if size is None:
+        return ""
+    return (f"; every configuration counted in requests of {size[0]:.0f} tokens, the median answer at "
+            f"{size[1]} users across {size[2]} trials")
+
+
+def _no_idle_note(ranked: Sequence[Ranked]) -> str:
+    skipped = [x for x in ranked if x.rate is not None and x.rate.fallback and x.violation >= NO_IDLE_VIOLATION]
+    if not skipped:
+        return ""
+    return (f"; {len(skipped)} configuration{'s were' if len(skipped) > 1 else ' was'} measured without an idle "
+            f"tail (replica or disaggregated layouts record none) and not eligible at this rate")
+
+
+def _idle_advice(c: Composition) -> str:
+    if c.total_j is None or c.fallback or not c.total_j or c.idle_j / c.total_j < 0.5:
+        return ""
+    return ("; most of each request's energy is the card idling between requests, which no configuration "
+            "changes and a power cap cannot lower (it only shortens a wind-down drawing more than the cap)")
+
+
+def _spread(ranked: Sequence[Ranked]) -> str:
+    """What the user can act on: how far the configurations measured differ in idle draw and in serving energy.
+
+    Idle draw is the card's, not the configuration's, so it barely moves between configurations; when it is
+    most of each request, no setting rigtune can choose will move the total much. A power cap cannot lower it.
+    """
+    comps = [x.rate for x in ranked if x.rate is not None and x.rate.total_j is not None and not x.rate.fallback]
+    if len(comps) < 2:
+        return ""
+    idle = [c.idle_j for c in comps]
+    active = [c.active_j + c.hold_j for c in comps]
+    return (f"; across the {len(comps)} configurations measured, idle ranged {min(idle):.1f}-{max(idle):.1f} "
+            f"J/request and serving plus wind-down {min(active):.1f}-{max(active):.1f}")

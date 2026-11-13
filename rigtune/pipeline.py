@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 from dataclasses import dataclass, field
@@ -106,6 +107,10 @@ class SearchOptions:
     # Session files only. "off" (the default) changes nothing: no trial, no launch flag, no cache-key entry.
     kv_tier: str = "off"
 
+    # --arrival-rate (efficiency only): requests per second the server will see. Trials are then scored by joules
+    # per request at that rate, the card's idle draw and wind-down included (calibrate/rate.py). None = J/token.
+    arrival_rate: Optional[float] = None
+
     def key(self, objective: Optional[str] = None) -> Dict[str, str]:
         """Options that change the pick, recorded in the profile and in its cache path: the non-default
         ones, and for `balanced` (the objective with a TTFT ceiling) the percentile unless it is the
@@ -143,6 +148,8 @@ class SearchOptions:
             out["reuse"] = "on"
         if self.kv_tier != "off":
             out["tier"] = self.kv_tier
+        if self.arrival_rate is not None:  # picked for one rate; J/token profiles keep their names
+            out["rate"] = f"{self.arrival_rate:g}rps"
         if objective == "balanced" and self.ttft_percentile != 50:
             out["ttft"] = f"p{self.ttft_percentile}"
         return out
@@ -188,6 +195,7 @@ def level_rule(objective: str, constraints: Constraints, opts: SearchOptions,
 
 
 EFFICIENCY_IDLE_TAIL_S = 3.0
+RATE_IDLE_TAIL_S = 6.0
 
 
 def idle_tail_for(objective: str, opts: SearchOptions) -> float:
@@ -195,9 +203,12 @@ def idle_tail_for(objective: str, opts: SearchOptions) -> float:
 
     Only `efficiency` records them: the other objectives never look at energy beyond a tie-break, and their
     trials keep their timing exactly. 3 s holds about 30 samples at NVML's 100 ms, of which the last second gives
-    idle power once a wind-down of a second or two is over.
+    idle power once a wind-down of a second or two is over. With an arrival rate the pick depends on both
+    figures, so the tail is doubled to leave a slower wind-down room to finish before idle is read.
     """
-    return EFFICIENCY_IDLE_TAIL_S if objective == "efficiency" else 0.0
+    if objective != "efficiency":
+        return 0.0
+    return RATE_IDLE_TAIL_S if opts.arrival_rate is not None else EFFICIENCY_IDLE_TAIL_S
 
 
 def spec_state_notes_for(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult", cfg: Config,
@@ -742,6 +753,14 @@ def calibrate(
     constraints = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                              tpot_ceiling_ms=workload.tpot_ceiling_ms,
                                              ttft_percentile=opts.ttft_percentile)
+    if opts.arrival_rate is not None:
+        if objective != "efficiency":
+            raise RuntimeError(f"--arrival-rate scores energy per request, so it applies to --objective efficiency "
+                               f"only, not {objective}")
+        # The options are the one source of the rate: the constraints score with it, the profile's workload records
+        # it so the server can compare live traffic against it.
+        constraints = dataclasses.replace(constraints, arrival_rate=opts.arrival_rate)
+        workload = dataclasses.replace(workload, arrival_rate_rps=opts.arrival_rate)
     feasible = plan.all_feasible
     if not feasible:
         raise RuntimeError("memory planner left no feasible configuration; try a smaller model or quant")

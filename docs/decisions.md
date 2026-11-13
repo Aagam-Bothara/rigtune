@@ -128,6 +128,18 @@ Because most trials die there, and dying early is cheap. Trials run their heavie
 cannot beat the leader, which cut 29–45% off calibration across the Llama runs and changed no pick
 ([evidence](benchmarks.md#measuring-the-busiest-level-first)).
 
+## Why score energy per request at an arrival rate?
+
+Because joules per token measured closed-loop describes a server that is never idle, and most servers are. The
+load generator keeps every slot busy, so neither the card's idle draw between requests nor its wind-down after a
+burst ever reaches J/token; at a few requests a minute the idle draw alone can be most of what each request costs,
+and it is the card's, so no configuration moves it. `--arrival-rate` composes J/request at the stated rate from
+the levels a calibration already measures plus a short idle tail after each trial, instead of driving every trial
+open-loop at that rate, which at 0.1 req/s would take minutes per trial and still measure one point. The motivation for a wind-down term came from a separate project of the
+author's, which saw about 40 J per request of post-request hold on a different setup; that figure is not in this
+repository's data, and nothing here depends on it. What the idle draw and the hold are on the cards rigtune has
+run on is unmeasured ([gaps](benchmarks.md#not-yet-measured)).
+
 ## Why score at the 95th percentile rather than the mean?
 
 Because a mean hides the requests users complain about, and a trial that looks fastest can be breaking its latency

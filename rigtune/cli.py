@@ -198,13 +198,14 @@ def _workload(name: str, file: Optional[Path] = None, sessions: bool = False, se
 
 
 def _constraints(ttft_ceiling: Optional[float], tok_s_floor: Optional[float], workload=None,
-                 tpot_ceiling: Optional[float] = None, ttft_percentile: int = 95):
+                 tpot_ceiling: Optional[float] = None, ttft_percentile: int = 95,
+                 arrival_rate: Optional[float] = None):
     from rigtune.calibrate.objectives import Constraints
 
     ceiling = ttft_ceiling if ttft_ceiling is not None else (workload.ttft_ceiling_ms if workload else 500.0)
     tpot = tpot_ceiling if tpot_ceiling is not None else (workload.tpot_ceiling_ms if workload else None)
     return Constraints(ttft_ceiling_ms=ceiling, tok_s_floor_abs=tok_s_floor, tpot_ceiling_ms=tpot,
-                       ttft_percentile=ttft_percentile)
+                       ttft_percentile=ttft_percentile, arrival_rate=arrival_rate)
 
 
 def _power_mode(value: str) -> str:
@@ -316,6 +317,23 @@ def _duration(value: Optional[str]) -> Optional[float]:
     return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)]
 
 
+def _rate(value: Optional[str]) -> Optional[float]:
+    """Requests per second from '0.5', '0.5/s', '12/min' or '720/h'."""
+    if value is None:
+        return None
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?|\.\d+)\s*(?:/\s*(s|sec|min|m|h|hr|hour))?\s*", str(value))
+    if not m or float(m.group(1)) <= 0:
+        raise typer.BadParameter("expected requests per second such as 0.5, or a rate such as 12/min or 720/h")
+    per = {None: 1, "s": 1, "sec": 1, "min": 60, "m": 60, "h": 3600, "hr": 3600, "hour": 3600}[m.group(2)]
+    return float(m.group(1)) / per
+
+
+def _check_rate(objective: str, rate: Optional[float]) -> None:
+    if rate is not None and objective != "efficiency":
+        raise typer.BadParameter(f"--arrival-rate scores energy per request, so it applies to --objective efficiency "
+                                 f"only, not {objective}", param_hint="--arrival-rate")
+
+
 def _percentile(value: int) -> int:
     if value not in (50, 95):
         raise typer.BadParameter("expected 95 (the default) or 50 (the median)")
@@ -339,7 +357,8 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
           budget: Optional[float] = None, ttft_percentile: int = 95, confirm: str = "on", all_levels: bool = False,
           explore: str = "off", quality_probe: str = "off", eval_set: Optional[str] = None,
           max_accuracy_loss: float = 3.0, eval_items: int = 300, report_reuse: bool = False,
-          kv_tier: str = "off"):
+          kv_tier: str = "off",
+          arrival_rate: Optional[float] = None):
     from rigtune.pipeline import SearchOptions
 
     if eval_set:
@@ -356,6 +375,7 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
         all_levels=all_levels, explore=explore == "on", quality_probe=quality_probe == "on",
         eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items, report_reuse=report_reuse,
         kv_tier=kv_tier,
+        arrival_rate=arrival_rate,
     )
 
 
@@ -433,6 +453,11 @@ BUDGET_OPT = typer.Option(None, "--budget", callback=_duration,
                           help="Stop calibrating after about this long (90s, 10m, 1h). Stages run in a fixed order "
                                "(precision, memory, batch, then variations and combinations); later trials are "
                                "skipped, the best so far wins, and the profile lists what was skipped.")
+RATE_OPT = typer.Option(None, "--arrival-rate", callback=_rate,
+                        help="efficiency: the requests per second the server will see (0.5, 12/min, 720/h). Scores "
+                             "each configuration by joules per request at that rate, the card's idle draw between "
+                             "requests and its wind-down after them included, instead of joules per token at full "
+                             "load. Not yet run on hardware.")
 TTFT_OPT = typer.Option(None, "--ttft-ceiling", help="balanced: TTFT ceiling in ms (default: the workload's)")
 TTFT_PCT_OPT = typer.Option(95, "--ttft-percentile", callback=_percentile,
                             help="balanced: which time to first token the ceiling applies to: 95 (default; at "
@@ -592,12 +617,14 @@ def bench(
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
+    arrival_rate: Optional[str] = RATE_OPT,
 ) -> None:
     """Run calibration and print the table; do not serve."""
     from rigtune import cache as profile_cache
     from rigtune.hardware import probe as _probe
     from rigtune.pipeline import calibrate, prepare_and_plan, select
 
+    _check_rate(objective, arrival_rate)
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     _check_kv_tier(kv_tier, wl)
     hw = _probe()
@@ -608,7 +635,7 @@ def bench(
         raise typer.Exit(2)
     opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse, kv_tier=kv_tier)
+                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate)
     if layout != "single" and opts.kv_tier != "off":  # as pipeline._resolve_layout does
         err.print(f"[yellow]--kv-tier {opts.kv_tier} is not tried under --layout {layout}: a KV-cache tier's "
                   "host RAM is budgeted for one engine on one GPU[/]")
@@ -617,7 +644,7 @@ def bench(
                               speculative_all=opts.speculative_all)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
+    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate)
     view = _search_view(objective, cons)
     profile = _calibrating(view, calibrate, hw, spec, objective, result, reg, workload=wl, constraints=cons,
                            progress=view.progress, power_mode=power, options=opts)
@@ -674,13 +701,15 @@ def recalibrate(
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
+    arrival_rate: Optional[str] = RATE_OPT,
 ) -> None:
     """Force a calibration rerun and overwrite the cached profile."""
     from rigtune.pipeline import resolve_profile
 
+    _check_rate(objective, arrival_rate)
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     _check_kv_tier(kv_tier, wl)
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
+    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate)
     view = _search_view(objective, cons)
     profile = _calibrating(view, resolve_profile, ModelSpec(hf_id=model), objective, force_backend=backend, recalibrate=True,
                               workload=wl, constraints=cons,
@@ -688,7 +717,7 @@ def recalibrate(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse, kv_tier=kv_tier), layout=layout)
+                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate), layout=layout)
     view.stop()
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
@@ -739,6 +768,7 @@ def compare(
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
+    arrival_rate: Optional[str] = RATE_OPT,
 ) -> None:
     """Measure rigtune's pick vs stock defaults (and Ollama) on one workload; write a results JSON."""
     from rigtune.bench import compare as _compare, to_markdown
@@ -746,11 +776,12 @@ def compare(
     from rigtune.hardware import probe as _probe
     from rigtune.pipeline import prepare_and_plan, resolve_profile, select
 
+    _check_rate(objective, arrival_rate)
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     _check_kv_tier(kv_tier, wl)
     # Held-out prompts are read before calibrating, so a bad file fails in seconds rather than after the search.
     eval_wl = _workload(workload, eval_workload_file, sessions, session_pool, session_turns, history, session_system) if eval_workload_file else wl
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
+    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     view = _search_view(objective, cons)
@@ -759,14 +790,14 @@ def compare(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse, kv_tier=kv_tier), layout=layout)
+                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate), layout=layout)
     view.stop()
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend, workload=eval_wl, report_reuse=report_reuse)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
                                quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse).search_quants())
+                 report_reuse=report_reuse, arrival_rate=arrival_rate).search_quants())
 
     def _row_progress(label: str, row) -> None:
         if row is None:
@@ -997,6 +1028,7 @@ def serve(
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
+    arrival_rate: Optional[str] = RATE_OPT,
 ) -> None:
     """Discover hardware, calibrate once (cached), then serve an OpenAI-compatible API."""
     import uvicorn
@@ -1006,10 +1038,11 @@ def serve(
     from rigtune.pipeline import resolve_profile
     from rigtune.serve import Supervisor, create_app
 
+    _check_rate(objective, arrival_rate)
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     _check_kv_tier(kv_tier, wl)
     spec = ModelSpec(hf_id=model)
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
+    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate)
     view = _search_view(objective, cons)
     profile = _calibrating(view, resolve_profile, spec, objective, force_backend=backend,
                            skip_calibration=skip_calibration,
@@ -1018,7 +1051,7 @@ def serve(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse, kv_tier=kv_tier), layout=layout)
+                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate), layout=layout)
     view.stop()
     _print_profile(profile)
     if profile.prepared is None:

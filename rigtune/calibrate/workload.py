@@ -117,6 +117,9 @@ class Workload:
     session_list: List[Session] = field(default_factory=list)
     # Characters per token where no tokenizer counts them: an explicit file's own ratio, else CHARS_PER_TOKEN.
     chars_per_token: float = CHARS_PER_TOKEN
+    # --arrival-rate: requests per second the profile's energy was scored for. Recorded, not driven: calibration
+    # levels stay closed-loop. The server compares live traffic against it (drift.py).
+    arrival_rate_rps: Optional[float] = None
 
     def __post_init__(self) -> None:
         if self.shared_prefix_tokens and not self.prefix_text:
@@ -289,6 +292,10 @@ class Workload:
         return Path(self.source[len(FILE_PREFIX):]).name if self.source.startswith(FILE_PREFIX) else self.source
 
     def describe(self) -> str:
+        rate = f", scored at {self.arrival_rate_rps:g} requests/s" if self.arrival_rate_rps is not None else ""
+        return self._describe() + rate
+
+    def _describe(self) -> str:
         if self.sessions:
             return (f"{self.name}: {self.turns_per_slot} turns per slot from {self._source_label} sessions of up to "
                     f"{self.turns_cap} "
@@ -334,6 +341,7 @@ class Workload:
             **({"requests_per_slot": self.requests_per_slot} if self.requests_per_slot else {}),
             **({"prompt_tokens_seen": stats} if stats else {}),
             **(self._session_spec(served) if self.sessions else {}),
+            **({"arrival_rate_rps": self.arrival_rate_rps} if self.arrival_rate_rps is not None else {}),
         }
 
     def _session_spec(self, served: Optional[object] = None) -> Dict[str, object]:
