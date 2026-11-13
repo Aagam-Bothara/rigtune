@@ -365,6 +365,19 @@ class TrialMetrics(BaseModel):
     reuse_by_kind: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     chain_latency_ms: Optional[float] = None
 
+    # The card after the trial's last request (measure.IdleSummary), recorded on the trial when an idle tail was
+    # measured: under `efficiency`, or with an arrival rate. Closed-loop levels never let the GPU idle, so none
+    # of this is in joules_per_token; a server at a modest arrival rate pays it between requests.
+    idle_power_w: Optional[float] = None  # from the energy counter where the driver reports it, else sampled
+    idle_power_sampled_w: Optional[float] = None  # the sampled figure, recorded either way
+    hold_joules: Optional[float] = None  # energy above idle while winding down, from the same source as idle
+    hold_below_idle: bool = False  # the tail measured below idle (noise): hold_joules recorded as 0
+    hold_s: Optional[float] = None  # until power was within 10% of the drop; an upper bound as NVML samples it
+    hold_truncated: bool = False  # the tail ended while power was still falling
+    hold_after_concurrency: Optional[int] = None  # the level the tail followed
+    energy_source: Optional[str] = None  # "nvml_counter" | "trapezoid": what idle and hold were computed from
+    idle_tail_s: Optional[float] = None
+
     # A trial is not invalidated by a couple of degenerate requests. Small models sometimes emit
     # end-of-sequence immediately, producing no tokens; a backend that is actually broken fails
     # everything, not 2 requests in 48.

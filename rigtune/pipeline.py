@@ -187,6 +187,19 @@ def level_rule(objective: str, constraints: Constraints, opts: SearchOptions,
     return enough_level(objective, constraints)
 
 
+EFFICIENCY_IDLE_TAIL_S = 3.0
+
+
+def idle_tail_for(objective: str, opts: SearchOptions) -> float:
+    """Seconds each trial stays measured after its last request, for the card's idle draw and wind-down.
+
+    Only `efficiency` records them: the other objectives never look at energy beyond a tie-break, and their
+    trials keep their timing exactly. 3 s holds about 30 samples at NVML's 100 ms, of which the last second gives
+    idle power once a wind-down of a second or two is over.
+    """
+    return EFFICIENCY_IDLE_TAIL_S if objective == "efficiency" else 0.0
+
+
 def spec_state_notes_for(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult", cfg: Config,
                          opts: SearchOptions) -> List[str]:
     """Notes for the speculation settings a hybrid model's recurrent state keeps from the pick's batch
@@ -773,6 +786,7 @@ def calibrate(
             close_call=close_call_level(objective, constraints),
             quality=probe,
             gate=gate,
+            idle_tail_s=idle_tail_for(objective, opts),
         )
     from rigtune.predict import Predictor
 

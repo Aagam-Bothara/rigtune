@@ -115,6 +115,7 @@ class SubprocessTrialRunner:
         close_call: Optional[Callable[[TrialMetrics], bool]] = None,
         quality: Optional[object] = None,
         gate: Optional[object] = None,
+        idle_tail_s: float = 0.0,
     ):
         self.backends = backends
         self.models = models
@@ -129,6 +130,7 @@ class SubprocessTrialRunner:
         self.close_call = close_call  # measure a level again when its tail is too close to call (close_call_level)
         self.quality = quality  # rigtune.quality.QualityProbe: does this precision still answer the same way?
         self.gate = gate  # rigtune.accuracy_gate.AccuracyGate: grades each precision on labelled items
+        self.idle_tail_s = idle_tail_s  # seconds of idle measured after each trial's last level (0 = none)
 
     def _apply_power(self, cfg: Config) -> Optional[str]:
         """Apply cfg's power setting to the GPU. Returns an error message if it cannot be applied."""
@@ -201,6 +203,7 @@ class SubprocessTrialRunner:
             metrics = run_trial(
                 f"http://127.0.0.1:{port}", hooks, self.workload, pid=proc.pid,
                 request_timeout=self.request_timeout, enough=self.enough, close_call=self.close_call,
+                idle_tail_s=self.idle_tail_s,
             )
             if self.quality is not None and metrics.ok:
                 # The engine is up and warm: answer the quality prompts here rather than launch it again later.
@@ -277,7 +280,7 @@ class SubprocessTrialRunner:
                     try:
                         metrics = run_trial(f"http://127.0.0.1:{port}", hooks,
                                             _point_workload(self.workload, i, len(settings)), pid=proc.pid,
-                                            request_timeout=self.request_timeout)
+                                            request_timeout=self.request_timeout, idle_tail_s=self.idle_tail_s)
                         err = None if metrics.ok else metrics.failure_summary()
                         res = TrialResult(config=cfg, stage=stage, metrics=metrics, error=err)
                     except Exception as exc:

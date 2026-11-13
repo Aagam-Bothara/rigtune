@@ -82,11 +82,76 @@ def _summarize(samples: List[_Sample], source: str, extra_energy: Optional[float
     return s
 
 
+@dataclass
+class IdleSummary:
+    """The card after the last request of a trial: its idle draw, and the wind-down ("hold") on the way to it.
+
+    Closed-loop levels never let the GPU idle, so neither shows up in J/token; a server at a modest arrival rate
+    pays both between requests. Measured on the tail of the window that measured the trial's last level.
+    """
+
+    idle_power_w: Optional[float] = None  # over the tail's last second, from the same source as hold_joules
+    idle_power_sampled_w: Optional[float] = None  # the mean of the sampled power over that second, always
+    hold_joules: Optional[float] = None  # energy above idle during the tail
+    hold_s: Optional[float] = None  # time until sampled power came within 10% of the drop to idle
+    truncated: bool = False  # power was still falling at the end of the tail, so idle reads high
+    below_idle: bool = False  # the tail held less energy than idle x its length: noise; hold recorded as 0
+    energy_source: str = "trapezoid"  # "nvml_counter" | "trapezoid": where idle_power_w and hold_joules came from
+    tail_s: float = 0.0
+
+
+IDLE_WINDOW_S = 1.0  # idle power is taken over the tail's final second
+SETTLED = 0.10  # the hold is over once power is within this fraction of the drop from its start
+
+
+def _idle_summary(points: List[Tuple[float, float]], t0: float, t_end: float, p_start: Optional[float],
+                  counter_j: Optional[float], counter_idle_w: Optional[float] = None) -> Optional[IdleSummary]:
+    """Idle power and hold energy from the power samples (t, W) taken after `t0`, the instant the last request
+    finished. `p_start` is the last active sample's power; `counter_j` the energy counter over [t0, t_end] and
+    `counter_idle_w` its mean power over the final second.
+
+    Idle and hold come from one source, so the hold is a difference of like with like: the counter where the
+    driver reports it (exact however short the hold), else the signed trapezoid of P - P_idle over the samples.
+    NVML's power reading is a ~1 s average on A100-class boards, so the hold's duration as sampled is an upper
+    bound while its energy is preserved. Nothing is clamped point by point, which would bias the hold upward by
+    the noise above idle; a total below zero is recorded as 0 and flagged.
+    """
+    if len(points) < 2:
+        return None
+    tail_s = max(0.0, t_end - t0)
+    last = [p for t, p in points if t >= t_end - IDLE_WINDOW_S] or [p for _, p in points[-2:]]
+    sampled = statistics.fmean(last)
+    p0 = p_start if p_start is not None else points[0][1]
+    drop = max(0.0, p0 - sampled)
+    settled_at = next((t - t0 for t, p in points if p - sampled <= SETTLED * drop), None)
+    if counter_j is not None and counter_idle_w is not None:
+        idle, source = counter_idle_w, "nvml_counter"
+        hold = counter_j - idle * tail_s
+    else:
+        idle, source = sampled, "trapezoid"
+        trace = [(t0, p0)] + points
+        hold = sum(0.5 * ((a - idle) + (b - idle)) * max(0.0, tb - ta) for (ta, a), (tb, b) in zip(trace, trace[1:]))
+    # Still falling: the first half of the final second sits clearly above the second half.
+    window = [(t, p) for t, p in points if t >= t_end - IDLE_WINDOW_S]
+    mid = t_end - IDLE_WINDOW_S / 2
+    early, late = [p for t, p in window if t < mid], [p for t, p in window if t >= mid]
+    falling = bool(early and late) and statistics.fmean(early) - statistics.fmean(late) > max(SETTLED * drop, 2.0)
+    return IdleSummary(idle_power_w=idle, idle_power_sampled_w=sampled, hold_joules=max(0.0, hold),
+                       hold_s=settled_at if settled_at is not None else tail_s, truncated=falling or settled_at is None,
+                       below_idle=hold < 0, energy_source=source, tail_s=tail_s)
+
+
+def _rapl_delta(start: Optional[float], end: Optional[float]) -> Optional[float]:
+    return end - start if (start is not None and end is not None and end >= start) else None
+
+
 class Telemetry:
     """Context manager sampling GPU (llmtrace/pynvml) or process (psutil) telemetry."""
 
-    def __init__(self, hooks: LlmtraceHooks, pid: Optional[int] = None, interval_ms: int = 100):
+    def __init__(self, hooks: LlmtraceHooks, pid: Optional[int] = None, interval_ms: int = 100,
+                 clock: Callable[[], float] = time.monotonic):
         self.hooks = hooks
+        self._clock = clock  # stamps the samples rigtune takes itself, and the marks; injectable for tests
         self.pid = pid
         self.interval_ms = interval_ms
         self._samples: List[_Sample] = []
@@ -98,7 +163,10 @@ class Telemetry:
         self._nvml: Any = None  # pynvml, while the energy counter is open
         self._counter_handles: List[Any] = []
         self._counter_start: Optional[float] = None
+        self._mark: Optional[Tuple[float, float, Optional[float], Optional[float]]] = None
+        self._idle_mark: Optional[Tuple[float, float, Optional[float]]] = None
         self.summary = TelemetrySummary()
+        self.idle: Optional[IdleSummary] = None  # set when mark() opened an idle tail
 
     # ---- start/stop
 
@@ -118,9 +186,45 @@ class Telemetry:
             return
         self._start_process()
 
+    def mark(self) -> None:
+        """End the active part of the window here; what follows until stop() is the idle tail (see IdleSummary).
+
+        The summary then describes the active part alone, exactly as if the window had closed at the mark, and
+        `idle` describes the tail.
+        """
+        self._mark = (self._clock(), time.time(), self._counter_now(),
+                      _rapl_energy_j() if self._rapl_start is not None else None)
+
+    def mark_idle(self) -> None:
+        """Start of the tail's final second: the counter's reading from here to stop() gives idle power."""
+        self._idle_mark = (self._clock(), time.time(), self._counter_now())
+
     def stop(self) -> None:
-        self._stop_sampling()
-        self.summary.counter_energy_j = self._close_counter()
+        end_mono, end_wall, counter_end = self._clock(), time.time(), self._counter_now()
+        samples, wall_clock = self._stop_sampling()
+        rapl_end = _rapl_energy_j() if self._rapl_start is not None else None
+        if self._nvml is not None:
+            _shutdown(self._nvml)
+            self._nvml = None
+        if self._mark is None:
+            self.summary = _summarize(samples, self._source, _rapl_delta(self._rapl_start, rapl_end))
+            self.summary.counter_energy_j = _counter_delta_j(self._counter_start, counter_end)
+            return
+        mono, wall, counter_mid, rapl_mid = self._mark
+        split, t_end = (wall, end_wall) if wall_clock else (mono, end_mono)
+        active = [x for x in samples if x.t <= split]
+        self.summary = _summarize(active, self._source, _rapl_delta(self._rapl_start, rapl_mid))
+        self.summary.counter_energy_j = _counter_delta_j(self._counter_start, counter_mid)
+        before = [x.power_w for x in active if x.power_w is not None]
+        tail = [(x.t, x.power_w) for x in samples if x.t > split and x.power_w is not None]
+        counter_idle_w = None
+        if self._idle_mark is not None:
+            i_mono, i_wall, counter_idle = self._idle_mark
+            last_s = (end_wall - i_wall) if wall_clock else (end_mono - i_mono)
+            last_j = _counter_delta_j(counter_idle, counter_end)
+            counter_idle_w = last_j / last_s if (last_j is not None and last_s > 0) else None
+        self.idle = _idle_summary(tail, split, t_end, before[-1] if before else None,
+                                  _counter_delta_j(counter_mid, counter_end), counter_idle_w)
 
     # ---- the energy counter, read beside whichever sampler runs
 
@@ -144,16 +248,8 @@ class Telemetry:
     def _counter_now(self) -> Optional[float]:
         return _counter_mj(self._nvml, self._counter_handles) if self._nvml is not None else None
 
-    def _close_counter(self) -> Optional[float]:
-        """Joules the counter saw over the window, or None when it is missing or did not move forward."""
-        if self._nvml is None:
-            return None
-        end = self._counter_now()
-        _shutdown(self._nvml)
-        self._nvml = None
-        return _counter_delta_j(self._counter_start, end)
-
-    def _stop_sampling(self) -> None:
+    def _stop_sampling(self) -> Tuple[List[_Sample], bool]:
+        """Stop the sampler; its samples, and whether their clock is wall time rather than monotonic."""
         if self._llmtrace_sampler is not None:
             samp = self._llmtrace_sampler
             samp.stop()
@@ -168,17 +264,11 @@ class Telemetry:
                 )
                 for x in raw
             ]
-            self.summary = _summarize(samples, "llmtrace")
-            return
+            return samples, any(x.monotonic is None for x in raw)
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
-        extra_energy = None
-        if self._rapl_start is not None:
-            end = _rapl_energy_j()
-            if end is not None and end >= self._rapl_start:
-                extra_energy = end - self._rapl_start
-        self.summary = _summarize(self._samples, self._source, extra_energy)
+        return self._samples, False
 
     # ---- backends
 
@@ -219,7 +309,7 @@ class Telemetry:
                 clock = statistics.fmean(pynvml.nvmlDeviceGetClockInfo(h, pynvml.NVML_CLOCK_SM) for h in handles)
             except Exception:
                 pass
-            return _Sample(t=time.monotonic(), mem_mb=mem, util=util, power_w=power, clock_mhz=clock)
+            return _Sample(t=self._clock(), mem_mb=mem, util=util, power_w=power, clock_mhz=clock)
 
         self._source = "pynvml"
         self._run_thread(read, on_stop=lambda: pynvml.nvmlShutdown())
@@ -252,7 +342,7 @@ class Telemetry:
                     mem = rss / 2**20
                 except Exception:
                     pass
-            return _Sample(t=time.monotonic(), mem_mb=mem)
+            return _Sample(t=self._clock(), mem_mb=mem)
 
         self._source = "psutil" if proc is not None else "rapl"
         self._run_thread(read)
@@ -1158,6 +1248,8 @@ def run_trial(
     clients: int = 1,
     enough: Optional[Callable[[TrialMetrics], bool]] = None,
     close_call: Optional[Callable[[TrialMetrics], bool]] = None,
+    idle_tail_s: float = 0.0,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> TrialMetrics:
     """Run the workload at each concurrency level and fold into one TrialMetrics.
 
@@ -1172,6 +1264,10 @@ def run_trial(
     `close_call` (see objectives.close_call_level) flags a level whose tail is too close to its ceiling to call
     from its requests; that level is measured again with as many requests on fresh prompts, inside the same
     telemetry window, and judged on both runs together.
+
+    `idle_tail_s` > 0 keeps the last measured level's telemetry window open that long after its last request,
+    and records the card's idle power and the wind-down to it (IdleSummary) on the trial. The level's own
+    numbers come from the part of the window before the tail, so they are what they would be without it.
 
     Summary rule: tok/s and TTFT/TPOT come from the concurrency level with the highest
     throughput (that is the load the server would actually be run at); energy per token
@@ -1212,10 +1308,12 @@ def run_trial(
     clocks: List[float] = []
     source = "none"
 
+    idle: Optional[IdleSummary] = None
+    idle_after: Optional[int] = None
     levels = list(enumerate(workload.concurrencies))
     if enough is not None:
         levels.sort(key=lambda kc: -kc[1])
-    for k, c in levels:
+    for i, (k, c) in enumerate(levels):
         level = _level_workload(workload, k, counter)
         n = level.level_requests(c)
         if n < len(level.prompts):
@@ -1238,6 +1336,16 @@ def run_trial(
                     extra = extra.head(n)
                 more, more_wall = drive(extra)
                 outcomes, wall, resampled = outcomes + more, wall + more_wall, True
+            if idle_tail_s > 0 and (i == len(levels) - 1 or _stops(enough, _metrics_from(outcomes, wall, c, hooks.tier_report))):
+                # The trial's last level: stay in the window while the card winds down to idle.
+                tel.mark()
+                if idle_tail_s > IDLE_WINDOW_S:  # the final second, read on its own, is the idle power
+                    sleep(idle_tail_s - IDLE_WINDOW_S)
+                    tel.mark_idle()
+                    sleep(IDLE_WINDOW_S)
+                else:
+                    sleep(idle_tail_s)
+                idle_after = c
         m = _metrics_from(outcomes, wall, c, hooks.tier_report)
         if counters is not None:
             after = _prefix_counters(base_url, hooks)
@@ -1246,6 +1354,8 @@ def run_trial(
                 _engine_sources(m, counters, after)
         m.resampled = resampled
         s = tel.summary
+        if idle_after == c and tel.idle is not None:
+            idle = tel.idle
         source = s.source if s.source != "none" else source
         m.telemetry_source = s.source
         m.prompt_tokens = prompt_tokens
@@ -1299,4 +1409,19 @@ def run_trial(
         summary = summary.model_copy(update={f: getattr(best, f) for f in _REUSE_FIELDS})
     if hooks.tier_report:
         summary = summary.model_copy(update={f: getattr(best, f) for f in _TIER_FIELDS})
+    if idle is not None:
+        summary.idle_power_w = idle.idle_power_w
+        summary.idle_power_sampled_w = idle.idle_power_sampled_w
+        summary.hold_below_idle = idle.below_idle
+        summary.hold_joules = idle.hold_joules
+        summary.hold_s = idle.hold_s
+        summary.hold_truncated = idle.truncated
+        summary.hold_after_concurrency = idle_after
+        summary.energy_source = idle.energy_source
+        summary.idle_tail_s = idle.tail_s
     return summary
+
+
+def _stops(enough: Optional[Callable[[TrialMetrics], bool]], m: TrialMetrics) -> bool:
+    """Whether the early-stop rule ends the trial at this level (see run_trial's `enough`)."""
+    return enough is not None and m.ok and enough(m)
