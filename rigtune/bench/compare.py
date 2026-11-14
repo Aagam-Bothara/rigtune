@@ -7,8 +7,11 @@ Result files are the raw material for the benchmark matrix and `rigtune report`:
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import time
+import uuid
 from pathlib import Path
 from typing import Annotated, Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -137,10 +140,12 @@ class ComparisonResult(BaseModel):
     # The workload rigtune's pick was calibrated on, when the rows were measured on another (held out).
     calibrated_on: Optional[str] = None
     skipped: List[SkippedRow] = Field(default_factory=list)  # left out of the file when empty
+    # Set only by read_runs, for a comparison that stopped before every row had all its repeats.
+    incomplete: Optional[str] = None
 
     @model_serializer(mode="wrap")
     def _omit_empty_skipped(self, handler) -> Dict[str, Any]:
-        return _drop(handler(self), ("skipped",))
+        return _drop(handler(self), ("skipped", "incomplete"))
 
     @property
     def rigtune_row(self) -> Optional[ComparisonRow]:
@@ -206,6 +211,114 @@ def combine_runs(rows: List[ComparisonRow]) -> ComparisonRow:
     if len(ok) >= 2 and row.scored_tok_s:
         row.tok_s_spread_pct = (ok[-1].scored_tok_s - ok[0].scored_tok_s) / row.scored_tok_s * 100
     return row
+
+
+class RunsLog:
+    """Every run of a comparison, appended to a JSON Lines file the moment it is measured, so that a crash
+    keeps what was done. The file is only appended to, each record flushed and fsync'd: a header with the
+    comparison's settings, the rows it plans to measure and how many times, one record per run, and an end
+    record once every row is done. Every record carries the comparison's run id, so a reader takes only the
+    last comparison's records, whatever else the file holds. fsync guards against a crash of the process or
+    the machine, not against losing the machine: on 14 November 2026 a pod deleted itself with its disk, and
+    only copying the files off it would have kept them."""
+
+    def __init__(self, path: Path, result: "ComparisonResult", profile: Profile,
+                 planned: List[Dict[str, str]], repeats: int):
+        self.path, self.run_id = path, uuid.uuid4().hex
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size:
+            with path.open("rb") as fh:
+                fh.seek(-1, os.SEEK_END)
+                torn = fh.read(1) != b"\n"
+            if torn:  # an earlier comparison stopped mid-line: start on a line of our own
+                self._append("\n")
+        self._write({"type": "comparison", "planned": planned, "repeats": repeats,
+                     "result": json.loads(result.model_dump_json()),
+                     "calibration_seconds": profile.calibration_seconds,
+                     "calibration_trials": profile.calibration_trials})
+
+    def _append(self, text: str) -> None:
+        with self.path.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+
+    def _write(self, record: Dict[str, Any]) -> None:
+        self._append(json.dumps({"run_id": self.run_id, **record}) + "\n")
+
+    def run(self, label: str, record: RunRecord, row: ComparisonRow) -> None:
+        self._write({"type": "run", "label": label, "record": json.loads(record.model_dump_json()),
+                     "row": json.loads(row.model_dump_json())})
+
+    def end(self, runs: int) -> None:
+        self._write({"type": "end", "runs": runs})
+
+
+def runs_path_for(results: Path) -> Path:
+    """<name>.runs.jsonl beside the results file <name>.json."""
+    return results.with_name(results.name.removesuffix(".json") + ".runs.jsonl")
+
+
+def free_results_path(path: Path) -> Path:
+    """`path`, or `<name>-2.json`, `-3`, ... when it or its runs file or verdict already exists: an evidence
+    run never writes over another's files."""
+    stem, n = path.name.removesuffix(".json"), 1
+    while True:
+        name = stem if n == 1 else f"{stem}-{n}"
+        if not any((path.parent / f"{name}{suffix}").exists()
+                   for suffix in (".json", ".runs.jsonl", ".verdict.json", ".verdict.md")):
+            return path.parent / f"{name}.json"
+        n += 1
+
+
+def read_runs(path: Path) -> "ComparisonResult":
+    """The last comparison a runs file holds, each row combined from its runs as `compare` combines them, with
+    its RunRecords. A planned row with no run is listed in `skipped` as not measured, and `incomplete` says
+    what is missing unless the end record is there and every row has all its repeats."""
+    records, torn = [], 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except ValueError:
+            torn += 1  # a line cut off as the process or machine went away
+    headers = [r for r in records if r.get("type") == "comparison" and r.get("run_id")]
+    if not headers:
+        raise ValueError(f"{path}: no comparison header")
+    header = headers[-1]
+    mine = [r for r in records if r.get("run_id") == header["run_id"]]
+    result = ComparisonResult.model_validate(header["result"])
+    runs: Dict[str, List[Tuple[RunRecord, ComparisonRow]]] = {}
+    for r in mine:
+        if r.get("type") == "run":
+            runs.setdefault(r["label"], []).append((RunRecord.model_validate(r["record"]),
+                                                    ComparisonRow.model_validate(r["row"])))
+    planned = header.get("planned") or [{"label": label, "kind": ""} for label in runs]
+    repeats = int(header.get("repeats") or 1)
+    for p in planned:
+        got = runs.get(p["label"])
+        if not got:
+            result.skipped.append(SkippedRow(label=p["label"], kind=p["kind"] or "tuner",
+                                             reason="the comparison stopped before it reached this row"))
+            continue
+        row = combine_runs([r for _, r in got])
+        row.run_records = [rec for rec, _ in got]
+        result.rows.append(row)
+    if result.rigtune_row is not None:
+        result.rigtune_row.calibration_seconds = header.get("calibration_seconds", 0.0)
+        result.rigtune_row.calibration_trials = header.get("calibration_trials", 0)
+    short = [f"{p['label']} {len(runs.get(p['label'], []))} of {repeats}" for p in planned
+             if len(runs.get(p["label"], [])) < repeats]
+    ended = any(r.get("type") == "end" for r in mine)
+    if short or not ended:
+        result.incomplete = ("the comparison stopped before it finished"
+                             + (f": runs measured, {', '.join(short)}" if short else ", after its last run"))
+    note = f"rebuilt from {path.name}: {sum(map(len, runs.values()))} runs of {len(runs)} rows"
+    if torn:
+        note += f"; {torn} unreadable line{'s' if torn > 1 else ''} skipped"
+    result.notes.append(note)
+    return result
 
 
 def noise_notes(result: "ComparisonResult") -> List[str]:
@@ -288,6 +401,7 @@ def compare(
     repeats: int = 1,
     extra: Optional[Dict[str, Union[Config, ExtraRow]]] = None,
     record_runs: bool = False,
+    runs_path: Optional[Path] = None,
 ) -> ComparisonResult:
     """Measure rigtune's winner and every reference config under the same workload. `extra` adds rows under
     their own labels (other searches' picks, say), measured like every other row and never filtered by `include`.
@@ -297,7 +411,8 @@ def compare(
 
     With repeats > 1 every row is measured that many times, round-robin (all rows once, then all again),
     so drift over the session (temperature, a noisy neighbour) falls on every row alike. `record_runs` keeps
-    every run's RunRecord on its row (limit status, level, tail, place in its round, when) for the verdict."""
+    every run's RunRecord on its row (limit status, level, tail, place in its round, when) for the verdict.
+    With `runs_path`, every run is also appended there as soon as it is measured (RunsLog)."""
     workload = workload or get_workload(profile.workload)
     cons = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                       tpot_ceiling_ms=workload.tpot_ceiling_ms)
@@ -424,12 +539,23 @@ def compare(
 
     runs: Dict[str, List[ComparisonRow]] = {label: [] for label, _ in measurers}
     records: Dict[str, List[RunRecord]] = {label: [] for label, _ in measurers}
+    log = None
+    if runs_path is not None:
+        planned = [{"label": label, "kind": added[label].kind if label in added else
+                    ("rigtune" if label == "rigtune" else "stock" if label.endswith("-default") else "tuner")}
+                   for label, _ in measurers]
+        log = RunsLog(runs_path, result, profile, planned, max(1, repeats))
     for repeat in range(1, max(1, repeats) + 1):
         for position, (label, measure) in enumerate(measurers, 1):
             started = time.time()
             runs[label].append(measure())
+            record = run_record(runs[label][-1], repeat, position, started, time.time())
             if record_runs:
-                records[label].append(run_record(runs[label][-1], repeat, position, started, time.time()))
+                records[label].append(record)
+            if log is not None:
+                log.run(label, record, runs[label][-1])
+    if log is not None:
+        log.end(sum(map(len, runs.values())))
     for label, _ in measurers:
         result.rows.append(combine_runs(runs[label]))
         result.rows[-1].run_records = records[label]
@@ -447,8 +573,10 @@ def compare(
     return result
 
 
-def save(result: ComparisonResult, out: Optional[Path] = None) -> Path:
-    path = results_path(result.hardware_hash, ModelSpec(hf_id=result.model_id), result.workload, result.objective, out)
+def save(result: ComparisonResult, out: Optional[Path] = None, path: Optional[Path] = None) -> Path:
+    """Write the results to `path`, or to results_path() in `out`, replacing what is there as always."""
+    path = path or results_path(result.hardware_hash, ModelSpec(hf_id=result.model_id), result.workload,
+                                result.objective, out)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     return path

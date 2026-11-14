@@ -38,12 +38,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from rigtune.bench.compare import ComparisonResult, ComparisonRow
+from rigtune.bench.compare import ComparisonResult, ComparisonRow, read_runs
 
 WIN, TIE, BEHIND, LOSS, PROVISIONAL, NA = ("win", "tie", "behind, within noise", "loss", "provisional",
                                            "not applicable")
 SPEED_ONLY = "ahead on speed, answers unchecked"
 BEHIND_CLEAR = "behind"
+INCOMPLETE = "incomplete"  # overall only: a comparison read from a runs file that stopped before it finished
 MIN_RUNS = 3
 
 
@@ -265,7 +266,8 @@ def score(result: ComparisonResult, thresholds: Optional[Thresholds] = None, res
     t = thresholds or Thresholds()
     rig = result.rigtune_row
     if rig is None:
-        raise ValueError("the results have no rigtune row")
+        raise ValueError("nothing to score: the comparison stopped before rigtune's row was measured"
+                         if result.incomplete else "the results have no rigtune row")
     rows = [judge(rig, r, t) for r in result.other_rows()]
     for row in rows:
         lean_win = row.outcome == PROVISIONAL and row.lean == WIN
@@ -284,7 +286,18 @@ def score(result: ComparisonResult, thresholds: Optional[Thresholds] = None, res
         notes.append("these results do not record each run's limit status (they were written before it was "
                      "kept, or without --verdict): a successful run counts as meeting the limits when its "
                      "row's median run did")
+    for row in result.rows:
+        levels = sorted({x.scored_concurrency for x in row.run_records
+                         if x.ok and x.meets_slo and x.scored_concurrency is not None})
+        if len(levels) > 1:
+            listed = ", ".join(map(str, levels))
+            notes.append(f"{row.label}'s counted runs were scored at different levels ({listed} users): each "
+                         "run counts at the busiest level at which it met the limits")
     notes += result.notes  # the comparison's own: where each added row came from, held-out prompts, ...
+    overall = _overall(rows)
+    if result.incomplete:  # whatever the rows say, a comparison that did not finish settles nothing
+        overall.update(outcome=INCOMPLETE, text=f"incomplete: {result.incomplete} (the rows so far: "
+                                                f"{overall['text']})")
     r = counted(rig)
     return Verdict(
         results=results, model_id=result.model_id, gpu=result.gpu, workload=result.workload,
@@ -294,7 +307,7 @@ def score(result: ComparisonResult, thresholds: Optional[Thresholds] = None, res
                  "scored_concurrency": rig.scored_concurrency, "counted_runs": len(r),
                  "runs_tok_s": _every_run(rig),
                  "range_tok_s": (min(r.values()), max(r.values())) if r else None, "met_limits": bool(r)},
-        rows=rows, overall=_overall(rows), notes=notes)
+        rows=rows, overall=overall, notes=notes)
 
 
 def _f(x: Optional[float]) -> str:
@@ -352,16 +365,26 @@ def to_markdown(v: Verdict) -> str:
 
 
 def verdict_paths(results_path: Path, out: Optional[Path] = None) -> Tuple[Path, Path]:
-    """Beside the results: <name>.verdict.json and <name>.verdict.md."""
-    stem = results_path.name.removesuffix(".json")
-    folder = out or results_path.parent
-    return folder / f"{stem}.verdict.json", folder / f"{stem}.verdict.md"
+    """Beside the results: <name>.verdict.json and <name>.verdict.md, for <name>.json or <name>.runs.jsonl;
+    <name>.verdict-2.json and so on when a verdict is already there, so none is written over."""
+    stem = results_path.name.removesuffix(".runs.jsonl").removesuffix(".json")
+    folder, n = out or results_path.parent, 1
+    while True:
+        tag = "verdict" if n == 1 else f"verdict-{n}"
+        js, md = folder / f"{stem}.{tag}.json", folder / f"{stem}.{tag}.md"
+        if not js.exists() and not md.exists():
+            return js, md
+        n += 1
 
 
 def write(results_path: Path, thresholds: Optional[Thresholds] = None,
           out: Optional[Path] = None) -> Tuple[Verdict, Path, Path]:
-    """Score a results file and write the verdict as JSON and Markdown beside it (or in `out`)."""
-    result = ComparisonResult.model_validate_json(results_path.read_text(encoding="utf-8"))
+    """Score a results file, or the runs file written beside it as the comparison ran, and write the verdict
+    as JSON and Markdown beside it (or in `out`)."""
+    if results_path.name.endswith(".jsonl"):
+        result = read_runs(results_path)
+    else:
+        result = ComparisonResult.model_validate_json(results_path.read_text(encoding="utf-8"))
     v = score(result, thresholds, results=results_path.name)
     js, md = verdict_paths(results_path, out)
     js.parent.mkdir(parents=True, exist_ok=True)

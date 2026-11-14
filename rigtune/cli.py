@@ -892,9 +892,10 @@ def compare(
              "engine cannot use is skipped with a note"),
     verdict: bool = typer.Option(
         False, "--verdict",
-        help="Keep a record of every run of every row, score the result as a win, tie or loss against every "
-             "row at the default thresholds, and write the verdict as JSON and Markdown beside it "
-             "(`rigtune verdict` re-scores at others)"),
+        help="Keep a record of every run of every row, append each to <name>.runs.jsonl as it is measured, "
+             "score the result as a win, tie or loss against every row at the default thresholds, and write "
+             "the verdict as JSON and Markdown beside it (`rigtune verdict` re-scores at others); never "
+             "writes over an earlier run's files"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
     ttft_percentile: int = TTFT_PCT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None),
@@ -981,12 +982,21 @@ def compare(
 
     if expert:
         extra = {**expert_rows(hw, planned.prepared, reg), **extra}
+    target = runs = None
+    if verdict:  # a name no earlier run used, and every run on disk beside it the moment it is measured
+        from rigtune.bench.compare import free_results_path, results_path, runs_path_for
+        from rigtune.hardware import hardware_hash
+
+        target = free_results_path(results_path(hardware_hash(hw), ModelSpec(hf_id=spec.hf_id), eval_wl.name,
+                                                profile.objective, out))
+        runs = runs_path_for(target)
+        err.print(f"[dim]each run is appended to {runs} as it is measured[/]")
     result = _compare(hw, spec, profile, planned.prepared, reg, workload=eval_wl, constraints=cons,
                       ollama_tag=ollama_model, include=include or None, progress=_row_progress,
                       log_dir=profile_cache.logs_dir() / spec.safe_id / f"compare-{eval_wl.name}",
                       power=_power_controller(profile), repeats=repeats, extra=extra or None,
-                      record_runs=verdict)
-    path = save(result, out)
+                      record_runs=verdict, runs_path=runs)
+    path = save(result, out, path=target)
     console.print(to_markdown(result))
     console.print(f"[dim]saved {path}[/]")
     if verdict:
@@ -996,7 +1006,11 @@ def compare(
 def _write_verdict(path: Path, thresholds=None, out: Optional[Path] = None) -> None:
     from rigtune.bench import verdict as vd
 
-    v, js, md = vd.write(path, thresholds, out)
+    try:
+        v, js, md = vd.write(path, thresholds, out)
+    except ValueError as exc:  # a runs file with nothing to score, or not a comparison at all
+        err.print(f"[red]rigtune verdict: {exc}[/]")
+        raise typer.Exit(2)
     console.print(vd.to_markdown(v), markup=False)
     console.print(f"[dim]wrote {js} and {md}[/]")
 
@@ -1004,7 +1018,9 @@ def _write_verdict(path: Path, thresholds=None, out: Optional[Path] = None) -> N
 @app.command()
 def verdict(
     results: Path = typer.Argument(..., exists=True, dir_okay=False,
-                                   help="A results JSON written by `rigtune compare`"),
+                                   help="A results JSON written by `rigtune compare`, or the "
+                                        "<name>.runs.jsonl beside it (`compare --verdict`), which holds "
+                                        "every finished run even when the comparison stopped early"),
     stock_gain: float = typer.Option(20.0, "--stock-gain",
                                      help="Percent rigtune's median must be above a stock row's to win"),
     tuner_gain: float = typer.Option(10.0, "--tuner-gain",

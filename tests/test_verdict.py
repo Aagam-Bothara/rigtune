@@ -237,6 +237,14 @@ def test_when_rigtune_meets_the_limits_in_no_run_a_row_that_does_is_a_loss():
     assert got["sglang-default"][0] == PROVISIONAL
 
 
+def test_runs_scored_at_different_levels_are_noted():
+    rig = _row("rigtune", [130.0, 131.0, 132.0])
+    rig.run_records[1].scored_concurrency = 4
+    v = score(_result(rig, _row("vllm-default", [100.0, 101.0, 102.0])))
+    assert ("rigtune's counted runs were scored at different levels (4, 8 users): each run counts at the "
+            "busiest level at which it met the limits") in v.notes
+
+
 def test_results_without_run_records_are_read_and_said_to_be():
     legacy = _row("rigtune", [130.0, 131.0, 132.0])
     legacy.run_records = []
@@ -285,7 +293,7 @@ def test_compare_with_verdict_keeps_every_run_and_writes_the_verdict_beside_the_
     assert r.exit_code == 0, r.output
     names = sorted(p.name for p in out.iterdir())
     stem = names[0].removesuffix(".json")
-    assert names == [f"{stem}.json", f"{stem}.verdict.json", f"{stem}.verdict.md"]
+    assert names == [f"{stem}.json", f"{stem}.runs.jsonl", f"{stem}.verdict.json", f"{stem}.verdict.md"]
     res = ComparisonResult.model_validate_json((out / f"{stem}.json").read_text(encoding="utf-8"))
     for i, row in enumerate(res.rows, 1):
         assert [(x.round, x.position) for x in row.run_records] == [(1, i), (2, i)]
