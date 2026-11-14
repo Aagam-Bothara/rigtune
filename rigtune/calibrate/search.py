@@ -72,6 +72,7 @@ def mentions_oom(log: str) -> bool:
 
 # How a start-up failure's error begins when the engine log shows its cause (SubprocessTrialRunner.run).
 MM_PROFILING_FAILED = "multimodal profiling failed at start-up"
+LOAD_FAILED = "model failed to load at start-up"
 # vLLM profiles memory at start-up with dummy multimodal inputs, and a processor that rejects them stops the engine.
 # That happens when the engine and transformers mismatch: vLLM 0.29.0 declares only transformers>=5.10.4, and with
 # transformers 5.23.0 (whose ProcessorMixin.validate_inputs raises the first line; 5.12.1 has no such check) it failed
@@ -80,6 +81,10 @@ MM_PROFILING_FAILED = "multimodal profiling failed at start-up"
 #   ValueError: Failed to apply Gemma4UnifiedProcessor on data={'text': '00:00 <|image><|video|>...'} with kwargs=...
 _MM_PROFILING = (re.compile(r"tokens in the text but no (?:images|videos|audios) were passed"),
                  re.compile(r"Failed to apply \w*Processor\b"))
+# The engine's own model code failing as it builds the model. SGLang 0.5.19 with google/gemma-4-12B-it, a known
+# SGLang bug for Gemma 4 unified models fixed in 0.5.21 (pipeline.KNOWN_LOAD_BUGS):
+#   AttributeError: 'Gemma4UnifiedForConditionalGeneration' object has no attribute 'lm_head_is_tied'
+_LOAD_FAILURE = re.compile(r"AttributeError: .*object has no attribute")
 
 
 def _first_line(log: str, patterns) -> Optional[str]:
@@ -96,9 +101,14 @@ def mm_profiling_failure(log: str) -> Optional[str]:
     return _first_line(log, _MM_PROFILING)
 
 
+def load_failure(log: str) -> Optional[str]:
+    """The log line that shows the engine's model code failed while building the model, or None."""
+    return _first_line(log, (_LOAD_FAILURE,))
+
+
 def startup_cause(error: Optional[str]) -> Tuple[Optional[str], str]:
-    """(MM_PROFILING_FAILED, the log line) from a start-up failure's error; (None, "") otherwise."""
-    for kind in (MM_PROFILING_FAILED,):
+    """(MM_PROFILING_FAILED or LOAD_FAILED, the log line) from a start-up failure's error; (None, "") otherwise."""
+    for kind in (MM_PROFILING_FAILED, LOAD_FAILED):
         if (error or "").startswith(kind + " ("):
             head = (error or "").split("\n", 1)[0]
             return kind, head[len(kind) + 2:].rsplit("); failed to start", 1)[0]
@@ -234,7 +244,7 @@ class SubprocessTrialRunner:
                 # the error, so the memory report counts it as the planner failure it is.
                 cause = "out of memory at start-up; " if mentions_oom(log) else ""
                 # The causes the search acts on or reports, also often above the tail (StagedSearch._startup_retry).
-                for kind, find in ((MM_PROFILING_FAILED, mm_profiling_failure),):
+                for kind, find in ((MM_PROFILING_FAILED, mm_profiling_failure), (LOAD_FAILED, load_failure)):
                     line = None if cause else find(log)
                     if line:
                         cause = f"{kind} ({line}); "
@@ -716,7 +726,7 @@ class StagedSearch:
             for cfg in candidates:
                 res = self._run(cfg, "quant")
                 stage_results[key] = res
-                if res.launched:
+                if res.launched or startup_cause(res.error)[0] == LOAD_FAILED:  # less memory cannot fix its code
                     break
             dropped.update(self._losing_backends(list(stage_results.values()), dropped))
         ok = [r for r in stage_results.values() if r.ok]

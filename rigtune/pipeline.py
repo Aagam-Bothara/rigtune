@@ -434,6 +434,9 @@ def retry_floor_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "P
 
 
 ENGINE_NAMES = {"vllm": "vLLM", "sglang": "SGLang"}
+# Engine bugs a load failure's log line identifies: (backend, text in the line) -> what the note adds.
+KNOWN_LOAD_BUGS = {("sglang", "lm_head_is_tied"): ", a known SGLang bug for Gemma 4 unified models, fixed in SGLang 0.5.21 "
+                   "(sgl-project/sglang #38820, #42091)"}
 TEXT_ONLY_NOTE = "served text-only (--language-model-only): image, video and audio inputs are not accepted"
 
 
@@ -441,14 +444,18 @@ def startup_failure_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan
     """What the search does after a start-up failure whose cause the engine log shows (search.startup_cause): a
     multimodal model whose multimodal profiling failed is retried text-only where the engine can serve it so
     (BaseBackend.text_only_refusal); anything else is noted, never retried. Returns (config to retry, note)."""
-    from rigtune.calibrate.search import MM_PROFILING_FAILED, startup_cause
+    from rigtune.calibrate.search import LOAD_FAILED, startup_cause
 
     def fn(c: Config, res) -> Tuple[Optional[Config], Optional[str]]:
         be, pm = reg.get(c.backend), plan.prepared.get(c.backend)
         kind, line = startup_cause(res.error)
-        if be is None or pm is None or kind != MM_PROFILING_FAILED:
+        if be is None or pm is None or kind is None:
             return None, None
         engine = f"{ENGINE_NAMES.get(c.backend, c.backend)} {be.version(hw) or '(version unknown)'}"
+        if kind == LOAD_FAILED:
+            known = next((why for (b, mark), why in KNOWN_LOAD_BUGS.items() if b == c.backend and mark in line), "")
+            return None, (f"{pm.spec.hf_id} could not start on {engine}: the engine's model code failed while "
+                          f"loading it ({line}){known}; a load failure, not memory, so it is not retried")
         # Seen with vLLM 0.29.0 and transformers 5.23.0, a newer transformers than that vLLM was released against.
         what = (f"{pm.spec.hf_id} could not start on {engine} with its multimodal profiling ({line}), as when the "
                 "engine and its transformers mismatch")
