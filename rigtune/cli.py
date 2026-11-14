@@ -995,7 +995,7 @@ def compare(
                       ollama_tag=ollama_model, include=include or None, progress=_row_progress,
                       log_dir=profile_cache.logs_dir() / spec.safe_id / f"compare-{eval_wl.name}",
                       power=_power_controller(profile), repeats=repeats, extra=extra or None,
-                      record_runs=verdict, runs_path=runs)
+                      record_runs=verdict, runs_path=runs, answers=verdict)
     path = save(result, out, path=target)
     console.print(to_markdown(result))
     console.print(f"[dim]saved {path}[/]")

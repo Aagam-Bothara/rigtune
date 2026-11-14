@@ -29,7 +29,7 @@ from rigtune.backends.base import LlmtraceHooks
 from rigtune.calibrate.datasets import CHARS_PER_TOKEN, Session, Step
 from rigtune.calibrate.tokens import TokenCounter, worst_source
 from rigtune.calibrate.workload import TURN_OVERHEAD, Workload
-from rigtune.models import TrialMetrics
+from rigtune.models import AnswerStats, TrialMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -448,6 +448,7 @@ class RequestOutcome:
     reusable_chars: int = 0  # how much of that is a prefix of what the engine saw before (see _SessionScheduler)
     text: str = ""  # the answer, while the scheduler needs it for the next step's history
     skipped: Optional[str] = None  # not a request: "cut" (the next prompt would not fit) or "truncated" (budget spent)
+    finish_reason: Optional[str] = None  # the last finish_reason the stream sent: "stop", "length", ...
 
 
 # What counts as generated output in a streamed choice, for the time to first token: the answer's text, or the
@@ -495,6 +496,7 @@ async def _one_request(
     prompt_tokens: Optional[int] = None
     cached_tokens: Optional[int] = None
     by_source: Dict[str, int] = {}
+    finish: Optional[str] = None
     try:
         async with client.stream("POST", url, json=body, timeout=timeout) as resp:
             if resp.status_code != 200:
@@ -509,6 +511,7 @@ async def _one_request(
                     ch = choices[0]
                     if first is None and generated(ch):
                         first = time.perf_counter()
+                    finish = ch.get("finish_reason") or finish
                     text = ch.get("text")
                     if text is None and isinstance(ch.get("delta"), dict):
                         text = ch["delta"].get("content")
@@ -540,7 +543,48 @@ async def _one_request(
             tokens, source = chunks, "chunks"
     return RequestOutcome(ok=True, ttft_s=first - t0, duration_s=end - t0, tokens=tokens, token_source=source,
                           prompt_tokens=prompt_tokens, cached_tokens=cached_tokens,
-                          cached_by_source=by_source, text="".join(pieces) if keep_text else "")
+                          cached_by_source=by_source, text="".join(pieces) if keep_text else "",
+                          finish_reason=finish)
+
+
+REPEAT_GRAM = 4  # words per n-gram when measuring how much an answer repeats itself
+REPEAT_MIN_WORDS = 8  # shorter answers are not judged: a few words cannot loop
+LOOPING_SHARE = 0.5  # an answer at least half of whose 4-grams repeat earlier ones is counted as looping
+
+
+def repeated_share(text: str) -> Optional[float]:
+    """The share of an answer's word 4-grams that already occurred earlier in it; None under 8 words. Words,
+    not tokens, so every engine's answers are measured alike without a tokenizer."""
+    words = text.split()
+    if len(words) < REPEAT_MIN_WORDS:
+        return None
+    grams = [tuple(words[i:i + REPEAT_GRAM]) for i in range(len(words) - REPEAT_GRAM + 1)]
+    seen: set = set()
+    repeated = 0
+    for g in grams:
+        repeated += g in seen
+        seen.add(g)
+    return repeated / len(grams)
+
+
+def answer_stats(outcomes: List[RequestOutcome]) -> AnswerStats:
+    """AnswerStats over a level's successful, measured requests."""
+    ok = [o for o in outcomes if o.ok and o.skipped is None and not o.primer]
+    stats = AnswerStats(answers=len(ok))
+    if not ok:
+        return stats
+    tokens = [o.tokens for o in ok]
+    stats.mean_tokens = statistics.fmean(tokens)
+    stats.median_tokens = float(statistics.median(tokens))
+    for o in ok:
+        reason = o.finish_reason or "none"
+        stats.finish_reasons[reason] = stats.finish_reasons.get(reason, 0) + 1
+    shares = [s for s in (repeated_share(o.text) for o in ok if o.text) if s is not None]
+    if shares:
+        stats.repeated_4gram_share = statistics.fmean(shares)
+        stats.looping_answers = sum(s >= LOOPING_SHARE for s in shares)
+        stats.judged_for_repetition = len(shares)
+    return stats
 
 
 TIER_SOURCES = ("device", "host", "storage")
@@ -578,6 +622,7 @@ async def _drive(
     concurrency: int,
     timeout: float,
     counter: Optional[TokenCounter] = None,
+    keep_text: bool = False,
 ) -> List[RequestOutcome]:
     counter = counter or TokenCounter()
     if workload.sessions:
@@ -602,7 +647,8 @@ async def _drive(
             if hooks.stream_usage:
                 body["stream_options"] = {"include_usage": True}
             async with sem:
-                results.append(await _one_request(client, url, body, timeout, counter))
+                texts = {"keep_text": True} if keep_text else {}  # the call is unchanged unless text is kept
+                results.append(await _one_request(client, url, body, timeout, counter, **texts))
 
         await asyncio.gather(*(worker(p) for p in workload.prompts))
     return results
@@ -1274,15 +1320,16 @@ def _session_warmup(workload: Workload, synthetic: Workload) -> Workload:
 
 
 def _client_main(index: int, base_url: str, hooks: LlmtraceHooks, workload: Workload, concurrency: int,
-                 timeout: float, ready: Any, go: Any, out: Any) -> None:
+                 timeout: float, ready: Any, go: Any, out: Any, keep_text: bool = False) -> None:
     """One load-generator process (see _drive_clients). Module level so it pickles under spawn."""
     ready.put(index)
     go.wait()
-    out.put((index, asyncio.run(_drive(base_url, hooks, workload, concurrency, timeout))))
+    texts = {"keep_text": True} if keep_text else {}  # the call is unchanged unless answers are kept
+    out.put((index, asyncio.run(_drive(base_url, hooks, workload, concurrency, timeout, **texts))))
 
 
 def _drive_clients(base_url: str, hooks: LlmtraceHooks, workload: Workload, concurrency: int, timeout: float,
-                   clients: int) -> Tuple[List[RequestOutcome], float]:
+                   clients: int, keep_text: bool = False) -> Tuple[List[RequestOutcome], float]:
     """Drive one level from several processes, with the prompts and the concurrency split between them.
 
     One Python client tops out near 3000 streamed tokens/s (through the replica balancer on two A40s:
@@ -1298,7 +1345,7 @@ def _drive_clients(base_url: str, hooks: LlmtraceHooks, workload: Workload, conc
     ready, out, go = ctx.Queue(), ctx.Queue(), ctx.Event()
     procs = [ctx.Process(target=_client_main, daemon=True,
                          args=(i, base_url, hooks, _shard(workload, s, len(shards), concurrency), per, timeout,
-                               ready, go, out))
+                               ready, go, out, *([True] if keep_text else [])))
              for i, s in enumerate(shards)]
     for p in procs:
         p.start()
@@ -1358,11 +1405,16 @@ def run_trial(
     sleep: Callable[[float], None] = time.sleep,
     arrival_rate: Optional[float] = None,
     seed: int = 0,
+    answers: bool = False,
 ) -> TrialMetrics:
     """Run the workload at each concurrency level and fold into one TrialMetrics.
 
     Every level gets fresh prompts (see _level_workload). `clients` > 1 drives each level from that
     many processes, for layouts whose combined throughput a single Python client cannot keep up with.
+
+    `answers` records each closed-loop level's AnswerStats (lengths, finish reasons, repetition), keeping each
+    answer's text only until the level is summarised. They cover the level's own prompts only, not a close
+    call's re-measure, so every configuration's stats at a level come from the same prompts.
 
     `enough` (see objectives.enough_level) measures the levels highest first and stops at the first one
     it accepts: when the objective scores a trial by its throughput, a lower level cannot beat a level
@@ -1434,16 +1486,18 @@ def run_trial(
         if n < len(level.prompts):
             level = level.head(n)
         def drive(lw: Workload) -> Tuple[List[RequestOutcome], float]:
+            texts = {"keep_text": True} if answers else {}  # the call is unchanged unless answers are kept
             if clients > 1:
-                return _drive_clients(base_url, hooks, lw, c, request_timeout, clients)
+                return _drive_clients(base_url, hooks, lw, c, request_timeout, clients, **texts)
             t0 = time.perf_counter()
-            got = asyncio.run(_drive(base_url, hooks, lw, c, request_timeout, counter))
+            got = asyncio.run(_drive(base_url, hooks, lw, c, request_timeout, counter, **texts))
             return got, time.perf_counter() - t0
 
         resampled = False
         counters = _prefix_counters(base_url, hooks) if workload.sessions else None  # outside the measured window
         with Telemetry(hooks, pid=pid) as tel:
             outcomes, wall = drive(level)
+            own = outcomes  # the level's own prompts, the same for every configuration
             if close_call is not None and close_call(_metrics_from(outcomes, wall, c, hooks.tier_report)):
                 # Too close to the ceiling to call from these requests: as many again, on prompts of their own.
                 extra = _level_workload(workload, k + len(workload.concurrencies), counter)
@@ -1462,6 +1516,8 @@ def run_trial(
                     sleep(idle_tail_s)
                 idle_after = c
         m = _metrics_from(outcomes, wall, c, hooks.tier_report)
+        if answers:
+            m.answers = answer_stats(own)
         if counters is not None:
             after = _prefix_counters(base_url, hooks)
             _engine_reuse(m, counters, after)

@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, model_serializer
 
 Objective = Literal["throughput", "latency", "balanced", "efficiency"]
 OBJECTIVES: Tuple[str, ...] = ("throughput", "latency", "balanced", "efficiency")
@@ -313,6 +313,25 @@ class MemoryEstimate(BaseModel):
 # --------------------------------------------------------------------------- calibration
 
 
+class AnswerStats(BaseModel):
+    """What a level's answers looked like, beside how fast they came: a configuration can win on speed by
+    answering longer, or by looping on text that n-gram speculation accepts easily. Computed from what the
+    load generator already receives (calibrate/measure.py answer_stats)."""
+
+    answers: int = 0  # successful requests
+    mean_tokens: Optional[float] = None
+    median_tokens: Optional[float] = None
+    # The engine's finish_reason per answer: "stop" (ended on its own), "length" (cut at max_tokens), ...;
+    # "none" where the stream sent none.
+    finish_reasons: Dict[str, int] = Field(default_factory=dict)
+    # Over answers of at least 8 words: the mean share of word 4-grams that already occurred earlier in the
+    # same answer (0 for text that never repeats itself, near 1 for a loop), and how many answers are at least
+    # half repeats. None when no answer text was kept (session replay keeps none).
+    repeated_4gram_share: Optional[float] = None
+    looping_answers: int = 0
+    judged_for_repetition: int = 0
+
+
 class TrialMetrics(BaseModel):
     tok_s: float = 0.0  # aggregate output tokens per second
     ttft_ms: Optional[float] = None  # p50 time to first token (None = not measured / failed)
@@ -408,6 +427,16 @@ class TrialMetrics(BaseModel):
     open_loop: bool = False
     arrival_rate_rps: Optional[float] = None
     joules_per_request: Optional[float] = None  # the whole window's energy, gaps included, over its requests
+    # What the answers looked like (AnswerStats), for a comparison under --verdict only. Left out of the file
+    # when unset, so every trial measured without it is written exactly as before.
+    answers: Optional[AnswerStats] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_answers(self, handler) -> Dict[str, Any]:
+        data = handler(self)
+        if data.get("answers") is None:
+            data.pop("answers", None)
+        return data
 
     # A trial is not invalidated by a couple of degenerate requests. Small models sometimes emit
     # end-of-sequence immediately, producing no tokens; a backend that is actually broken fails

@@ -26,6 +26,7 @@ from rigtune.calibrate.search import SubprocessTrialRunner, TrialRunner
 from rigtune.calibrate.workload import Workload, get_workload
 from rigtune.hardware import hardware_hash
 from rigtune.models import (
+    AnswerStats,
     Config,
     HardwareDescriptor,
     MemoryObservation,
@@ -66,6 +67,8 @@ class RunRecord(BaseModel):
     error: Optional[str] = None  # the first line, for a run that failed
     started_at: Optional[float] = None  # wall clock, seconds since the epoch
     ended_at: Optional[float] = None
+    answers: Optional[AnswerStats] = None  # the scored level's answers, when compare recorded them
+    level_answers: Dict[str, AnswerStats] = Field(default_factory=dict)  # every level's, by number of users
 
 
 class ComparisonRow(BaseModel):
@@ -192,11 +195,15 @@ def run_record(row: ComparisonRow, repeat: int, position: int, started: Optional
                ended: Optional[float] = None) -> RunRecord:
     """The RunRecord of one measured run."""
     error = row.error.splitlines()[0][:200] if not row.ok and row.error else None
+    level = row.metrics.by_concurrency.get(str(row.scored_concurrency)) if row.scored_concurrency else None
     return RunRecord(round=repeat, position=position, ok=row.ok, meets_slo=row.meets_slo if row.ok else None,
                      scored_concurrency=row.scored_concurrency,
                      scored_tok_s=row.scored_tok_s if row.ok else None,
                      scored_ttft_p95_ms=row.scored_ttft_p95_ms, scored_tpot_ms=row.scored_tpot_ms,
-                     error=error, started_at=started, ended_at=ended)
+                     error=error, started_at=started, ended_at=ended,
+                     answers=level.answers if level is not None else row.metrics.answers,
+                     level_answers={k: m.answers for k, m in row.metrics.by_concurrency.items()
+                                    if m.answers is not None})
 
 
 def combine_runs(rows: List[ComparisonRow]) -> ComparisonRow:
@@ -339,14 +346,17 @@ def noise_notes(result: "ComparisonResult") -> List[str]:
 def _run_disagg_row(profile: Profile, backends: Dict[str, BaseBackend], models: Dict[str, PreparedModel],
                     hw: HardwareDescriptor, workload: Workload, log_dir: Optional[Path], power: Optional[object],
                     disagg_runner: Optional[object], objective: str, cons: Constraints,
-                    progress: Optional[Callable[[str, Optional[ComparisonRow]], None]]) -> ComparisonRow:
-    """Measure a disaggregated profile end to end: both engines plus the router."""
+                    progress: Optional[Callable[[str, Optional[ComparisonRow]], None]],
+                    more: Optional[Dict[str, Any]] = None) -> ComparisonRow:
+    """Measure a disaggregated profile end to end: both engines plus the router. `more` goes to the runner
+    rigtune builds (answers=True records answer statistics)."""
     from rigtune.disagg import DisaggTrialRunner
 
     spec = profile.disagg
     backend = backends[profile.backend]
+    power_for_gpu = (lambda i: power) if power is not None else None
     runner = disagg_runner or DisaggTrialRunner(backend, models[profile.backend], hw, workload, log_dir=log_dir,
-                                                power_for_gpu=(lambda i: power) if power is not None else None)
+                                                power_for_gpu=power_for_gpu, **(more or {}))
     row = ComparisonRow(label="rigtune", runtime=f"{profile.backend}-disaggregated",
                         runtime_version=backend.version(hw), config=spec.decode, config_key=spec.key())
     if progress:
@@ -362,13 +372,15 @@ def _run_disagg_row(profile: Profile, backends: Dict[str, BaseBackend], models: 
 def _run_replica_row(profile: Profile, backends: Dict[str, BaseBackend], models: Dict[str, PreparedModel],
                      hw: HardwareDescriptor, workload: Workload, log_dir: Optional[Path],
                      replica_runner: Optional[object], objective: str, cons: Constraints,
-                     progress: Optional[Callable[[str, Optional[ComparisonRow]], None]]) -> ComparisonRow:
-    """Measure a replicas profile end to end through the load balancer."""
+                     progress: Optional[Callable[[str, Optional[ComparisonRow]], None]],
+                     more: Optional[Dict[str, Any]] = None) -> ComparisonRow:
+    """Measure a replicas profile end to end through the load balancer. `more` as for _run_disagg_row."""
     from rigtune.layout import LayoutTrialRunner
 
     backend = backends[profile.backend]
     gpus = [g.index for g in hw.gpus if g.vendor == "nvidia"][: profile.replicas]
-    runner = replica_runner or LayoutTrialRunner(backend, models[profile.backend], hw, workload, log_dir=log_dir)
+    runner = replica_runner or LayoutTrialRunner(backend, models[profile.backend], hw, workload,
+                                                 log_dir=log_dir, **(more or {}))
     row = ComparisonRow(label="rigtune", runtime=f"{profile.backend}-x{profile.replicas}",
                         runtime_version=backend.version(hw), config=profile.config,
                         config_key=f"{profile.config.key()} x{profile.replicas}")
@@ -402,6 +414,7 @@ def compare(
     extra: Optional[Dict[str, Union[Config, ExtraRow]]] = None,
     record_runs: bool = False,
     runs_path: Optional[Path] = None,
+    answers: bool = False,
 ) -> ComparisonResult:
     """Measure rigtune's winner and every reference config under the same workload. `extra` adds rows under
     their own labels (other searches' picks, say), measured like every other row and never filtered by `include`.
@@ -412,7 +425,8 @@ def compare(
     With repeats > 1 every row is measured that many times, round-robin (all rows once, then all again),
     so drift over the session (temperature, a noisy neighbour) falls on every row alike. `record_runs` keeps
     every run's RunRecord on its row (limit status, level, tail, place in its round, when) for the verdict.
-    With `runs_path`, every run is also appended there as soon as it is measured (RunsLog)."""
+    With `runs_path`, every run is also appended there as soon as it is measured (RunsLog). `answers`
+    records each level's AnswerStats (answer lengths, finish reasons, repetition) in the metrics."""
     workload = workload or get_workload(profile.workload)
     cons = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                       tpot_ceiling_ms=workload.tpot_ceiling_ms)
@@ -455,8 +469,9 @@ def compare(
         added[label] = row
 
     if runner is None:
+        more = {"answers": True} if answers else {}  # the runner is built as before unless answers are kept
         runner = SubprocessTrialRunner(backends=backends, models=models, hw=hw, workload=workload,
-                                       log_dir=log_dir, power=power)
+                                       log_dir=log_dir, power=power, **more)
 
     result = ComparisonResult(
         rigtune_version=__version__,
@@ -523,12 +538,15 @@ def compare(
 
     # rigtune's winner, re-measured now so it faces the same conditions as the references.
     measurers: List[Tuple[str, Callable[[], ComparisonRow]]] = []
+    pick_more: Dict[str, Any] = {"answers": True} if answers else {}  # for a disaggregated or replicas pick
     if profile.disagg is not None:
         measurers.append(("rigtune", lambda: _run_disagg_row(profile, backends, models, hw, workload, log_dir, power,
-                                                               disagg_runner, objective, cons, progress)))
+                                                               disagg_runner, objective, cons, progress,
+                                                               pick_more)))
     elif profile.replicas > 1:
         measurers.append(("rigtune", lambda: _run_replica_row(profile, backends, models, hw, workload, log_dir,
-                                                                replica_runner, objective, cons, progress)))
+                                                                replica_runner, objective, cons, progress,
+                                                                pick_more)))
         result.notes.append(f"rigtune serves {profile.replicas} replicas on {profile.replicas} GPUs; the stock rows "
                             "use one GPU, so this row is not a like-for-like throughput comparison")
     else:

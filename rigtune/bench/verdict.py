@@ -77,6 +77,110 @@ class RowVerdict:
     overlap: Optional[bool] = None
     counted_runs: int = 0  # runs that succeeded and met the limits
     lean: Optional[str] = None  # what a provisional row would be with enough runs
+    answers: Optional[Dict[str, Any]] = None  # its answers at rigtune's scored level (answers_of)
+    workload_answers: Optional[str] = None  # against its engine's stock row's answers (workload_answers)
+
+
+# A row's answers on the workload count as changed from its engine's stock row's, on the same prompts at the
+# same level and temperature 0, when their mean length differs by more than objectives.OUTPUT_CHANGE (25%),
+# when the share cut at max tokens differs by more than CUT_POINTS, or when the share that loops exceeds the
+# stock row's by more than LOOPING_POINTS.
+CUT_POINTS = 0.10
+LOOPING_POINTS = 0.05
+EPS = 1e-9  # a share exactly on a bar is within it: 0.4 - 0.3 is 0.10000000000000003 in floating point
+SAME, CHANGED, UNKNOWN = "same", "changed", "unknown"
+
+
+def _level_stats(row: ComparisonRow, level: int) -> List[Any]:
+    if row.run_records:
+        out = []
+        for r in row.run_records:
+            if not r.ok:
+                continue
+            got = r.level_answers.get(str(level))
+            if got is None and r.scored_concurrency == level:
+                got = r.answers  # a record that kept only its scored level's
+            if got is not None:
+                out.append(got)
+        return out
+    metrics = row.metrics.by_concurrency.get(str(level))
+    return [metrics.answers] if metrics is not None and metrics.answers is not None else []
+
+
+def answers_of(row: ComparisonRow, level: Optional[int]) -> Optional[Dict[str, Any]]:
+    """The row's answer statistics at `level` users (rigtune's scored level), over every run that answered
+    there: every row is sent the same prompts at a level, so these compare like with like. From the median
+    run when it has no run records; None when none were recorded."""
+    stats = [s for s in _level_stats(row, level) if s.answers] if level else []
+    if not stats:
+        return None
+    n = sum(s.answers for s in stats)
+    finish: Dict[str, int] = {}
+    for s in stats:
+        for k, v in s.finish_reasons.items():
+            finish[k] = finish.get(k, 0) + v
+    judged = sum(s.judged_for_repetition for s in stats)
+    repeated = (sum((s.repeated_4gram_share or 0) * s.judged_for_repetition for s in stats) / judged
+                if judged else None)
+    return {"answers": n, "mean_tokens": sum((s.mean_tokens or 0) * s.answers for s in stats) / n,
+            "finish_reasons": dict(sorted(finish.items())), "repeated_4gram_share": repeated,
+            "looping_answers": sum(s.looping_answers for s in stats), "judged_for_repetition": judged}
+
+
+def stock_label(row: ComparisonRow) -> str:
+    """The stock row a row's answers are compared with: its own engine's (a bare row's and a disaggregated or
+    replicas pick's too)."""
+    return f"{row.config.backend.removesuffix('-bare')}-default"
+
+
+def _share(a: Dict[str, Any], what: str) -> float:
+    return a["finish_reasons"].get(what, 0) / a["answers"]
+
+
+def workload_answers(result: ComparisonResult, row: ComparisonRow) -> Tuple[str, str]:
+    """(SAME | CHANGED | UNKNOWN, why) for the row's answers on the workload against its engine's stock row's,
+    at rigtune's scored level: the same prompts, greedy. A stock row is its own reference."""
+    from rigtune.calibrate.objectives import OUTPUT_CHANGE
+
+    rig = result.rigtune_row
+    level = rig.scored_concurrency if rig is not None else None
+    if not level:
+        return UNKNOWN, "rigtune met the limits at no level, so there is no level to compare answers at"
+    mine = answers_of(row, level)
+    if mine is None:
+        return UNKNOWN, f"{row.label} recorded no answers at {level} users"
+    ref = stock_label(row)
+    if row.label == ref:
+        return SAME, ""
+    base_row = next((r for r in result.rows if r.label == ref), None)
+    base = answers_of(base_row, level) if base_row is not None else None
+    if base is None:
+        why = "is not in this comparison" if base_row is None else f"recorded no answers at {level} users"
+        return UNKNOWN, f"{ref}, whose answers its own are compared with, {why}"
+    changes, unknown = [], []
+    if not base["mean_tokens"]:
+        unknown.append(f"{ref}'s answers average 0 tokens, so a change in length cannot be measured")
+    elif abs(mine["mean_tokens"] / base["mean_tokens"] - 1) > OUTPUT_CHANGE + EPS:
+        changes.append(f"they average {mine['mean_tokens']:.0f} tokens against {base['mean_tokens']:.0f} for "
+                       f"{ref} ({mine['mean_tokens'] / base['mean_tokens']:.2f}x)")
+    cut, base_cut = _share(mine, "length"), _share(base, "length")
+    if abs(cut - base_cut) > CUT_POINTS + EPS:
+        changes.append(f"{cut * 100:.0f}% were cut at max tokens against {base_cut * 100:.0f}%")
+    judged, base_judged = mine["judged_for_repetition"], base["judged_for_repetition"]
+    if judged and base_judged:
+        loops, base_loops = mine["looping_answers"] / judged, base["looping_answers"] / base_judged
+        if loops - base_loops > LOOPING_POINTS + EPS:
+            changes.append(f"{mine['looping_answers']} of {judged} look like loops ({loops * 100:.0f}%) "
+                           f"against {base_loops * 100:.0f}%")
+    else:  # no text kept (session replay), or answers too short to judge: a loop would go unseen
+        neither = not judged and not base_judged
+        unknown.append(f"repetition was measured on neither {row.label} nor {ref}" if neither else
+                       f"repetition was measured on only one of {row.label} and {ref}")
+    if changes:
+        return CHANGED, f"at {level} users, on the same prompts as {ref}: " + "; ".join(changes)
+    if unknown:
+        return UNKNOWN, "; ".join(unknown)
+    return SAME, ""
 
 
 def kind_of(row: ComparisonRow) -> str:
@@ -257,9 +361,14 @@ def _overall(rows: List[RowVerdict]) -> Dict[str, Any]:
 
 def answers_unchecked(result: ComparisonResult, row: RowVerdict) -> Optional[str]:
     """Why rigtune's answers are not known to be checked and unchanged against this row, or None when they
-    are. A win needs them to be: on speed alone the row is ahead on speed, answers unchecked. These results
-    hold nothing about answers, so it is never None."""
-    return "rigtune's answers were not checked"
+    are. A win needs them to be: on speed alone the row is ahead on speed, answers unchecked. Answers on the
+    workload that match its engine's stock row's are not enough on their own: nothing here grades them, so it
+    is never None."""
+    graded = "rigtune's answers were not graded"
+    state, why = workload_answers(result, result.rigtune_row)
+    if state != SAME:
+        return f"{graded}, nor matched against its stock row's on the workload ({why})"
+    return graded
 
 
 def score(result: ComparisonResult, thresholds: Optional[Thresholds] = None, results: str = "") -> Verdict:
@@ -268,7 +377,22 @@ def score(result: ComparisonResult, thresholds: Optional[Thresholds] = None, res
     if rig is None:
         raise ValueError("nothing to score: the comparison stopped before rigtune's row was measured"
                          if result.incomplete else "the results have no rigtune row")
-    rows = [judge(rig, r, t) for r in result.other_rows()]
+    others = result.other_rows()
+    rows = [judge(rig, r, t) for r in others]
+    level = rig.scored_concurrency
+    mine, mine_why = workload_answers(result, rig)
+    for verdict, row in zip(rows, others):
+        verdict.answers = answers_of(row, level)
+        state, why = workload_answers(result, row)
+        verdict.workload_answers = f"{state}: {why}" if why else state
+        if state == CHANGED and verdict.outcome != NA:  # speed on different work counts neither way
+            verdict.outcome, verdict.lean = NA, None
+            verdict.reason = f"answers changed on the workload {why}"
+    if mine == CHANGED:  # rigtune's speed came with different answers: nothing it measured counts
+        for verdict in rows:
+            if verdict.outcome != NA:
+                verdict.outcome, verdict.lean = NA, None
+                verdict.reason = f"rigtune's answers changed on the workload {mine_why}"
     for row in rows:
         lean_win = row.outcome == PROVISIONAL and row.lean == WIN
         why = answers_unchecked(result, row) if row.outcome == WIN or lean_win else None
@@ -293,8 +417,14 @@ def score(result: ComparisonResult, thresholds: Optional[Thresholds] = None, res
             listed = ", ".join(map(str, levels))
             notes.append(f"{row.label}'s counted runs were scored at different levels ({listed} users): each "
                          "run counts at the busiest level at which it met the limits")
+    if not any(answers_of(row, level) for row in result.rows):
+        notes.append("no answer statistics were recorded at rigtune's scored level (compare --verdict "
+                     "records them): answer length, finish reasons and repetition are unknown, so no row is "
+                     "a win")
     notes += result.notes  # the comparison's own: where each added row came from, held-out prompts, ...
     overall = _overall(rows)
+    if mine == CHANGED:
+        overall["text"] = f"rigtune's answers changed on the workload ({mine_why}), so no row counts"
     if result.incomplete:  # whatever the rows say, a comparison that did not finish settles nothing
         overall.update(outcome=INCOMPLETE, text=f"incomplete: {result.incomplete} (the rows so far: "
                                                 f"{overall['text']})")
@@ -306,7 +436,9 @@ def score(result: ComparisonResult, thresholds: Optional[Thresholds] = None, res
         rigtune={"config_key": rig.config_key, "median_tok_s": median(list(r.values())) if r else None,
                  "scored_concurrency": rig.scored_concurrency, "counted_runs": len(r),
                  "runs_tok_s": _every_run(rig),
-                 "range_tok_s": (min(r.values()), max(r.values())) if r else None, "met_limits": bool(r)},
+                 "range_tok_s": (min(r.values()), max(r.values())) if r else None, "met_limits": bool(r),
+                 "answers": answers_of(rig, level),
+                 "workload_answers": f"{mine}: {mine_why}" if mine_why else mine},
         rows=rows, overall=overall, notes=notes)
 
 
@@ -360,6 +492,24 @@ def to_markdown(v: Verdict) -> str:
         runs = f"{_range(r.range_tok_s)} ({r.counted_runs} of {len(r.runs_tok_s)})"
         lines.append(f"| {name} | {r.kind} | +{r.threshold * 100:.0f}% | {_f(r.median_tok_s)} | {runs} | "
                      f"{gain} | {worst} | {ranges} | **{r.outcome}**: {r.reason} |")
+    answered = [("rigtune", rg["answers"], rg["workload_answers"])] + [
+        (r.label, r.answers, r.workload_answers) for r in v.rows if r.config_key]
+    if any(a for _, a, _ in answered):
+        lines += ["", f"Answers at {rg['scored_concurrency']} users, rigtune's scored level, over every run "
+                      "that answered there (every row is sent the same prompts at a level). Changed from "
+                      "its engine's stock row means a mean length off by more than 25%, a share cut at max "
+                      "tokens off by more than 10 points, or a share that loops above the stock row's by "
+                      "more than 5 points:", "",
+                  "| Row | Answers | Mean tokens | Ended on their own | Cut at max tokens | "
+                  "Repeated 4-grams | Looping | Against its stock row |", "|---|---|---|---|---|---|---|---|"]
+        for label, a, state in answered:
+            if not a:
+                lines.append(f"| {label} | not recorded | | | | | | {state or '-'} |")
+                continue
+            stop, cut = a["finish_reasons"].get("stop", 0), a["finish_reasons"].get("length", 0)
+            rep = "-" if a["repeated_4gram_share"] is None else f"{a['repeated_4gram_share'] * 100:.0f}%"
+            lines.append(f"| {label} | {a['answers']} | {a['mean_tokens']:.0f} | {stop} | {cut} | {rep} | "
+                         f"{a['looping_answers']} of {a['judged_for_repetition']} | {state or '-'} |")
     lines += ["", f"**Overall: {v.overall['text']}**"] + [f"_{n}_" for n in v.notes]
     return "\n".join(lines) + "\n"
 

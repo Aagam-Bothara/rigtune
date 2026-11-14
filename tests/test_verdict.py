@@ -35,7 +35,8 @@ def test_the_14_november_qwen_verdict_is_reproduced_from_its_per_repeat_figures(
         r = got[label]
         assert (r.kind, r.threshold, r.median_tok_s, r.range_tok_s) == (kind, bar, med, rng)
         assert r.counted_runs == 3 and r.outcome == SPEED_ONLY and r.overlap is False
-        assert r.reason.endswith(", ranges apart; rigtune's answers were not checked")
+        assert r.reason.endswith(", ranges apart; rigtune's answers were not graded, nor matched against its "
+                                 "stock row's on the workload (rigtune recorded no answers at 8 users)")
         assert f"{r.gain * 100:+.1f}%" == f"+{pct}%"
         assert f"{r.worst_paired_gain * 100:+.1f}%" == f"+{worst}%"
     assert v.overall["outcome"] == SPEED_ONLY and v.overall["wins"] == 0
@@ -92,8 +93,9 @@ def test_each_row_is_held_to_its_kinds_threshold():
                   _row("vllm-expert-x", [104.0, 105.0, 106.0], kind="expert"))  # +10.5%, worst round +10.4%
     got = _outcomes(res)
     assert got["vllm-default"] == (TIE, "+16.0%, worst paired round +15.8%: the median is under the +20% bar")
-    assert got["autotune-vllm"] == (SPEED_ONLY, "+16.0%, worst paired round +15.8%, both at least +10%, "
-                                                "ranges apart; rigtune's answers were not checked")
+    assert got["autotune-vllm"][0] == SPEED_ONLY
+    assert got["autotune-vllm"][1].startswith("+16.0%, worst paired round +15.8%, both at least +10%, ranges "
+                                              "apart; rigtune's answers were not ")
     assert got["vllm-expert-x"][0] == SPEED_ONLY
     assert score(res).overall["text"] == ("no row ahead of rigtune: 0 wins, 1 tie, 2 ahead on speed with "
                                           "answers unchecked")

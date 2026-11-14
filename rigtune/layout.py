@@ -183,7 +183,8 @@ class LayoutTrialRunner:
     """Measure N replicas end to end through the load balancer."""
 
     def __init__(self, backend: BaseBackend, model: PreparedModel, hw: HardwareDescriptor, workload: Workload,
-                 log_dir: Optional[Path] = None, startup_timeout: float = 900.0, request_timeout: float = 180.0):
+                 log_dir: Optional[Path] = None, startup_timeout: float = 900.0,
+                 request_timeout: float = 180.0, answers: bool = False):
         self.backend = backend
         self.model = model
         self.hw = hw
@@ -191,6 +192,7 @@ class LayoutTrialRunner:
         self.log_dir = log_dir
         self.startup_timeout = startup_timeout
         self.request_timeout = request_timeout
+        self.answers = answers  # record each level's AnswerStats (compare --verdict)
 
     def run_replicas(self, cfg: Config, gpus: List[int], stage: str) -> TrialResult:
         cfg = _strip(cfg)
@@ -207,8 +209,9 @@ class LayoutTrialRunner:
             if hooks.gpu_ids:
                 hooks = dataclasses.replace(hooks, gpu_ids=list(gpus))
             # Two load-generator processes per replica: one Python client cannot drive several engines.
+            more = {"answers": True} if self.answers else {}  # the call is unchanged unless asked
             m = run_trial(lb.url, hooks, self.workload, pid=None, request_timeout=self.request_timeout,
-                          clients=2 * len(gpus))
+                          clients=2 * len(gpus), **more)
             return TrialResult(config=cfg, stage=stage, metrics=m, replicas=len(gpus),
                                error=None if m.ok else m.failure_summary())
         except Exception as exc:
