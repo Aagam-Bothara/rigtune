@@ -47,6 +47,24 @@ def self_label(label: str) -> str:
     return SELF if label == paths.FORMER else label
 
 
+class RunRecord(BaseModel):
+    """One run of one row, as scored: whether it met the limits, at which level, with what tail. A row stands
+    for its median run, so these are what the verdict needs to count runs that met the limits, pair rounds
+    and see a run that missed them. Kept under `compare --verdict` only."""
+
+    round: int  # 1-based repeat
+    position: int  # 1-based place in its round's measuring order
+    ok: bool
+    meets_slo: Optional[bool] = None
+    scored_concurrency: Optional[int] = None
+    scored_tok_s: Optional[float] = None
+    scored_ttft_p95_ms: Optional[float] = None
+    scored_tpot_ms: Optional[float] = None
+    error: Optional[str] = None  # the first line, for a run that failed
+    started_at: Optional[float] = None  # wall clock, seconds since the epoch
+    ended_at: Optional[float] = None
+
+
 class ComparisonRow(BaseModel):
     label: Annotated[str, AfterValidator(self_label)]  # "rigtune" | "vllm-default" | "sglang-default" | "llamacpp-cuda-default" | "ollama-default"
     runtime: str  # backend name
@@ -77,15 +95,17 @@ class ComparisonRow(BaseModel):
     # comparison without added rows is written exactly as before they existed.
     kind: Optional[str] = None
     source: Optional[str] = None
+    run_records: List[RunRecord] = Field(default_factory=list)  # every run, under --verdict; else not written
 
     @model_serializer(mode="wrap")
     def _omit_unset_provenance(self, handler) -> Dict[str, Any]:
-        return _drop(handler(self), ("kind", "source"))
+        return _drop(handler(self), ("kind", "source", "run_records"))
 
 
 class SkippedRow(BaseModel):
     """An added row that was not measured, and why (its engine is not compared here, the card's default
-    already does what it sets, rigtune knows it fails, or the tool behind it produced no pick)."""
+    already does what it sets, rigtune knows it fails, or the tool behind it produced no pick). The verdict
+    reports it as not applicable."""
 
     label: str
     kind: str
@@ -95,7 +115,7 @@ class SkippedRow(BaseModel):
 
 def _drop(data: Dict[str, Any], keys: Tuple[str, ...]) -> Dict[str, Any]:
     for k in keys:
-        if data.get(k) in (None, []):
+        if data.get(k) in (None, [], {}):
             data.pop(k, None)
     return data
 
@@ -161,6 +181,17 @@ def _score_row(row: ComparisonRow, objective: str, cons: Constraints) -> None:
     row.scored_tpot_ms = m.tpot_ms
     row.scored_joules_per_token = m.joules_per_token
     row.meets_slo = ranked[0].feasible
+
+
+def run_record(row: ComparisonRow, repeat: int, position: int, started: Optional[float] = None,
+               ended: Optional[float] = None) -> RunRecord:
+    """The RunRecord of one measured run."""
+    error = row.error.splitlines()[0][:200] if not row.ok and row.error else None
+    return RunRecord(round=repeat, position=position, ok=row.ok, meets_slo=row.meets_slo if row.ok else None,
+                     scored_concurrency=row.scored_concurrency,
+                     scored_tok_s=row.scored_tok_s if row.ok else None,
+                     scored_ttft_p95_ms=row.scored_ttft_p95_ms, scored_tpot_ms=row.scored_tpot_ms,
+                     error=error, started_at=started, ended_at=ended)
 
 
 def combine_runs(rows: List[ComparisonRow]) -> ComparisonRow:
@@ -256,6 +287,7 @@ def compare(
     replica_runner: Optional[object] = None,
     repeats: int = 1,
     extra: Optional[Dict[str, Union[Config, ExtraRow]]] = None,
+    record_runs: bool = False,
 ) -> ComparisonResult:
     """Measure rigtune's winner and every reference config under the same workload. `extra` adds rows under
     their own labels (other searches' picks, say), measured like every other row and never filtered by `include`.
@@ -264,7 +296,8 @@ def compare(
     instead of measured.
 
     With repeats > 1 every row is measured that many times, round-robin (all rows once, then all again),
-    so drift over the session (temperature, a noisy neighbour) falls on every row alike."""
+    so drift over the session (temperature, a noisy neighbour) falls on every row alike. `record_runs` keeps
+    every run's RunRecord on its row (limit status, level, tail, place in its round, when) for the verdict."""
     workload = workload or get_workload(profile.workload)
     cons = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                       tpot_ceiling_ms=workload.tpot_ceiling_ms)
@@ -390,11 +423,16 @@ def compare(
             measurers.append((label, lambda label=label, cfg=cfg: run_row(label, cfg)))
 
     runs: Dict[str, List[ComparisonRow]] = {label: [] for label, _ in measurers}
-    for _ in range(max(1, repeats)):
-        for label, measure in measurers:
+    records: Dict[str, List[RunRecord]] = {label: [] for label, _ in measurers}
+    for repeat in range(1, max(1, repeats) + 1):
+        for position, (label, measure) in enumerate(measurers, 1):
+            started = time.time()
             runs[label].append(measure())
+            if record_runs:
+                records[label].append(run_record(runs[label][-1], repeat, position, started, time.time()))
     for label, _ in measurers:
         result.rows.append(combine_runs(runs[label]))
+        result.rows[-1].run_records = records[label]
     ps = result.rigtune_row
     ps.calibration_seconds = profile.calibration_seconds
     ps.calibration_trials = profile.calibration_trials

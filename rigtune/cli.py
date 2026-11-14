@@ -890,6 +890,11 @@ def compare(
         help="Also measure the expert rows: stock rows with the settings the engines' own tuning guides "
              "recommend (rigtune/data/expert_rows.json, each quoted with its page); a row this card or "
              "engine cannot use is skipped with a note"),
+    verdict: bool = typer.Option(
+        False, "--verdict",
+        help="Keep a record of every run of every row, score the result as a win, tie or loss against every "
+             "row at the default thresholds, and write the verdict as JSON and Markdown beside it "
+             "(`rigtune verdict` re-scores at others)"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
     ttft_percentile: int = TTFT_PCT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None),
@@ -979,10 +984,46 @@ def compare(
     result = _compare(hw, spec, profile, planned.prepared, reg, workload=eval_wl, constraints=cons,
                       ollama_tag=ollama_model, include=include or None, progress=_row_progress,
                       log_dir=profile_cache.logs_dir() / spec.safe_id / f"compare-{eval_wl.name}",
-                      power=_power_controller(profile), repeats=repeats, extra=extra or None)
+                      power=_power_controller(profile), repeats=repeats, extra=extra or None,
+                      record_runs=verdict)
     path = save(result, out)
     console.print(to_markdown(result))
     console.print(f"[dim]saved {path}[/]")
+    if verdict:
+        _write_verdict(path)
+
+
+def _write_verdict(path: Path, thresholds=None, out: Optional[Path] = None) -> None:
+    from rigtune.bench import verdict as vd
+
+    v, js, md = vd.write(path, thresholds, out)
+    console.print(vd.to_markdown(v), markup=False)
+    console.print(f"[dim]wrote {js} and {md}[/]")
+
+
+@app.command()
+def verdict(
+    results: Path = typer.Argument(..., exists=True, dir_okay=False,
+                                   help="A results JSON written by `rigtune compare`"),
+    stock_gain: float = typer.Option(20.0, "--stock-gain",
+                                     help="Percent rigtune's median must be above a stock row's to win"),
+    tuner_gain: float = typer.Option(10.0, "--tuner-gain",
+                                     help="Percent above a tuner row's (another tool's pick) to win"),
+    expert_gain: float = typer.Option(10.0, "--expert-gain",
+                                      help="Percent above an expert row's (a guide's settings) to win"),
+    loss_margin: float = typer.Option(0.0, "--loss-margin",
+                                      help="Percent a row must be ahead, ranges apart, to count as a loss"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Directory for the verdict (default: beside it)"),
+) -> None:
+    """Score a comparison as a win, tie or loss against every row. Only runs that met the limits count; a win
+    needs the threshold at the median and in the worst paired round, every rigtune run above every run of the
+    row, 3 runs on each side, and rigtune's answers checked and unchanged (else it is ahead on speed, answers
+    unchecked); a row that could not start is not applicable, never a win."""
+    from rigtune.bench.verdict import Thresholds
+
+    thresholds = Thresholds(stock=stock_gain / 100, tuner=tuner_gain / 100, expert=expert_gain / 100,
+                            loss_margin=loss_margin / 100)
+    _write_verdict(results, thresholds, out)
 
 
 @app.command()

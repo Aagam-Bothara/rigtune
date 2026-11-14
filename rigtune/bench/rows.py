@@ -19,9 +19,10 @@ repeats, interleaved with the others. Two sources:
   `config` takes rigtune's Config fields (rigtune/models.py); an unknown field is an error rather than
   ignored, so a typo cannot silently drop a setting. `kind` is "tuner" (another tool's pick, the default) or
   "expert". A row with `"skipped": "<why>"` and no config stands for a tool that produced no pick: it is
-  recorded with its reason, not measured, rather than left out.
+  recorded with its reason, not measured, rather than left out, and the verdict calls it not applicable.
 
-Every added row carries its kind and source into the results file.
+Every added row carries its kind and source into the results file, and the verdict (`rigtune verdict`,
+rigtune/bench/verdict.py) holds each kind to its own threshold.
 """
 
 from __future__ import annotations
