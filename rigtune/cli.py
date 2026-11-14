@@ -881,6 +881,15 @@ def compare(
     repeats: int = typer.Option(1, "--repeats", min=1,
                                 help="Measure every row this many times, interleaved, and report the median and "
                                      "the spread; rows whose runs overlap rigtune's are flagged as within noise"),
+    rows: Optional[List[Path]] = typer.Option(
+        None, "--rows",
+        help="Also measure the rows in this JSON file (repeatable): other tools' picks, such as vLLM "
+             "auto_tune's from benchmarks/vllm_auto_tune.py, each recorded with its kind and source"),
+    expert: bool = typer.Option(
+        False, "--expert",
+        help="Also measure the expert rows: stock rows with the settings the engines' own tuning guides "
+             "recommend (rigtune/data/expert_rows.json, each quoted with its page); a row this card or "
+             "engine cannot use is skipped with a note"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
     ttft_percentile: int = TTFT_PCT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None),
@@ -914,6 +923,7 @@ def compare(
     """Measure rigtune's pick vs stock defaults (and Ollama) on one workload; write a results JSON."""
     from rigtune.bench import compare as _compare, to_markdown
     from rigtune.bench.compare import save
+    from rigtune.bench.rows import RowsFileError, expert_rows, read_rows_file
     from rigtune.hardware import probe as _probe
     from rigtune.pipeline import prepare_and_plan, resolve_profile, select
 
@@ -923,6 +933,14 @@ def compare(
     _check_min_requests(min_requests, wl)
     # Held-out prompts are read before calibrating, so a bad file fails in seconds rather than after the search.
     eval_wl = _workload(workload, eval_workload_file, sessions, session_pool, session_turns, history, session_system) if eval_workload_file else wl
+    # So are added rows. The expert rows' labels (`*-expert-*`) are reserved whether or not --expert is given,
+    # so a label means the same row in every results file.
+    extra: dict = {}
+    for path in rows or []:
+        try:
+            extra.update(read_rows_file(path, taken=extra))
+        except RowsFileError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--rows")
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate,
                         strict=strict_constraints)
     hw = _probe()
@@ -956,10 +974,12 @@ def compare(
 
     from rigtune import cache as profile_cache
 
+    if expert:
+        extra = {**expert_rows(hw, planned.prepared, reg), **extra}
     result = _compare(hw, spec, profile, planned.prepared, reg, workload=eval_wl, constraints=cons,
                       ollama_tag=ollama_model, include=include or None, progress=_row_progress,
                       log_dir=profile_cache.logs_dir() / spec.safe_id / f"compare-{eval_wl.name}",
-                      power=_power_controller(profile), repeats=repeats)
+                      power=_power_controller(profile), repeats=repeats, extra=extra or None)
     path = save(result, out)
     console.print(to_markdown(result))
     console.print(f"[dim]saved {path}[/]")

@@ -10,13 +10,14 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Annotated, Any, Callable, Dict, List, Optional, Tuple
+from typing import Annotated, Any, Callable, Dict, List, Optional, Tuple, Union
 
-from pydantic import AfterValidator, AliasChoices, BaseModel, Field
+from pydantic import AfterValidator, AliasChoices, BaseModel, Field, model_serializer
 
 from rigtune import __version__, paths
 from rigtune.backends.base import BaseBackend
 from rigtune.bench.references import OllamaReference, ollama_tag_for, reference_configs
+from rigtune.bench.rows import ExtraRow
 from rigtune.calibrate.objectives import Constraints
 from rigtune.calibrate.search import SubprocessTrialRunner, TrialRunner
 from rigtune.calibrate.workload import Workload, get_workload
@@ -71,6 +72,32 @@ class ComparisonRow(BaseModel):
     repeats: int = 1
     runs_tok_s: List[Optional[float]] = Field(default_factory=list)
     tok_s_spread_pct: Optional[float] = None  # (max - min) / median over the runs that succeeded
+    # Rows added with --expert or --rows (rigtune/bench/rows.py): "expert" or "tuner", and where the
+    # settings came from. Unset for rigtune's own row and the stock rows, and then left out of the file, so a
+    # comparison without added rows is written exactly as before they existed.
+    kind: Optional[str] = None
+    source: Optional[str] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_provenance(self, handler) -> Dict[str, Any]:
+        return _drop(handler(self), ("kind", "source"))
+
+
+class SkippedRow(BaseModel):
+    """An added row that was not measured, and why (its engine is not compared here, the card's default
+    already does what it sets, rigtune knows it fails, or the tool behind it produced no pick)."""
+
+    label: str
+    kind: str
+    source: str = ""
+    reason: str
+
+
+def _drop(data: Dict[str, Any], keys: Tuple[str, ...]) -> Dict[str, Any]:
+    for k in keys:
+        if data.get(k) in (None, []):
+            data.pop(k, None)
+    return data
 
 
 class ComparisonResult(BaseModel):
@@ -89,12 +116,21 @@ class ComparisonResult(BaseModel):
     notes: List[str] = Field(default_factory=list)
     # The workload rigtune's pick was calibrated on, when the rows were measured on another (held out).
     calibrated_on: Optional[str] = None
+    skipped: List[SkippedRow] = Field(default_factory=list)  # left out of the file when empty
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_skipped(self, handler) -> Dict[str, Any]:
+        return _drop(handler(self), ("skipped",))
 
     @property
     def rigtune_row(self) -> Optional[ComparisonRow]:
         return next((r for r in self.rows if r.label == "rigtune"), None)
 
     def default_rows(self) -> List[ComparisonRow]:
+        """The rows that stand for not tuning: every row but rigtune's and the expert and tuner rows."""
+        return [r for r in self.rows if r.label != "rigtune" and r.kind is None]
+
+    def other_rows(self) -> List[ComparisonRow]:
         return [r for r in self.rows if r.label != "rigtune"]
 
 
@@ -142,13 +178,13 @@ def combine_runs(rows: List[ComparisonRow]) -> ComparisonRow:
 
 
 def noise_notes(result: "ComparisonResult") -> List[str]:
-    """Reference rows whose runs overlap rigtune's: the difference between them is within run-to-run noise."""
+    """Other rows whose runs overlap rigtune's: the difference between them is within run-to-run noise."""
     ps = result.rigtune_row
     mine = [v for v in (ps.runs_tok_s if ps else []) if v is not None]
     if len(mine) < 2:
         return []
     out = []
-    for r in result.default_rows():
+    for r in result.other_rows():
         theirs = [v for v in r.runs_tok_s if v is not None]
         if len(theirs) >= 2 and min(mine) <= max(theirs) and min(theirs) <= max(mine):
             out.append(f"{r.label}: its runs ({min(theirs):.0f}-{max(theirs):.0f} tok/s) overlap rigtune's "
@@ -219,10 +255,13 @@ def compare(
     disagg_runner: Optional[object] = None,
     replica_runner: Optional[object] = None,
     repeats: int = 1,
-    extra: Optional[Dict[str, Config]] = None,
+    extra: Optional[Dict[str, Union[Config, ExtraRow]]] = None,
 ) -> ComparisonResult:
     """Measure rigtune's winner and every reference config under the same workload. `extra` adds rows under
     their own labels (other searches' picks, say), measured like every other row and never filtered by `include`.
+    An ExtraRow (rigtune/bench/rows.py: expert rows, other tools' picks) also records its kind and source in
+    its row and the notes; one marked skipped, or whose engine is not compared here, is listed in `skipped`
+    instead of measured.
 
     With repeats > 1 every row is measured that many times, round-robin (all rows once, then all again),
     so drift over the session (temperature, a noisy neighbour) falls on every row alike."""
@@ -252,7 +291,20 @@ def compare(
             logger.info("ollama binary not found; skipping the ollama-default row")
     if include:
         refs = {k: v for k, v in refs.items() if k in include}
-    refs.update(extra or {})
+    added: Dict[str, ExtraRow] = {}
+    skipped: List[SkippedRow] = []
+    for label, row in (extra or {}).items():
+        if not isinstance(row, ExtraRow):
+            refs[label] = row
+            continue
+        reason = row.skipped
+        if reason is None and row.config.backend not in models:
+            reason = f"{row.config.backend} is not one of this comparison's engines"
+        if reason is not None:
+            skipped.append(SkippedRow(label=label, kind=row.kind, source=row.source, reason=reason))
+            continue
+        refs[label] = row.config
+        added[label] = row
 
     if runner is None:
         runner = SubprocessTrialRunner(backends=backends, models=models, hw=hw, workload=workload,
@@ -269,17 +321,39 @@ def compare(
         workload_spec=workload.spec(),
         ttft_ceiling_ms=cons.ttft_ceiling_ms,
         tpot_ceiling_ms=cons.tpot_ceiling_ms,
+        skipped=skipped,
     )
+    for label, row in added.items():
+        article = "an" if row.kind == "expert" else "a"
+        result.notes.append(f"{label} is {article} {row.kind} row: {row.source}")
+        result.notes += row.notes
+        if row.changes_numerics:
+            result.notes.append(f"{label} changes what the model computes (a quantized KV cache): this "
+                                "comparison measures its speed, not its answers")
+        busiest = max(workload.concurrencies)
+        if row.acts_up_to_users is not None and busiest > row.acts_up_to_users:
+            result.notes.append(f"{label} is measured at up to {busiest} users, above "
+                                f"{row.acts_up_to_users}: {row.acts_note}")
+    for s in skipped:
+        result.notes.append(f"{s.label} ({s.kind}) was not measured: {s.reason}")
 
     if profile.workload and profile.workload != workload.name:
         result.calibrated_on = profile.workload
         result.notes.append(f"rigtune's pick was calibrated on `{profile.workload}`; every row here was measured on "
                             f"`{workload.name}`, which calibration never saw")
 
+    swapped: Dict[str, Config] = {}  # added rows measured with their fallback: the first run failed to start
+    seen: set = set()
+
     def run_row(label: str, cfg: Config) -> ComparisonRow:
+        cfg = swapped.get(label, cfg)
+        first = label not in seen
+        seen.add(label)
         backend = backends[cfg.backend]
         row = ComparisonRow(label=label, runtime=cfg.backend, runtime_version=backend.version(hw), config=cfg,
                             config_key=cfg.key())
+        if label in added:
+            row.kind, row.source = added[label].kind, added[label].source
         if progress:
             progress(label, None)
         try:
@@ -287,6 +361,12 @@ def compare(
         except Exception:
             pass
         tr = runner.run(cfg, f"compare:{label}")
+        spare = added[label].fallback if label in added else None
+        if spare is not None and first and not tr.launched:
+            swapped[label] = spare
+            error = (tr.error or "no error recorded").splitlines()[0][:200]
+            result.notes.append(f"{added[label].fallback_note} (it failed with: {error})")
+            return run_row(label, spare)
         row.ok, row.error, row.metrics, row.memory = tr.ok, tr.error, tr.metrics, tr.memory
         _score_row(row, objective, cons)
         if progress:
