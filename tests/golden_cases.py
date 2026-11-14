@@ -19,6 +19,9 @@ those fixes moved were regenerated:
   rows with the radix cache off now hold an eviction interval per draft token (on the A40, n-gram at batch 16 no
   longer fits at ctx 2048, 4096 and 8192); on 0.5.23 the 4090 and the L4 also plan 4096-token prefill chunks
   wherever the radix cache is off and no prefill budget is set (those speculation rows, and nine more each).
+Added later, as new entries only (every existing entry unchanged): qwen3.5-9b-mtp, Qwen3.5-9B with its own MTP head
+found (the head's 486,581,248 B and the 4,068,474,880 B of embedding and output head its listing gives), in the
+candidates and plans of every card, and the qwen3.5-mtp-* launch cases.
 """
 
 from __future__ import annotations
@@ -59,6 +62,7 @@ MODELS = {
     "qwen2.5-7b": ("Qwen/Qwen2.5-7B-Instruct", "qwen2_5_7b_instruct_config.json"),
     "llama-3.1-8b": ("meta-llama/Llama-3.1-8B-Instruct", LLAMA_31_8B_CONFIG),
     "qwen3.5-9b": ("Qwen/Qwen3.5-9B", "qwen3_5_9b_config.json"),
+    "qwen3.5-9b-mtp": ("Qwen/Qwen3.5-9B", "qwen3_5_9b_config.json"),  # with its own MTP head found
     "gemma-4": ("google/gemma-4-12B-it", "gemma4_12b_it_config.json"),
 }
 
@@ -90,6 +94,9 @@ def prepared(model: str, engine: str, revision: Optional[str] = None):
     if model == "llama-3.1-8b":  # the second models --speculative all finds for it
         pm.spec_repos = {"eagle3": HEAD, "draft": DRAFT}
         pm.spec_bytes = {HEAD: 850_000_000, DRAFT: 2_471_645_608}
+    if model == "qwen3.5-9b-mtp":  # what --speculative all records once the checkpoint's own head is found
+        pm.spec_repos = {"mtp": hf_id}
+        pm.spec_bytes = {"mtp": 486_581_248, "mtp_shared": 4_068_474_880}
     return pm
 
 
@@ -149,6 +156,11 @@ def launch_cases(engine: str) -> List[Tuple[str, str, Dict[str, Any], bool]]:
         ("qwen3.5-prefix-off-spec", "qwen3.5-9b", {"prefix_cache": False, "spec_decode": lookup}, False),
         ("gemma-4-default", "gemma-4", {}, False),
         ("gemma-4-prefix-off", "gemma-4", {"prefix_cache": False, "batch": 16}, False),
+        ("qwen3.5-mtp-1", "qwen3.5-9b-mtp", {"spec_decode": "mtp:1", "batch": 16}, False),
+        ("qwen3.5-mtp-3", "qwen3.5-9b-mtp", {"spec_decode": "mtp:3", "batch": 16}, False),
+        ("qwen3.5-mtp-revision", "qwen3.5-9b-mtp@abc123", {"spec_decode": "mtp:1", "batch": 16}, False),
+        ("qwen3.5-mtp-prefix-off", "qwen3.5-9b-mtp", {"spec_decode": "mtp:3", "prefix_cache": False, "batch": 16},
+         False),
     ]
     if engine == "vllm":
         cases += [

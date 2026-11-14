@@ -143,6 +143,9 @@ def no_network(monkeypatch, llama3b_arch):
 
     monkeypatch.setattr(sp, "find_eagle3_head", lambda spec, arch, **kw: None)  # second models (--speculative all)
     monkeypatch.setattr(sp, "repo_bytes", lambda repo, token=None: None)
+    import rigtune.introspect as ins
+
+    monkeypatch.setattr(ins, "inspect_model", lambda spec, **kw: ins.ModelFacts())  # a checkpoint's own MTP head
     yield
 
 

@@ -79,7 +79,8 @@ class SearchOptions:
     kv_quant: bool = True  # quantized KV caches
     speculative: bool = True  # n-gram and draft-model speculative decoding
     # --speculative all: also the methods that have never run on hardware (SGLang's n-gram, EAGLE3 head and draft
-    # model, vLLM's EAGLE3 head), the engines' choice after speculation and a third speculation setting per engine.
+    # model, vLLM's EAGLE3 head, a checkpoint's own MTP head on both), the engines' choice after speculation and a
+    # third speculation setting per engine.
     speculative_all: bool = False
     prefix_cache: bool = True  # keep prefix caching on, and tune it for shared-prefix workloads
     phase_tuning: bool = True  # the prefill-knob stage
@@ -233,6 +234,23 @@ def spec_state_notes_for(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], pl
     except Exception as exc:
         logger.debug("no speculation state notes for %s: %s", cfg.key(), exc)
         return []
+
+
+def spec_stage_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult", opts: SearchOptions,
+                  workload: Workload, notes: List[str]):
+    """The speculation stage's variants for a leader. The workload's busiest level is passed on, so a checkpoint's
+    own MTP head that does not fit at the leader's batch can be tried at a smaller batch that still covers it; what
+    the backends say about that (spec_notes) is collected in `notes`, once each, for the profile."""
+    busiest = max(workload.concurrencies, default=0) or None
+
+    def fn(c: Config) -> List[Config]:
+        be, pm = reg[c.backend], plan.prepared[c.backend]
+        for n in be.spec_notes(c, pm, hw, opts.speculative_all, min_batch=busiest):
+            if n not in notes:
+                notes.append(n)
+        return be.spec_variants(c, pm, hw, opts.speculative_all, min_batch=busiest)
+
+    return fn
 
 
 def combination_fits(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult"):
@@ -814,9 +832,9 @@ def calibrate(
         stages.append(("kv", kv_variants_fn(hw, reg, plan)))
     if opts.prefix_cache and workload.reuses_prefix:
         stages.append(("prefix", lambda c: reg[c.backend].prefix_variants(c)))
+    spec_notes: List[str] = []  # an MTP setting tried at a smaller batch, or not tried (spec_stage_fn)
     if opts.speculative:
-        stages.append(("spec", lambda c: reg[c.backend].spec_variants(c, plan.prepared[c.backend], hw,
-                                                                         opts.speculative_all)))
+        stages.append(("spec", spec_stage_fn(hw, reg, plan, opts, workload, spec_notes)))
     controller, points, power_notes = None, [], []
     if power_points is not None:  # injected (tests, or a caller that already probed the GPU)
         controller, points = power_controller, list(power_points)
@@ -884,7 +902,7 @@ def calibrate(
     if winner is None:
         raise RuntimeError("calibration failed: " + "; ".join(notes))
     elapsed = time.monotonic() - t0
-    notes = power_notes + version_notes + list(plan.notes) + tier_notes + client_notes + notes
+    notes = power_notes + version_notes + list(plan.notes) + tier_notes + client_notes + notes + spec_notes
     notes += spec_state_notes_for(hw, reg, plan, winner.config, opts)
     if winner.config.text_only:
         notes.append(TEXT_ONLY_NOTE)

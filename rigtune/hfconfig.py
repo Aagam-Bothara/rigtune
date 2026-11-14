@@ -51,7 +51,10 @@ def _first(cfg: Dict[str, Any], *keys: str, default: Any = None) -> Any:
 
 def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
     """Build ArchInfo from a raw config.json dict. Handles nested text_config (multimodal)."""
+    from rigtune.introspect import mtp_layers
+
     mm = any(isinstance(cfg.get(k), dict) for k in ("vision_config", "audio_config"))
+    mtp = mtp_layers(cfg)
     if "text_config" in cfg and isinstance(cfg["text_config"], dict):
         merged = dict(cfg)
         merged.update(cfg["text_config"])
@@ -80,6 +83,7 @@ def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
         num_params=params,
         torch_dtype=dtype,
         has_mm_config=mm,
+        mtp_layers=mtp[0] if mtp else 0,
         **hybrid_layout(cfg, layers, dtype),
     )
 

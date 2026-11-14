@@ -132,6 +132,10 @@ class ArchInfo(BaseModel):
     # The config has a vision or audio sub-config (vision_config, audio_config). Defaulted: profiles saved before it
     # load as False, and `multimodal_arch` still recognises them by name.
     has_mm_config: bool = False
+    # Layers of the checkpoint's own multi-token-prediction head, as its config declares them
+    # (rigtune.introspect.mtp_layers); 0 for none. The planner counts them only for an "mtp" speculation setting,
+    # which is offered only once the head's weights were found. Defaulted, so older profiles load.
+    mtp_layers: int = 0
 
     @property
     def multimodal_arch(self) -> bool:
@@ -173,7 +177,9 @@ class PreparedModel(BaseModel):
     draft_paths: Dict[str, str] = Field(default_factory=dict)  # draft model id -> GGUF path (llama.cpp)
     # Second models for speculative decoding that the Hub has and that fit this target: spec kind -> repository
     # ("eagle3" -> a verified head), and repository -> size in bytes, for the memory left outside the engine's
-    # reservation. Empty in profiles saved before they existed, which still load.
+    # reservation. The checkpoint's own MTP head, once its weights were found, is "mtp" -> the model itself; its size
+    # is under "mtp", and that of the target's embedding and output head (which the draft first copies) under
+    # "mtp_shared". Empty in profiles saved before they existed, which still load.
     spec_repos: Dict[str, str] = Field(default_factory=dict)
     spec_bytes: Dict[str, int] = Field(default_factory=dict)
 
@@ -205,7 +211,8 @@ class Config(BaseModel):
     prefill_budget: Optional[int] = None
     kv_dtype: str = "auto"
     prefix_cache: Optional[bool] = None  # None = the engine default (on for vLLM and SGLang)
-    spec_decode: Optional[str] = None  # speculative decoding: "ngram|ngram_gpu|suffix:<k>" | "draft|eagle3:<hf_id>:<k>"
+    # speculative decoding: "ngram|ngram_gpu|suffix|mtp:<k>" | "draft|eagle3:<hf_id>:<k>"
+    spec_decode: Optional[str] = None
     tp: int = 1  # tensor-parallel degree across GPUs
     # A KV-cache tier below the GPU pool (vLLM's offloading connector, SGLang's hierarchical cache):
     # "host:<GiB>" of host RAM, or "host:<GiB>+disk:<GiB>" with a directory under rigtune's own cache dir

@@ -121,7 +121,8 @@ class MemoryModel:
     def __init__(self, runtime_workspace: int, kv_tokens_fn, device: str = "gpu",
                  margin_fraction: float = DEFAULT_MARGIN_FRACTION, calibrated: bool = False,
                  hybrid_fn: Optional[Callable[[Config, ArchInfo], HybridKV]] = None,
-                 full_kv_fn: Optional[Callable[[ArchInfo], Optional[str]]] = None):
+                 full_kv_fn: Optional[Callable[[ArchInfo], Optional[str]]] = None,
+                 extra_weights_fn: Optional[Callable[[Config, PreparedModel], int]] = None):
         self.runtime_workspace = runtime_workspace
         self.kv_tokens_fn = kv_tokens_fn  # Config -> int tokens resident in KV cache
         self.device = device  # "gpu" | "cpu"
@@ -132,6 +133,9 @@ class MemoryModel:
         # ArchInfo -> why this engine keeps a full KV cache on every layer of a recognised hybrid layout
         # (SGLang for Gemma 2/3); None when it does not.
         self.full_kv_fn = full_kv_fn
+        # (Config, PreparedModel) -> weight bytes a setting loads beyond model.weights_for(cfg.quant): vLLM's MTP head
+        # for a local checkpoint directory. None everywhere else, so every other plan is unchanged.
+        self.extra_weights_fn = extra_weights_fn
 
     def full_kv_reason(self, arch: ArchInfo) -> Optional[str]:
         return self.full_kv_fn(arch) if (self.full_kv_fn is not None and arch.is_hybrid) else None
@@ -150,6 +154,8 @@ def estimate(
     available: Optional[int] = None,
 ) -> MemoryEstimate:
     weights = model.weights_for(cfg.quant)
+    if mm.extra_weights_fn is not None:
+        weights += int(mm.extra_weights_fn(cfg, model))
     kv = kv_cache_bytes(model, cfg, mm.kv_tokens_fn(cfg), mm.hybrid_for(cfg, model.arch))
 
     # Partial GPU offload (llama.cpp): only the offloaded fraction lands on the device.
@@ -214,7 +220,8 @@ def spec_state_notes(hw: HardwareDescriptor, model: PreparedModel, mm: MemoryMod
     Only models with linear-attention layers can need this: each speculative token adds a state per sequence
     (see the backends' hybrid rules), so a method that fits a dense model can be refused for state memory. The
     search does not step the batch down for a speculation setting (that would change dense searches too), so
-    the note says what the method would need.
+    the note says what the method would need. A checkpoint's own MTP head is the exception: it is tried at a
+    smaller batch or not at all, which the speculation stage notes (BaseBackend.own_head_fit).
     """
     if not model.arch.linear_layers or not estimate(hw, model, base, mm).feasible:
         return []

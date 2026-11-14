@@ -252,7 +252,7 @@ class BaseBackend:
         raise NotImplementedError
 
     def calibrated_memory(self, hw: HardwareDescriptor, kv_tokens_fn, device: str,
-                          hybrid_fn=None, full_kv_fn=None) -> MemoryModel:
+                          hybrid_fn=None, full_kv_fn=None, extra_weights_fn=None) -> MemoryModel:
         """MemoryModel using this machine's fitted workspace/margin when `rigtune memory-report --apply` ran.
 
         `hybrid_fn` (Config, ArchInfo) -> memory.HybridKV is given only by backends whose hybrid-attention KV
@@ -273,6 +273,7 @@ class BaseBackend:
             calibrated=ws is not None or mf is not None,
             hybrid_fn=hybrid_fn,
             full_kv_fn=full_kv_fn,
+            extra_weights_fn=extra_weights_fn,
         )
 
     def estimate_memory(self, cfg: Config, model: PreparedModel, hw: HardwareDescriptor) -> int:
@@ -314,10 +315,57 @@ class BaseBackend:
         return []
 
     def spec_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
-                      all_methods: bool = False) -> List[Config]:
+                      all_methods: bool = False, min_batch: Optional[int] = None) -> List[Config]:
         """Speculative-decoding settings to try. `hw` lets a backend leave memory for a second model, and
-        `all_methods` (--speculative all) adds the methods that have not run on hardware yet."""
+        `all_methods` (--speculative all) adds the methods that have not run on hardware yet. `min_batch`, the
+        workload's busiest level, lets a checkpoint's own MTP head that does not fit at `cfg`'s batch be tried at a
+        smaller one that still covers it (own_head_fit); no other method changes the batch."""
         return []
+
+    def spec_notes(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
+                   all_methods: bool = False, min_batch: Optional[int] = None) -> List[str]:
+        """Notes for the profile about what spec_variants did with the same arguments: an MTP setting tried at a
+        smaller batch, or not tried because it fits at none. Default: none."""
+        return []
+
+    def own_head_fit(self, variants: List[Config], model: PreparedModel, hw: HardwareDescriptor,
+                     min_batch: Optional[int]) -> Tuple[List[Config], List[str]]:
+        """The MTP `variants` the planner fits, each at its own batch or else at the largest batch that fits and is
+        at least `min_batch` (the workload's busiest level, so every level can still be measured), with a note
+        either way. Without `min_batch` nothing is lowered. On a 24 GB card Qwen3.5-9B in bf16 misses at vLLM's
+        smallest grid batch (16) by 0.7 GB and fits at 8, so without this the head could never be tried there."""
+        from rigtune.memory import estimate
+
+        mm = self.memory_model(hw)
+
+        def fits(c: Config) -> bool:
+            try:
+                return estimate(hw, model, c, mm).feasible
+            except Exception:
+                return False
+
+        out: List[Config] = []
+        notes: List[str] = []
+        for v in variants:
+            if fits(v):
+                out.append(v)
+                continue
+            low, high, best = max(1, min_batch or 0), v.batch - 1, None
+            while min_batch and low <= high:  # feasibility only falls as the batch grows
+                mid = (low + high) // 2
+                if fits(v.model_copy(update={"batch": mid})):
+                    best, low = mid, mid + 1
+                else:
+                    high = mid - 1
+            if best is not None:
+                out.append(v.model_copy(update={"batch": best}))
+                notes.append(f"{v.backend} {v.spec_decode} does not fit at batch {v.batch}; tried at batch {best}, the "
+                             f"largest that fits and covers the workload's {min_batch} users")
+            else:
+                floor = f" or at any batch down to the workload's {min_batch} users" if min_batch else ""
+                notes.append(f"{v.backend} {v.spec_decode} not tried: the planner does not fit it at batch "
+                             f"{v.batch}{floor}")
+        return out, notes
 
     def known_failure(self, cfg: Config) -> Optional[str]:
         """Why `cfg` is expected to fail at start-up or under load, so the search does not try it. Default: never."""

@@ -49,6 +49,10 @@ SGLANG_EXTRA_BUFFER_ARCHS = frozenset({
     "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration", "Qwen3_5ForCausalLM",
     "Qwen3_5MoeForCausalLM", "Qwen3NextForCausalLM",
 })
+# Layers of a Qwen3.5 MTP draft: configs/model_config.py ModelConfig._config_draft_model sets
+# num_nextn_predict_layers = 1 (line 772 at v0.5.19, 1180 at v0.5.23) and models/qwen3_5_mtp.py
+# Qwen3_5ForCausalLMMTP.__init__ builds its model with num_hidden_layers = 1 (both tags).
+SGLANG_MTP_DRAFT_LAYERS = 1
 
 
 # SGLang 0.5.23 raised the default prefill chunk of cards with 20 to 35 GiB (an RTX 4090, an L4) from 2048 to
@@ -149,14 +153,23 @@ def sglang_hybrid_kv(cfg: Config, arch: ArchInfo, vram_total_bytes: int, version
     per_req x (requests + 1) x D, inside the mamba share with the radix cache (the joint solve for K) and beside it
     without. ReplaySSM, which would replace it, is off by default (server_args enable_linear_replayssm_spec).
     SGLang's GDN conv state does not grow with D (configs/mamba_utils.Mamba2StateShape.create: conv_kernel - 1).
-    A second model's own KV cache is not counted, as for dense models (see spec_fraction).
+    A second model's own KV cache is not counted, as for dense models (see spec_fraction). The checkpoint's own MTP
+    head is: model_executor/pool_configurator.py DefaultPoolConfigurator, which sizes these models' KV pool, scales
+    its cell by 1 + draft layers / full-attention layers for EAGLE (NEXTN resolves to it), with the draft's layers
+    read as num_nextn_predict_layers (v0.5.19 lines 183-222, v0.5.23 lines 259-314; only with a draft path, which
+    sglang_config passes). _config_draft_model sets that to 1 for a Qwen3.5 head, and Qwen3_5ForCausalLMMTP builds
+    one layer whatever the checkpoint declares (mtp_config.num_hidden_layers = 1), so one full layer is added.
     """
     draft = sglang_draft_tokens(cfg.spec_decode)
+    full_layers = None
+    if speculative.own_head(cfg.spec_decode) and arch.full_attention_layers:
+        full_layers = arch.full_attention_layers + SGLANG_MTP_DRAFT_LAYERS
     if cfg.prefix_cache is not False:
         slots = sglang_mamba_slots_per_request(cfg, arch) * cfg.batch + 1
         return HybridKV(state_slots=slots + draft * (cfg.batch + 1),
                         swa_full_tokens_ratio=SWA_FULL_TOKENS_RATIO,
-                        state_share=MAMBA_FULL_MEMORY_RATIO / (1 + MAMBA_FULL_MEMORY_RATIO))
+                        state_share=MAMBA_FULL_MEMORY_RATIO / (1 + MAMBA_FULL_MEMORY_RATIO),
+                        full_layers=full_layers)
     swa_pool = None
     if arch.sliding_layers and arch.full_attention_layers:
         page = 1  # CUDA default (arg_groups/overrides.py page_size resolution)
@@ -164,11 +177,12 @@ def sglang_hybrid_kv(cfg: Config, arch: ArchInfo, vram_total_bytes: int, version
         per_request = (arch.sliding_window or 0) + SWA_EVICTION_INTERVAL * max(1, draft) + page \
             + (sglang_decode_alloc(cfg.spec_decode) if draft else page)
         swa_pool = per_request * cfg.batch + SWA_CHUNKS_IN_FLIGHT * chunk + page
-    return HybridKV(state_slots=(cfg.batch + 1) * (1 + draft), swa_pool_tokens=swa_pool)
+    return HybridKV(state_slots=(cfg.batch + 1) * (1 + draft), swa_pool_tokens=swa_pool, full_layers=full_layers)
 
 
 def sglang_draft_tokens(spec: Optional[str]) -> int:
-    """--speculative-num-draft-tokens for a spec: k for n-gram, k + 1 for a second model (sglang_config)."""
+    """--speculative-num-draft-tokens for a spec: k for n-gram, k + 1 for a second model or the checkpoint's own MTP
+    head (sglang_config)."""
     if not spec:
         return 0
     kind, _, k = speculative.parse(spec)
@@ -248,6 +262,47 @@ def sglang_spec_methods() -> FrozenSet[str]:
     python = sglang_python()
     pkg = _sglang_package_dir(python) if python else None
     return spec_methods_in(_server_args_source(pkg)) if pkg else frozenset()
+
+
+# Which architectures the SGLang that would be launched can serve with their own MTP head, read from its source
+# like the methods above. NEXTN must be an algorithm its arguments know (0.5.19's server_args.py help text, line
+# 2072; 0.5.23's arg_groups/speculative_hook.py, line 109), and, as for an EAGLE3 head, the release must be one
+# whose second-model behaviour was read (SGLANG_SECOND_MODEL_MARKER). configs/model_config.py must rewrite a draft of
+# the architecture to Qwen3_5ForCausalLMMTP (ModelConfig._config_draft_model, line 771 at v0.5.19, 1179 at v0.5.23,
+# in the branch of an `architectures[0] in [...]` test that lists the architecture), and models/qwen3_5_mtp.py must
+# define it (line 84 / 94).
+SGLANG_MTP_ALGORITHM = "NEXTN"
+SGLANG_MTP_REWRITE = 'architectures[0] = "Qwen3_5ForCausalLMMTP"'
+SGLANG_MTP_CLASS = "class Qwen3_5ForCausalLMMTP("
+SGLANG_MTP_TEST = "architectures[0] in ["
+
+
+def mtp_archs_in(args_source: str, model_config_source: str, mtp_model_source: str) -> FrozenSet[str]:
+    """The architectures whose own MTP head SGLang source text shows it can load: its argument parser's, its
+    srt/configs/model_config.py's and its srt/models/qwen3_5_mtp.py's."""
+    if SGLANG_MTP_ALGORITHM not in args_source or SGLANG_SECOND_MODEL_MARKER not in args_source:
+        return frozenset()
+    at = model_config_source.find(SGLANG_MTP_REWRITE)
+    if at < 0 or SGLANG_MTP_CLASS not in mtp_model_source:
+        return frozenset()
+    # The names in the `architectures[0] in [...]` test whose branch makes the rewrite, not the names anywhere.
+    opens = model_config_source.rfind(SGLANG_MTP_TEST, 0, at)
+    if opens < 0:
+        return frozenset()
+    closes = model_config_source.find("]", opens + len(SGLANG_MTP_TEST))
+    listed = set(re.findall(r'"([A-Za-z0-9_]+)"', model_config_source[opens:closes]))
+    return frozenset(a for a in speculative.MTP_ARCHS if a in listed)
+
+
+@functools.lru_cache(maxsize=1)
+def sglang_mtp_archs() -> FrozenSet[str]:
+    """mtp_archs_in for the SGLang that would be launched; empty when it cannot be found."""
+    python = sglang_python()
+    pkg = _sglang_package_dir(python) if python else None
+    if not pkg:
+        return frozenset()
+    return mtp_archs_in(_server_args_source(pkg), _package_text(pkg, "srt", "configs", "model_config.py"),
+                        _package_text(pkg, "srt", "models", "qwen3_5_mtp.py"))
 
 
 @functools.lru_cache(maxsize=1)
@@ -379,9 +434,10 @@ class SglangBackend(BaseBackend):
                              weights_bytes=weights)
 
     def find_second_models(self, prepared: PreparedModel) -> List[str]:
-        """Under --speculative all: record the EAGLE3 head and the draft model this SGLang could load, with their
-        sizes, since the memory left outside the reservation depends on them (spec_fraction). One whose size is
-        unknown is not offered. Returns notes for the profile when the Hub could not be asked."""
+        """Under --speculative all: record the EAGLE3 head, the draft model and the checkpoint's own MTP head this
+        SGLang could load, with their sizes, since the memory left outside the reservation depends on them
+        (spec_fraction). One whose size is unknown is not offered. Returns notes for the profile when the Hub could
+        not be asked."""
         methods = sglang_spec_methods()
         notes: List[str] = []
         if "eagle3" in methods:
@@ -408,6 +464,10 @@ class SglangBackend(BaseBackend):
             if size:
                 prepared.spec_repos["draft"] = draft
                 prepared.spec_bytes[draft] = int(size)
+        if prepared.arch.architecture in sglang_mtp_archs():  # the checkpoint's own MTP head
+            notes += speculative.record_mtp_head(prepared, self.name)
+            if speculative.MTP_KEY in prepared.spec_repos and speculative.draft_bytes("mtp:1", prepared) is None:
+                notes.append(f"sglang: MTP head of {prepared.spec.hf_id} not tried, its size could not be read")
         for n in notes:
             logger.warning(n)
         return notes
@@ -453,9 +513,10 @@ class SglangBackend(BaseBackend):
         )
 
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:
+        path = model.hf_paths.get(cfg.quant) or model.hf_path or model.spec.hf_id
         args = [
             sglang_python() or sys.executable, "-m", "sglang.launch_server",
-            "--model-path", model.hf_paths.get(cfg.quant) or model.hf_path or model.spec.hf_id,
+            "--model-path", path,
             "--served-model-name", model.spec.hf_id,
             "--host", "127.0.0.1",
             "--port", str(port),
@@ -474,12 +535,13 @@ class SglangBackend(BaseBackend):
             args += ["--kv-cache-dtype", cfg.kv_dtype]
         if cfg.prefix_cache is False:
             args += ["--disable-radix-cache"]
-        if cfg.spec_decode:
-            args += speculative.sglang_config(cfg.spec_decode)
+        revision = model.spec.revision if cfg.quant not in INT4_METHODS else None
+        if cfg.spec_decode:  # the path and revision are read by an MTP head only: the target's own
+            args += speculative.sglang_config(cfg.spec_decode, model_path=path, revision=revision)
         if cfg.tp > 1:
             args += ["--tp-size", str(cfg.tp)]
-        if model.spec.revision and cfg.quant not in INT4_METHODS:
-            args += ["--revision", model.spec.revision]
+        if revision:
+            args += ["--revision", revision]
         args += render_extra(cfg.extra)
         env = {}
         # PCIe-only GPUs: peer-to-peer can hang at start-up inside containers. Measured on a pair of
@@ -524,12 +586,12 @@ class SglangBackend(BaseBackend):
         return TIER_DETAILS_FIELD if _tier_details_flag() else None
 
     def tier_host_need(self, cfg: Config, host_bytes: int) -> int:
-        """With an EAGLE3 head or a draft model SGLang adds a host pool for the second model's cache, as many
-        tokens as the target's (hybrid_cache/hybrid_pool_assembler.build_full_draft_pools, outside
+        """With an EAGLE3 head, a draft model or the checkpoint's own MTP head SGLang adds a host pool for the draft's
+        cache, as many tokens as the target's (hybrid_cache/hybrid_pool_assembler.build_full_draft_pools, outside
         --hicache-size). Its size per token is the second model's, which the planner does not know, so it is
-        counted as the target's."""
+        counted as the target's (for an MTP head, one layer, that overstates it)."""
         kind = speculative.parse(cfg.spec_decode)[0] if cfg.spec_decode else None
-        return 2 * host_bytes if kind in ("eagle3", "draft") else host_bytes
+        return 2 * host_bytes if kind in ("eagle3", "draft", "mtp") else host_bytes
 
     # A start-up out-of-memory failure with a second model steps down from the lowered fraction, this far at most
     # (the search's own floor, 0.85, sits above it on a 24 GB card).
@@ -561,11 +623,13 @@ class SglangBackend(BaseBackend):
         return round(cap - self.SPEC_RETRY_DEPTH, 2) if cap else None
 
     def spec_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
-                      all_methods: bool = False) -> List[Config]:
-        """Under --speculative all only: n-gram lookup, the verified EAGLE3 head and the draft model, as far as the
-        installed SGLang has them. A second model needs `hw` to be left room, and is offered only where the
-        planner says the configuration still fits at the lower fraction. Fractions start from the one before any
-        speculation lowered it, so the variants of a draft-model leader are not measured at its 0.79."""
+                      all_methods: bool = False, min_batch: Optional[int] = None) -> List[Config]:
+        """Under --speculative all only: n-gram lookup, the verified EAGLE3 head, the draft model and the
+        checkpoint's own MTP head, as far as the installed SGLang has them. A second model (the MTP head counts as
+        one) needs `hw` to be left room. An EAGLE3 head or a draft model is offered only where the planner says the
+        configuration still fits at the lower fraction; an MTP setting that does not fit is tried at a smaller batch
+        that covers the workload, or not at all (_mtp_variants). Fractions start from the one before any speculation
+        lowered it, so the variants of a draft-model leader are not measured at its 0.79."""
         if not all_methods:
             return []
         methods = sglang_spec_methods()
@@ -577,22 +641,61 @@ class SglangBackend(BaseBackend):
                 specs.append(speculative.eagle3(model.spec_repos["eagle3"], speculative.EAGLE3_TOKENS))
             if "draft" in methods and "draft" in model.spec_repos:
                 specs.append(speculative.draft(model.spec_repos["draft"], speculative.DRAFT_TOKENS_SGLANG))
-        base = cfg.gmu_before_spec if cfg.gmu_before_spec is not None else cfg.gpu_memory_utilization
         out: List[Config] = []
         for s in specs:
             if s == cfg.spec_decode:
                 continue
-            v = cfg.model_copy(update={"spec_decode": s, "gpu_memory_utilization": base, "gmu_before_spec": None})
-            cap = self.spec_fraction(s, model, hw) if hw is not None else None
-            if cap is not None and (base is None or base > cap):
-                v = v.model_copy(update={"gpu_memory_utilization": cap, "gmu_before_spec": base})
+            v, lowered = self._at_spec_fraction(cfg, s, model, hw)
+            if lowered:  # the configuration must still fit at the lower fraction
                 try:
-                    if not cap or not estimate(hw, model, v, self.memory_model(hw)).feasible:
+                    if not v.gpu_memory_utilization or not estimate(hw, model, v, self.memory_model(hw)).feasible:
                         continue
                 except Exception:
                     continue
             out.append(v)
-        return out
+        return out + self._mtp_variants(cfg, model, hw, all_methods, min_batch)[0]
+
+    def spec_notes(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
+                   all_methods: bool = False, min_batch: Optional[int] = None) -> List[str]:
+        return self._mtp_variants(cfg, model, hw, all_methods, min_batch)[1]
+
+    def _at_spec_fraction(self, cfg: Config, spec: str, model: PreparedModel,
+                          hw: Optional[HardwareDescriptor]) -> Tuple[Config, bool]:
+        """(`cfg` with `spec`, whether its fraction was lowered): at the fraction before any speculation lowered it,
+        or at the spec's own cap where that is lower (gmu_before_spec then keeps the fraction it came from)."""
+        base = cfg.gmu_before_spec if cfg.gmu_before_spec is not None else cfg.gpu_memory_utilization
+        v = cfg.model_copy(update={"spec_decode": spec, "gpu_memory_utilization": base, "gmu_before_spec": None})
+        cap = self.spec_fraction(spec, model, hw) if hw is not None else None
+        if cap is not None and (base is None or base > cap):
+            return v.model_copy(update={"gpu_memory_utilization": cap, "gmu_before_spec": base}), True
+        return v, False
+
+    def _mtp_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor], all_methods: bool,
+                      min_batch: Optional[int]) -> Tuple[List[Config], List[str]]:
+        """The checkpoint's own MTP head at each of speculative.MTP_TOKENS (steps; top-k 1, steps + 1 draft tokens),
+        at the fraction that leaves the draft room outside the reservation (spec_fraction: the head and the copy of
+        the embedding and output head the draft holds while the pools are sized, speculative.draft_bytes), with
+        notes. A head whose sizes are unknown gets a fraction of 0 and is not offered. A setting that does not fit at
+        `cfg`'s batch is tried at the largest batch that fits and covers `min_batch`, or not at all
+        (BaseBackend.own_head_fit)."""
+        if not (all_methods and hw is not None and self._offers_mtp(cfg, model)):
+            return [], []
+        variants = []
+        for k in speculative.MTP_TOKENS:
+            if speculative.mtp(k) == cfg.spec_decode:
+                continue
+            v, lowered = self._at_spec_fraction(cfg, speculative.mtp(k), model, hw)
+            if lowered and not v.gpu_memory_utilization:  # sizes unknown: no fraction is known to leave it room
+                continue
+            variants.append(v)
+        return self.own_head_fit(variants, model, hw, min_batch)
+
+    def _offers_mtp(self, cfg: Config, model: PreparedModel) -> bool:
+        """The checkpoint's own MTP head: its weights were found (find_second_models), this SGLang can load it for
+        the architecture (sglang_mtp_archs), and the launch reads the checkpoint it was found in, not a 4-bit
+        repository's."""
+        return (speculative.MTP_KEY in model.spec_repos and cfg.quant not in INT4_METHODS
+                and model.arch.architecture in sglang_mtp_archs())
 
     PREFILL_BUDGETS = (2048, 8192, 16384)
 

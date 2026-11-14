@@ -402,8 +402,9 @@ KVQ_OPT = typer.Option("on", "--kv-quant", callback=_on_off,
                        help="Try quantized KV caches (fp8 on vLLM and SGLang, q8_0 and q4_0 on llama.cpp)")
 SPEC_OPT = typer.Option("on", "--speculative", callback=_on_off_all,
                         help="Try speculative decoding (n-gram prompt lookup, a small draft model, suffix decoding). "
-                             "all: also SGLang's n-gram, EAGLE3 and draft model and vLLM's EAGLE3 head, none of "
-                             "which has run on hardware yet, choosing engines after speculation (opt-in)")
+                             "all: also SGLang's n-gram, EAGLE3 and draft model, vLLM's EAGLE3 head, and on both "
+                             "a Qwen3.5 checkpoint's own MTP head, none of which has run on hardware yet, choosing "
+                             "engines after speculation (opt-in)")
 PREFIX_OPT = typer.Option("on", "--prefix-cache", callback=_on_off,
                           help="Keep prefix caching on and tune it for workloads whose prompts share a prefix")
 QUALITY_OPT = typer.Option("off", "--quality-probe", callback=_on_off,

@@ -147,7 +147,7 @@ class LlamaCppBackend(BaseBackend):
                 if any(cfg.extra.get(k) != v for k, v in o.items())]
 
     def spec_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
-                      all_methods: bool = False) -> List[Config]:
+                      all_methods: bool = False, min_batch: Optional[int] = None) -> List[Config]:
         specs: List[str] = []
         binary = llama_server_binary()
         if binary and _modern_spec(binary):  # built-in n-gram lookup: no second model needed

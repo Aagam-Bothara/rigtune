@@ -35,7 +35,7 @@ class VllmCpuBackend(VllmBackend):
         return []
 
     def spec_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
-                      all_methods: bool = False) -> List[Config]:
+                      all_methods: bool = False, min_batch: Optional[int] = None) -> List[Config]:
         return []
 
     def tier_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
