@@ -732,6 +732,7 @@ def compare(
     gpu_probe: Optional[Callable[[], List[Dict[str, Any]]]] = None,
     requests_dir: Optional[Path] = None,
     bare_stock: bool = False,
+    rotate: bool = False,
 ) -> ComparisonResult:
     """Measure rigtune's winner and every reference config under the same workload. `extra` adds rows under
     their own labels (other searches' picks, say), measured like every other row and never filtered by `include`.
@@ -750,7 +751,9 @@ def compare(
     With `record_runs`, `gpu_probe` (gpu_state) is read at the start of every run and kept in its RunRecord
     with the names of the engine logs the run wrote to `log_dir`; `requests_dir` keeps every request of
     every run there (RequestLog). `bare_stock` adds an `<engine>-bare` row per vLLM or SGLang candidate: the
-    engine launched with the model and port alone (references.BareStock)."""
+    engine launched with the model and port alone (references.BareStock). `rotate` starts each round one row
+    later (round 2 with the second row, and so on), so that no row is always the one measured right after an
+    engine was torn down, or first on a cold card; each RunRecord keeps its place in its round."""
     workload = workload or get_workload(profile.workload)
     cons = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                       tpot_ceiling_ms=workload.tpot_ceiling_ms)
@@ -939,7 +942,8 @@ def compare(
                    for label, _ in measurers]
         log = RunsLog(runs_path, result, profile, planned, max(1, repeats))
     for repeat in range(1, max(1, repeats) + 1):
-        for position, (label, measure) in enumerate(measurers, 1):
+        shift = (repeat - 1) % len(measurers) if rotate else 0
+        for position, (label, measure) in enumerate(measurers[shift:] + measurers[:shift], 1):
             if sink is not None:
                 sink.current = (label, repeat)
             state = gpu_probe() if gpu_probe is not None and record_runs else []

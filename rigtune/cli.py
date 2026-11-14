@@ -1041,7 +1041,7 @@ def compare(
                       power=_power_controller(profile), repeats=repeats, extra=extra or None,
                       record_runs=verdict, runs_path=runs, answers=verdict, grader=grader,
                       answer_tolerance=max_accuracy_loss / 100, origin=origin, gpu_probe=probe,
-                      requests_dir=requests, bare_stock=bare_stock)
+                      requests_dir=requests, bare_stock=bare_stock, rotate=verdict)
     path = save(result, out, path=target)
     console.print(to_markdown(result))
     console.print(f"[dim]saved {path}[/]")

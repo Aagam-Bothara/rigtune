@@ -301,9 +301,10 @@ def test_compare_with_verdict_keeps_every_run_and_writes_the_verdict_beside_the_
     stem = names[0].removesuffix(".json")
     assert names == [f"{stem}.json", f"{stem}.runs.jsonl", f"{stem}.verdict.json", f"{stem}.verdict.md"]
     res = ComparisonResult.model_validate_json((out / f"{stem}.json").read_text(encoding="utf-8"))
-    for i, row in enumerate(res.rows, 1):
-        assert [(x.round, x.position) for x in row.run_records] == [(1, i), (2, i)]
-        assert all(x.started_at <= x.ended_at for x in row.run_records)
+    # Three rows, rotated: round 2 starts with the second row.
+    assert [[(x.round, x.position) for x in row.run_records] for row in res.rows] == [
+        [(1, 1), (2, 3)], [(1, 2), (2, 1)], [(1, 3), (2, 2)]]
+    assert all(x.started_at <= x.ended_at for row in res.rows for x in row.run_records)
     data = json.loads((out / f"{stem}.verdict.json").read_text(encoding="utf-8"))
     assert [row["label"] for row in data["rows"]] == ["vllm-default", "vllm-fp8-default"]
     assert data["results"] == f"{stem}.json" and "**Overall:" in r.output
