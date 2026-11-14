@@ -246,15 +246,22 @@ def _vllm_package() -> Optional[Path]:
     return found[0] if found else None
 
 
+# Where a vLLM release defines its server's own arguments (BaseFrontendArgs, which holds
+# enable_prompt_tokens_details): entrypoints/common/cli_args.py in v0.33.0 (line 156), entrypoints/launchers/
+# cli_args.py in v0.29.0 (line 132), entrypoints/openai/cli_args.py before. Each tag has only its own file.
+FRONTEND_ARGS = (("entrypoints", "common", "cli_args.py"), ("entrypoints", "launchers", "cli_args.py"),
+                 ("entrypoints", "openai", "cli_args.py"))
+
+
 @functools.lru_cache(maxsize=1)
 def _prompt_tokens_details_flag() -> bool:
     """Whether the vLLM that will run takes --enable-prompt-tokens-details, which puts cached_tokens in each reply's
-    usage. Its server arguments live in entrypoints/launchers/cli_args.py in 0.29 and entrypoints/openai/ before;
-    read from source, since importing vLLM costs seconds."""
+    usage. Looked for in each release's server-argument file (FRONTEND_ARGS); read from source, since importing
+    vLLM costs seconds."""
     root = _vllm_package()
     if root is None:
         return False
-    for parts in (("entrypoints", "launchers", "cli_args.py"), ("entrypoints", "openai", "cli_args.py")):
+    for parts in FRONTEND_ARGS:
         try:
             if "enable_prompt_tokens_details" in root.joinpath(*parts).read_text("utf-8"):
                 return True
