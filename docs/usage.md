@@ -15,7 +15,7 @@ flowchart LR
     CA --> SV[serve<br/>supervised backend + OpenAI proxy :8000]
 ```
 
-1. **Check your hardware.** rigtune detects your GPU, its compute capability and VRAM, CPU cores and AVX2/AVX-512 support, RAM, and which backends can run. Use `rigtune probe` to inspect the resulting `HardwareDescriptor`.
+1. **Check your hardware.** rigtune detects your GPU, its compute capability and VRAM, CPU cores and AVX2/AVX-512 support, RAM, and which backends can run. Use `rigtune probe` to inspect the resulting `HardwareDescriptor`. Beside each engine's version it lists the torch, transformers, FlashInfer and tokenizers versions in that engine's own environment (SGLang's is asked through `SGLANG_PYTHON`), and every profile records them, since two installs of one engine release can resolve different ones. They are recorded, never compared: a change does not invalidate a cached profile.
 
 2. **Choose candidate backends.** The [supported-hardware table](../README.md#supported-hardware) determines which backends to try. If several are available, calibration decides which one to use.
 

@@ -76,7 +76,9 @@ def _trial_key(r: TrialResult) -> str:
 
 def _print_profile(p: Profile) -> None:
     console.print(f"[bold]objective[/]: {p.objective}   [bold]workload[/]: {p.workload}")
-    console.print(f"[bold]backend[/]: {p.backend} {p.backend_version or ''}")
+    found = p.hardware.backends.get(p.backend)
+    libs = ", ".join(f"{k} {v}" for k, v in sorted(found.libs.items())) if found is not None else ""
+    console.print(f"[bold]backend[/]: {p.backend} {p.backend_version or ''}" + (f"  [dim]({libs})[/]" if libs else ""))
     console.print(f"[bold]config[/]:  {p.config.key()}")
     if p.disagg is not None:
         console.print(f"[bold]phases[/]:  disaggregated over {p.disagg.connector}; "

@@ -53,6 +53,11 @@ class BackendAvailability(BaseModel):
     available: bool
     version: Optional[str] = None
     reason: Optional[str] = None
+    # Versions of the libraries an engine release depends on most (torch, transformers, flashinfer, tokenizers),
+    # read in the engine's own environment. Recorded, not compared: no part of the hardware hash, and a change
+    # leaves cached profiles valid. vLLM 0.29.0 declared only transformers>=5.10.4, so two installs of the same
+    # vLLM could differ here, and one that resolved transformers 5.23.0 failed Gemma 4's multimodal start-up.
+    libs: Dict[str, str] = Field(default_factory=dict)
 
 
 class HardwareDescriptor(BaseModel):

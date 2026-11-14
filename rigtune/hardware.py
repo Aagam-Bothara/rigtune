@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import importlib.util
+import json
 import logging
 import os
 import platform
@@ -422,16 +423,46 @@ def sglang_python() -> Optional[str]:
     return sys.executable if importlib.util.find_spec("sglang") is not None else None
 
 
+# What each engine's environment has of the libraries its releases pin (name shown -> distribution name). vLLM
+# 0.33.0 pins torch 2.14.0 and transformers >=5.16.1,<5.21.0, SGLang 0.5.23 torch 2.14.1 and transformers 5.19.0
+# (vLLM requirements/cuda.txt and common.txt, SGLang python/pyproject.toml), so the two need separate
+# environments, and each one's libraries are read there.
+ENGINE_LIBS = {"torch": "torch", "transformers": "transformers", "flashinfer": "flashinfer-python",
+               "tokenizers": "tokenizers"}
+_VERSIONS_CODE = ("import importlib.metadata as m, json, sys\n"
+                  "def v(n):\n"
+                  "    try:\n"
+                  "        return m.version(n)\n"
+                  "    except Exception:\n"
+                  "        return None\n"
+                  "print(json.dumps({n: v(n) for n in sys.argv[1:]}))\n")
+_SGLANG_LIBS: Dict[str, Dict[str, str]] = {}  # SGLang's python -> its libraries, read with its version
+
+
+def _libs_here() -> Dict[str, str]:
+    """ENGINE_LIBS as installed beside this interpreter."""
+    found = {name: _pkg_version(dist) for name, dist in ENGINE_LIBS.items()}
+    return {name: v for name, v in found.items() if v}
+
+
 def _sglang_version(python: str) -> Optional[str]:
+    """SGLang's version in `python`'s environment. Another interpreter is asked once for SGLang's version and its
+    libraries together (kept for _sglang_libs)."""
     if python == sys.executable:
         return _pkg_version("sglang")
     try:
-        out = subprocess.run([python, "-c", "import importlib.metadata as m; print(m.version('sglang'))"],
+        out = subprocess.run([python, "-c", _VERSIONS_CODE, "sglang", *ENGINE_LIBS.values()],
                              capture_output=True, text=True, timeout=60)
+        found = json.loads(out.stdout.strip().splitlines()[-1]) if out.returncode == 0 else {}
     except Exception as exc:
         logger.debug("%s could not report an sglang version: %s", python, exc)
         return None
-    return (out.stdout.strip() or None) if out.returncode == 0 else None
+    _SGLANG_LIBS[python] = {name: found[dist] for name, dist in ENGINE_LIBS.items() if found.get(dist)}
+    return found.get("sglang") or None
+
+
+def _sglang_libs(python: str) -> Dict[str, str]:
+    return _libs_here() if python == sys.executable else dict(_SGLANG_LIBS.get(python, {}))
 
 
 def _torch_is_cuda_build() -> Optional[bool]:
@@ -460,17 +491,20 @@ def probe_backends(gpus: List[GPUInfo]) -> Dict[str, BackendAvailability]:
         vllm_reason = "torch is a CPU build"
     else:
         vllm_reason = None
+    vllm_libs = _libs_here() if vllm_ver else {}
     out["vllm"] = BackendAvailability(
         name="vllm",
         available=bool(vllm_importable and has_nvidia and torch_cuda is not False),
         version=vllm_ver,
         reason=vllm_reason,
+        libs=vllm_libs,
     )
     # vLLM-CPU: the same package built against a CPU-only torch.
     out["vllm-cpu"] = BackendAvailability(
         name="vllm-cpu",
         available=bool(vllm_importable and torch_cuda is False),
         version=vllm_ver,
+        libs=dict(vllm_libs),
         reason=(
             "vllm not importable" if not vllm_importable
             else ("torch is a CUDA build; vLLM-CPU needs the CPU wheel" if torch_cuda else None)
@@ -484,6 +518,7 @@ def probe_backends(gpus: List[GPUInfo]) -> Dict[str, BackendAvailability]:
         name="sglang",
         available=bool(sgl_found and has_nvidia),
         version=sgl_ver,
+        libs=_sglang_libs(sgl_python) if sgl_python and sgl_ver else {},
         reason=("sglang not found: install it here, or set $SGLANG_PYTHON to the python of an environment that has it"
                 if not sgl_found
                 else ("no usable NVIDIA GPU (check CUDA_VISIBLE_DEVICES)" if not has_nvidia else None)),

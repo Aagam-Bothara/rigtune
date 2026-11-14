@@ -71,5 +71,6 @@ def explain(hw: HardwareDescriptor) -> List[str]:
     for name, b in sorted(hw.backends.items()):
         state = "available" if b.available else f"unavailable ({b.reason or 'unknown'})"
         ver = f" v{b.version}" if b.version else ""
-        lines.append(f"{name}{ver}: {state}")
+        libs = f" ({', '.join(f'{k} {v}' for k, v in sorted(b.libs.items()))})" if b.libs else ""
+        lines.append(f"{name}{ver}: {state}{libs}")
     return lines
