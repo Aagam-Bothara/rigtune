@@ -1,0 +1,61 @@
+[
+ {
+  "engine": "vllm",
+  "version": "0.29.0",
+  "card": "NVIDIA A40",
+  "date": "2026-09-12 to 2026-09-15",
+  "torch": "2.13.0",
+  "transformers": null,
+  "checks": {
+   "calibration": "pass",
+   "fp8 weights": "fail",
+   "fp8 KV cache (fp8_e5m2, FlashInfer)": "pass",
+   "int8 KV cache (int8_per_token_head, Triton)": "pass",
+   "n-gram lookup, CPU and GPU": "pass",
+   "draft model": "pass",
+   "suffix decoding (arctic-inference 0.1.1)": "pass",
+   "W8A8 weights": "pass"
+  },
+  "source": "docs/benchmarks.md: 'Real text, and a card where memory is tight' and 'The p95 search on hardware, and the new options' (benchmarks/strategies/smoke-a40). torch: vLLM 0.29.0 requires torch==2.13.0 (requirements/cuda.txt)."
+ },
+ {
+  "engine": "vllm",
+  "version": "0.29.0",
+  "card": "NVIDIA A100-SXM4-80GB",
+  "date": "2026-09-15",
+  "torch": "2.13.0",
+  "transformers": null,
+  "checks": {"calibration": "pass", "draft model": "pass"},
+  "source": "docs/benchmarks.md: 'Llama 3.1 8B on four GPUs' (benchmarks/strategies/results-llama)."
+ },
+ {
+  "engine": "vllm",
+  "version": "0.29.0",
+  "card": "NVIDIA H100 NVL",
+  "date": "2026-09-15",
+  "torch": "2.13.0",
+  "transformers": null,
+  "checks": {"calibration": "pass", "fp8 weights": "pass", "draft model": "pass"},
+  "source": "docs/benchmarks.md: 'Llama 3.1 8B on four GPUs' (benchmarks/strategies/results-llama)."
+ },
+ {
+  "engine": "vllm",
+  "version": "0.29.0",
+  "card": "NVIDIA GeForce RTX 4090",
+  "date": "2026-09-15",
+  "torch": "2.13.0",
+  "transformers": null,
+  "checks": {"calibration": "pass", "fp8 weights": "pass", "suffix decoding (arctic-inference 0.1.1)": "pass"},
+  "source": "docs/benchmarks.md: 'Llama 3.1 8B on four GPUs' (benchmarks/strategies/results-llama)."
+ },
+ {
+  "engine": "vllm",
+  "version": "0.29.0",
+  "card": "NVIDIA A40",
+  "date": "2026-11-14",
+  "torch": "2.13.0",
+  "transformers": "5.23.0",
+  "checks": {"multimodal start-up of google/gemma-4-12B-it": "fail"},
+  "source": "docs/benchmarks.md: Limits (transformers 5.23.0's processor check rejects vLLM's dummy video input)."
+ }
+]

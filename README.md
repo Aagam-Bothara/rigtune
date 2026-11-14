@@ -55,7 +55,7 @@ docker run --gpus all --ipc=host -p 8000:8000 -v ~/.cache/huggingface:/root/.cac
 
 ### Supported hardware
 
-Linux, Python 3.10–3.13. NVIDIA GPUs of compute capability 7.5 or newer run vLLM, SGLang and llama.cpp (measured on an A40, A100, H100 NVL, L4 and RTX 4090); older NVIDIA GPUs and x86 CPUs run llama.cpp. vLLM-CPU and pre-Turing GPUs have never been benchmarked ([details](https://github.com/Aagam-Bothara/rigtune/blob/main/docs/benchmarks.md#hardware-and-engines-measured)).
+Linux, Python 3.10–3.13. NVIDIA GPUs of compute capability 7.5 or newer run vLLM, SGLang and llama.cpp (measured on an A40, A100, H100 NVL, L4 and RTX 4090); older NVIDIA GPUs and x86 CPUs run llama.cpp. vLLM-CPU and pre-Turing GPUs have never been benchmarked ([details](https://github.com/Aagam-Bothara/rigtune/blob/main/docs/benchmarks.md#hardware-and-engines-measured)). Checked with vLLM 0.11.0 and 0.29.0 and SGLang 0.5.19; `rigtune probe` lists them, and any other release gets a warning, not a refusal.
 
 ## Learn more
 

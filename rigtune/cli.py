@@ -572,6 +572,26 @@ def probe(as_json: bool = typer.Option(False, "--json", help="Machine-readable o
     console.print("[bold]backends[/]:")
     for line in explain(hw):
         console.print(f"  {line}")
+    _print_checked_engines(hw)
+
+
+def _print_checked_engines(hw) -> None:
+    """The engine releases rigtune was checked with, and a warning for an installed one that is not among them."""
+    from rigtune import engines
+
+    t = Table(title="Engine releases rigtune was checked with", title_justify="left")
+    for col in ("engine", "card", "date", "torch", "transformers", "checks"):
+        t.add_column(col)
+    for engine in engines.CHECKED_ENGINES:
+        for r in engines.tested().get(engine, []):
+            failed = [k for k, v in r.checks.items() if v == "fail"]
+            t.add_row(f"{engine} {r.version}", r.card, r.date, r.torch or "-", r.transformers or "-",
+                      f"{len(r.checks)} run" + (f", failed: {'; '.join(failed)}" if failed else ""))
+    console.print(t)
+    for engine in engines.CHECKED_ENGINES:
+        note = engines.support_note(engine, hw.backend_version(engine))
+        if note:
+            console.print(f"[yellow]note[/]: {note}")
 
 
 @app.command()

@@ -1,0 +1,47 @@
+[
+ {
+  "engine": "sglang",
+  "version": "0.5.19",
+  "card": "NVIDIA A40",
+  "date": "2026-09-13 to 2026-09-15",
+  "torch": "2.13.0",
+  "transformers": "5.12.1",
+  "checks": {
+   "calibration": "pass",
+   "AWQ and GPTQ weights": "pass",
+   "fp8 KV cache (fp8_e5m2)": "pass",
+   "radix cache off": "pass"
+  },
+  "source": "docs/benchmarks.md: 'Your own prompts, SGLang, and a time budget' and 'The p95 search on hardware, and the new options'. torch and transformers: SGLang 0.5.19 requires torch==2.13.0 and transformers==5.12.1 (python/pyproject.toml)."
+ },
+ {
+  "engine": "sglang",
+  "version": "0.5.19",
+  "card": "NVIDIA A100-SXM4-80GB",
+  "date": "2026-09-15",
+  "torch": "2.13.0",
+  "transformers": "5.12.1",
+  "checks": {"calibration": "pass"},
+  "source": "docs/benchmarks.md: 'Llama 3.1 8B on four GPUs' (benchmarks/strategies/results-llama)."
+ },
+ {
+  "engine": "sglang",
+  "version": "0.5.19",
+  "card": "NVIDIA GeForce RTX 4090",
+  "date": "2026-09-15",
+  "torch": "2.13.0",
+  "transformers": "5.12.1",
+  "checks": {"calibration": "pass", "fp8 weights": "pass"},
+  "source": "docs/benchmarks.md: 'Llama 3.1 8B on four GPUs' (benchmarks/strategies/results-llama)."
+ },
+ {
+  "engine": "sglang",
+  "version": "0.5.19",
+  "card": "NVIDIA A40",
+  "date": "2026-11-14",
+  "torch": "2.13.0",
+  "transformers": "5.12.1",
+  "checks": {"load google/gemma-4-12B-it": "fail"},
+  "source": "docs/benchmarks.md: Limits ('lm_head_is_tied', a known SGLang bug for Gemma 4 unified models)."
+ }
+]

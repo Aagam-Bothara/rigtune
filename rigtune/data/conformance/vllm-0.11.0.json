@@ -1,0 +1,22 @@
+[
+ {
+  "engine": "vllm",
+  "version": "0.11.0",
+  "card": "NVIDIA A40",
+  "date": "2026-09-12",
+  "torch": null,
+  "transformers": null,
+  "checks": {"calibration": "pass", "fp8 weights (Marlin)": "pass", "two replicas on two A40s": "pass"},
+  "source": "docs/benchmarks.md: 'Re-measured on an A40' (vLLM 0.11.0 with FlashInfer 0.3.1)."
+ },
+ {
+  "engine": "vllm",
+  "version": "0.11.0",
+  "card": "NVIDIA L4",
+  "date": "2026-09-12 to 2026-09-15",
+  "torch": null,
+  "transformers": null,
+  "checks": {"calibration": "pass"},
+  "source": "docs/benchmarks.md: 'Real text, and a card where memory is tight' and 'The p95 search on hardware, and the new options' (benchmarks/strategies/results-l4)."
+ }
+]

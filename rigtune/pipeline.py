@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from rigtune import __version__, selfcheck
+from rigtune import __version__, engines, selfcheck
 from rigtune import cache as profile_cache
 from rigtune.backends import BaseBackend, registry as backend_registry
 from rigtune.calibrate.objectives import Constraints, close_call_level
@@ -836,6 +836,12 @@ def calibrate(
     gate = accuracy_gate_for(opts, feasible)
     if runner is not None and gate is not None and getattr(runner, "gate", False) is None:
         runner.gate = gate  # an injected runner that grades (tests) gets the same gate the search decides with
+    version_notes = []  # an engine release rigtune was not checked with: said, never refused
+    for name in plan.candidates:
+        note = engines.support_note(name, hw.backend_version(name))
+        if note:
+            engines.warn_once(note)
+            version_notes.append(note)
     client_notes: List[str] = []
     if runner is None:
         busiest = max(workload.concurrencies, default=0)
@@ -878,7 +884,7 @@ def calibrate(
     if winner is None:
         raise RuntimeError("calibration failed: " + "; ".join(notes))
     elapsed = time.monotonic() - t0
-    notes = power_notes + list(plan.notes) + tier_notes + client_notes + notes
+    notes = power_notes + version_notes + list(plan.notes) + tier_notes + client_notes + notes
     notes += spec_state_notes_for(hw, reg, plan, winner.config, opts)
     if winner.config.text_only:
         notes.append(TEXT_ONLY_NOTE)
