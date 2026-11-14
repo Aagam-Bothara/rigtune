@@ -51,6 +51,7 @@ def _first(cfg: Dict[str, Any], *keys: str, default: Any = None) -> Any:
 
 def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
     """Build ArchInfo from a raw config.json dict. Handles nested text_config (multimodal)."""
+    mm = any(isinstance(cfg.get(k), dict) for k in ("vision_config", "audio_config"))
     if "text_config" in cfg and isinstance(cfg["text_config"], dict):
         merged = dict(cfg)
         merged.update(cfg["text_config"])
@@ -78,6 +79,7 @@ def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
         max_position_embeddings=max_pos,
         num_params=params,
         torch_dtype=dtype,
+        has_mm_config=mm,
         **hybrid_layout(cfg, layers, dtype),
     )
 

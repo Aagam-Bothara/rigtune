@@ -70,6 +70,41 @@ def mentions_oom(log: str) -> bool:
     return "out of memory" in text or "outofmemoryerror" in text
 
 
+# How a start-up failure's error begins when the engine log shows its cause (SubprocessTrialRunner.run).
+MM_PROFILING_FAILED = "multimodal profiling failed at start-up"
+# vLLM profiles memory at start-up with dummy multimodal inputs, and a processor that rejects them stops the engine.
+# That happens when the engine and transformers mismatch: vLLM 0.29.0 declares only transformers>=5.10.4, and with
+# transformers 5.23.0 (whose ProcessorMixin.validate_inputs raises the first line; 5.12.1 has no such check) it failed
+# google/gemma-4-12B-it on an A40 pod. Later vLLM releases pin transformers below 5.21 (0.33.0: >=5.16.1,<5.21.0).
+#   ValueError: Found 2048 <|video|> tokens in the text but no videos were passed.
+#   ValueError: Failed to apply Gemma4UnifiedProcessor on data={'text': '00:00 <|image><|video|>...'} with kwargs=...
+_MM_PROFILING = (re.compile(r"tokens in the text but no (?:images|videos|audios) were passed"),
+                 re.compile(r"Failed to apply \w*Processor\b"))
+
+
+def _first_line(log: str, patterns) -> Optional[str]:
+    for pattern in patterns:
+        for line in log.splitlines():
+            if pattern.search(line):
+                line = line.strip()
+                return line if len(line) <= 160 else line[:157] + "..."
+    return None
+
+
+def mm_profiling_failure(log: str) -> Optional[str]:
+    """The log line that shows the engine's multimodal profiling failed at start-up, or None."""
+    return _first_line(log, _MM_PROFILING)
+
+
+def startup_cause(error: Optional[str]) -> Tuple[Optional[str], str]:
+    """(MM_PROFILING_FAILED, the log line) from a start-up failure's error; (None, "") otherwise."""
+    for kind in (MM_PROFILING_FAILED,):
+        if (error or "").startswith(kind + " ("):
+            head = (error or "").split("\n", 1)[0]
+            return kind, head[len(kind) + 2:].rsplit("); failed to start", 1)[0]
+    return None, ""
+
+
 def _point_workload(workload: Workload, i: int, points: int) -> Workload:
     """The workload for the i-th of `points` power points of a sweep on one running engine.
 
@@ -197,10 +232,15 @@ class SubprocessTrialRunner:
                 observation.measured = parse_log(cfg.backend, log)
                 # vLLM prints its engine's out-of-memory error well above the 20-line tail: say so in
                 # the error, so the memory report counts it as the planner failure it is.
-                oom = "out of memory at start-up; " if mentions_oom(log) else ""
+                cause = "out of memory at start-up; " if mentions_oom(log) else ""
+                # The causes the search acts on or reports, also often above the tail (StagedSearch._startup_retry).
+                for kind, find in ((MM_PROFILING_FAILED, mm_profiling_failure),):
+                    line = None if cause else find(log)
+                    if line:
+                        cause = f"{kind} ({line}); "
                 return TrialResult(
                     config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
-                    error=f"{oom}failed to start (rc={proc.returncode()})\n{tail}", memory=observation,
+                    error=f"{cause}failed to start (rc={proc.returncode()})\n{tail}", memory=observation,
                 )
             perr = self._apply_power(cfg)
             if perr:
@@ -437,6 +477,10 @@ class StagedSearch:
     # config. Run once per tuned engine, after its variant stages and before its combinations, so a tier can
     # be combined. None = off.
     tier_variants: Optional[Callable[[TrialResult], Tuple[List[Config], Optional[str]]]] = None
+    # A start-up failure whose cause the log shows (startup_cause): (failed config, its result) -> (the config to
+    # retry, a note), from pipeline.startup_failure_fn. Only multimodal profiling is retried, once, text-only; every
+    # later trial of that engine then launches text-only. None = no such failure is acted on or noted.
+    startup_failure: Optional[Callable[[Config, TrialResult], Tuple[Optional[Config], Optional[str]]]] = None
 
     # After the pick under `efficiency` at an arrival rate: measure the winner once with Poisson arrivals at that
     # rate and record the composed J/request beside the measured one. The pick never depends on it.
@@ -451,6 +495,8 @@ class StagedSearch:
     _noted_contenders: set = field(default_factory=set)
     _spec_tried: set = field(default_factory=set)  # engines whose speculation stage has run (decide_after_spec)
     _tier_tried: set = field(default_factory=set)  # engines whose tier stage has run
+    _text_only: set = field(default_factory=set)  # engines whose multimodal profiling failed: trials run text-only
+    _startup_notes: List[str] = field(default_factory=list)
 
     # ---- predictor helpers
 
@@ -512,6 +558,26 @@ class StagedSearch:
             return None
         return retry
 
+    def _startup_retry(self, cfg: Config, res: TrialResult) -> Optional[Config]:
+        """The same config text-only, once, after its multimodal profiling failed at start-up; notes the cause of
+        any start-up failure the log showed (startup_failure)."""
+        if res.launched or self.startup_failure is None or startup_cause(res.error)[0] is None:
+            return None
+        retry, note = self.startup_failure(cfg, res)
+        if note and note not in self._startup_notes:  # one note per engine and cause, however many trials hit it
+            self.notes.append(note)
+            self._startup_notes.append(note)  # also said when every stage-1 trial failed
+        if retry is None or cfg.text_only or not retry.text_only or retry.key() in self._done:
+            return None
+        self._text_only.add(cfg.backend)
+        return retry
+
+    def _as_run(self, cfg: Config) -> Config:
+        """`cfg` as it would launch: text-only once its engine's multimodal profiling has failed at start-up."""
+        if cfg.backend in self._text_only and not cfg.text_only:
+            return cfg.model_copy(update={"text_only": True})
+        return cfg
+
     def _over_budget(self) -> bool:
         """Whether a typical trial started now would end past the budget. The first always runs."""
         if self.budget_s is None or not self._trial_seconds:
@@ -522,6 +588,7 @@ class StagedSearch:
         return self.clock() + typical > self._started + self.budget_s
 
     def _run(self, cfg: Config, stage: str) -> TrialResult:
+        cfg = self._as_run(cfg)  # the planner's grid knows nothing of a text-only retry
         key = cfg.key()
         if key in self._done:
             return self._done[key]
@@ -546,6 +613,12 @@ class StagedSearch:
                 self.progress(stage, cfg, res)
             self.notes.append(f"{key} ran out of memory at start-up; retried at gpu_memory_utilization "
                               f"{retry.gpu_memory_utilization:.2f}")
+            return self._run(retry, stage)
+        retry = self._startup_retry(cfg, res)
+        if retry is not None:
+            self.results.append(res)  # the failed launch stays on record
+            if self.progress:
+                self.progress(stage, cfg, res)
             return self._run(retry, stage)
         self.results.append(res)
         if self.progress:
@@ -1039,7 +1112,7 @@ class StagedSearch:
             return
         lc = lead.config
         pool = [c for c in self.explore_space
-                if c.backend == lc.backend and c.quant == lc.quant and c.key() not in self._done]
+                if c.backend == lc.backend and c.quant == lc.quant and self._as_run(c).key() not in self._done]
         n = min(len(pool), max(self.explore_min, math.ceil(self.explore_share * len(self.results))))
         if n <= 0:
             return
@@ -1213,7 +1286,7 @@ class StagedSearch:
         if not kept and self.gate is not None and any(r.ok for r in self.results):
             return None, self.notes + ["the accuracy gate refused every precision that ran"]
         if not kept:
-            return None, ["every stage-1 trial failed"] + [
+            return None, ["every stage-1 trial failed"] + self._startup_notes + [
                 f"{r.config.key()}: {r.error}" for r in self.results if r.error
             ]
         if self.budget_s is not None:

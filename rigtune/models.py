@@ -124,6 +124,14 @@ class ArchInfo(BaseModel):
     # What that state grows by per speculative token: the conv state keeps one more column for each.
     linear_conv_step_bytes: int = 0
     layout_note: Optional[str] = None  # why a hybrid-looking layout fell back to the every-layer-full estimate
+    # The config has a vision or audio sub-config (vision_config, audio_config). Defaulted: profiles saved before it
+    # load as False, and `multimodal_arch` still recognises them by name.
+    has_mm_config: bool = False
+
+    @property
+    def multimodal_arch(self) -> bool:
+        """A model with an image, video or audio encoder beside its language model."""
+        return self.has_mm_config or self.architecture.endswith("ForConditionalGeneration")
 
     def kv_bytes_per_token(self, kv_dtype_bytes: int) -> int:
         # 2 (K and V) x layers x kv_heads x head_dim x bytes.  For MHA models
@@ -199,6 +207,9 @@ class Config(BaseModel):
     # behind it. None = GPU only, as in every profile before tiers. Only --kv-tier auto tries one.
     kv_tier: Optional[str] = None
     extra: Dict[str, Any] = Field(default_factory=dict)
+    # Serve a multimodal model's language model alone (vLLM --language-model-only): set only by the retry after the
+    # engine's multimodal profiling failed at start-up. Such an engine accepts no image, video or audio input.
+    text_only: bool = False
     # The memory fraction before a speculation setting lowered it to leave a second model room (SGLang under
     # --speculative all), so undoing or swapping the speculation restores it. Not part of the key: the launch is
     # the same whichever fraction it came from.
@@ -230,6 +241,8 @@ class Config(BaseModel):
         for k in sorted(self.extra):
             if k != "threads":
                 parts.append(f"{k}={self.extra[k]}")
+        if self.text_only:  # only when set, so every key from before it is unchanged
+            parts.append("textonly")
         if self.power_limit_w is not None:
             parts.append(f"pl{self.power_limit_w}")
         if self.sm_clock_mhz is not None:

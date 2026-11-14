@@ -323,6 +323,11 @@ class BaseBackend:
         """Why `cfg` is expected to fail at start-up or under load, so the search does not try it. Default: never."""
         return None
 
+    def text_only_refusal(self) -> Optional[str]:
+        """Why a multimodal model whose multimodal profiling failed at start-up cannot be retried serving its language
+        model alone (Config.text_only), or None when it can. Default: this backend has no such mode."""
+        return f"rigtune has no text-only launch for {self.name}"
+
     # ---- KV-cache tier (--kv-tier; default: this backend offers none)
 
     def tier_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:

@@ -433,6 +433,37 @@ def retry_floor_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "P
     return fn
 
 
+ENGINE_NAMES = {"vllm": "vLLM", "sglang": "SGLang"}
+TEXT_ONLY_NOTE = "served text-only (--language-model-only): image, video and audio inputs are not accepted"
+
+
+def startup_failure_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult"):
+    """What the search does after a start-up failure whose cause the engine log shows (search.startup_cause): a
+    multimodal model whose multimodal profiling failed is retried text-only where the engine can serve it so
+    (BaseBackend.text_only_refusal); anything else is noted, never retried. Returns (config to retry, note)."""
+    from rigtune.calibrate.search import MM_PROFILING_FAILED, startup_cause
+
+    def fn(c: Config, res) -> Tuple[Optional[Config], Optional[str]]:
+        be, pm = reg.get(c.backend), plan.prepared.get(c.backend)
+        kind, line = startup_cause(res.error)
+        if be is None or pm is None or kind != MM_PROFILING_FAILED:
+            return None, None
+        engine = f"{ENGINE_NAMES.get(c.backend, c.backend)} {be.version(hw) or '(version unknown)'}"
+        # Seen with vLLM 0.29.0 and transformers 5.23.0, a newer transformers than that vLLM was released against.
+        what = (f"{pm.spec.hf_id} could not start on {engine} with its multimodal profiling ({line}), as when the "
+                "engine and its transformers mismatch")
+        if c.text_only:
+            return None, f"{what}, even text-only"
+        if not pm.arch.multimodal_arch:
+            return None, f"{what}; not retried text-only: {pm.arch.architecture} is not a multimodal architecture"
+        why = be.text_only_refusal()
+        if why:
+            return None, f"{what}; not retried text-only: {why}"
+        return c.model_copy(update={"text_only": True}), f"{what}; retried text-only (--language-model-only)"
+
+    return fn
+
+
 def kv_variants_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult"):
     """Leader variants with a quantized KV cache, plus the batch step that the smaller cache admits."""
     from rigtune.memory import estimate
@@ -824,7 +855,7 @@ def calibrate(
                           retry_floor=retry_floor_fn(hw, reg, plan) if opts.speculative_all else None,
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
                                             if phase_tuning and opts.phase_tuning else None),
-                          tier_variants=tier_fn)
+                          tier_variants=tier_fn, startup_failure=startup_failure_fn(hw, reg, plan))
     t0 = time.monotonic()
     try:
         winner, notes = search.run(feasible)
@@ -836,7 +867,9 @@ def calibrate(
     elapsed = time.monotonic() - t0
     notes = power_notes + list(plan.notes) + tier_notes + notes
     notes += spec_state_notes_for(hw, reg, plan, winner.config, opts)
-    trials = sum(1 for r in search.results if not r.metrics.open_loop)  # the rate check is a check, not a trial
+    if winner.config.text_only:
+        notes.append(TEXT_ONLY_NOTE)
+    trials =sum(1 for r in search.results if not r.metrics.open_loop)  # the rate check is a check, not a trial
     notes.append(f"calibration took {elapsed:.0f}s over {trials} trials")
     notes.append(f"workload: {workload.describe()}")
     backend = reg[winner.config.backend]

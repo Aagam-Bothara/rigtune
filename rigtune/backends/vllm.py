@@ -263,6 +263,19 @@ def _prompt_tokens_details_flag() -> bool:
     return False
 
 
+@functools.lru_cache(maxsize=1)
+def _language_model_only_flag() -> bool:
+    """Whether the vLLM that will run takes --language-model-only, which serves a multimodal model's language model
+    alone: no vision or audio encoder is loaded and no multimodal input is profiled at start-up. vLLM 0.29.0 has it
+    in engine/arg_utils.py (EngineArgs.language_model_only, MultiModalConfig.language_model_only). Read from source,
+    since importing vLLM costs seconds."""
+    root = _vllm_package()
+    try:
+        return root is not None and "language_model_only" in (root / "engine" / "arg_utils.py").read_text("utf-8")
+    except OSError:
+        return False
+
+
 # What the vLLM that will run offers for a KV-cache tier, read from its source (importing vLLM costs seconds).
 # The rules below were read in v0.29.0 and have not run on hardware.
 #   "cpu": distributed/kv_transfer/kv_connector/v1/offloading_connector.py has OffloadingConnector, and
@@ -519,7 +532,14 @@ class VllmBackend(BaseBackend):
             args += ["--enable-prompt-tokens-details"]
         if cfg.kv_tier is not None:
             args += ["--kv-transfer-config", json.dumps(vllm_tier_config(cfg, port))]
+        if cfg.text_only:  # set only by the retry after multimodal profiling failed at start-up
+            args += ["--language-model-only"]
         return LaunchSpec(args=args, env=env)
+
+    def text_only_refusal(self) -> Optional[str]:
+        if not _language_model_only_flag():
+            return "the vLLM that would run has no --language-model-only (read from its source)"
+        return None
 
     # ---- KV-cache tier
 
