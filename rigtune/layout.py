@@ -37,7 +37,7 @@ from rigtune.calibrate.objectives import Constraints, pick
 from rigtune.calibrate.workload import Workload
 from rigtune.disagg import ProcessServer, _free_ports, nvidia_gpus
 from rigtune.models import Config, HardwareDescriptor, PreparedModel, Profile, TrialMetrics, TrialResult
-from rigtune.serve.proxy import HOP_BY_HOP
+from rigtune.serve.proxy import HOP_BY_HOP, media_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -108,9 +108,13 @@ def create_lb_app(upstreams: List[str], profile: Optional[Profile] = None,
     @app.api_route("/v1/{path:path}", methods=["GET", "POST"])
     async def forward(path: str, request: Request) -> Response:
         client: httpx.AsyncClient = state["client"]
+        body = await request.body()
+        refused = media_refusal(profile, request.method, path, body)  # a text-only pick's replicas take no media
+        if refused is not None:
+            return refused
         i = _choose()
         headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
-        req = client.build_request(request.method, f"{upstreams[i]}/v1/{path}", content=await request.body(),
+        req = client.build_request(request.method, f"{upstreams[i]}/v1/{path}", content=body,
                                    headers=headers, params=request.query_params)
         try:
             up = await client.send(req, stream=True)

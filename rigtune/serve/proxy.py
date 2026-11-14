@@ -56,6 +56,33 @@ def _ask_for_usage(raw: bytes) -> bytes:
         return raw
 
 
+# Chat content parts that carry an image, audio or video (OpenAI's, and vLLM's own extensions).
+MEDIA_PARTS = frozenset({"image_url", "input_image", "image", "input_audio", "audio_url", "video_url", "video"})
+
+
+def media_refusal(profile: Optional[Profile], method: str, path: str, raw: bytes) -> Optional[JSONResponse]:
+    """HTTP 400 for a chat request with image, audio or video content when the profile is served text-only
+    (Config.text_only: vLLM --language-model-only), rather than let the engine fail it obscurely; else None."""
+    if profile is None or not profile.config.text_only or method != "POST" or path.strip("/") != "chat/completions":
+        return None
+    try:
+        body = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    messages = body.get("messages") if isinstance(body, dict) else None
+    for m in messages if isinstance(messages, list) else []:
+        content = m.get("content") if isinstance(m, dict) else None
+        for part in content if isinstance(content, list) else []:
+            kind = part.get("type") if isinstance(part, dict) else None
+            if kind in MEDIA_PARTS:
+                msg = (f"{profile.model_id} is served text-only (vLLM --language-model-only, since its multimodal "
+                       f"start-up failed): it accepts no image, audio or video input, and this request has a "
+                       f"{kind!r} part")
+                return JSONResponse({"error": {"message": msg, "type": "invalid_request_error",
+                                               "code": "text_only"}}, status_code=400)
+    return None
+
+
 def create_app(
     upstream_base_url: str,
     profile: Optional[Profile] = None,
@@ -120,6 +147,9 @@ def create_app(
     async def passthrough(path: str, request: Request) -> Response:
         client: httpx.AsyncClient = state["client"]
         body = await request.body()
+        refused = media_refusal(profile, request.method, path, body)
+        if refused is not None:
+            return refused
         if watch is not None:
             body = _ask_for_usage(body)
         headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}

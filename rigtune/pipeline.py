@@ -437,7 +437,8 @@ ENGINE_NAMES = {"vllm": "vLLM", "sglang": "SGLang"}
 # Engine bugs a load failure's log line identifies: (backend, text in the line) -> what the note adds.
 KNOWN_LOAD_BUGS = {("sglang", "lm_head_is_tied"): ", a known SGLang bug for Gemma 4 unified models, fixed in SGLang 0.5.21 "
                    "(sgl-project/sglang #38820, #42091)"}
-TEXT_ONLY_NOTE = "served text-only (--language-model-only): image, video and audio inputs are not accepted"
+TEXT_ONLY_NOTE = ("served text-only (--language-model-only): image, video and audio inputs are not accepted, and "
+                  "rigtune serve answers them with HTTP 400")
 
 
 def startup_failure_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult"):
