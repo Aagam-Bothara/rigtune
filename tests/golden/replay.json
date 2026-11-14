@@ -1,0 +1,672 @@
+{
+ "results-14b/profiles/4090/balanced-file-dolly-d03d5896-quality-0.020-quant-auto+awq+gptq+w8a8-ttft-p95.json": {
+  "cannot": [
+   "quality=0.020"
+  ],
+  "missing": [],
+  "recorded": "vllm/gptq/ctx8192/b16/gmu0.95/kvfp8/sd=suffix:24",
+  "replayed": "vllm/gptq/ctx8192/b16/gmu0.95/kvfp8/sd=suffix:24",
+  "trials": 31,
+  "unused": [],
+  "verdict": "inconclusive"
+ },
+ "results-14b/profiles/4090/balanced-file-dolly-d03d5896-ttft-p95.json": {
+  "cannot": [],
+  "missing": [],
+  "recorded": "vllm/fp8/ctx4096/b16/gmu0.90/pb16384/kvfp8/sd=suffix:24",
+  "replayed": "vllm/fp8/ctx4096/b16/gmu0.90/pb16384/kvfp8/sd=suffix:24",
+  "trials": 27,
+  "unused": [
+   "vllm/fp8/ctx4096/b16/gmu0.90/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+  ],
+  "verdict": "exact"
+ },
+ "results-dolly/p95-old-warmup-budget/profiles/balanced-file-dolly-d03d5896-budget-600s-ttft-p95.json": {
+  "skipped": "budgeted: its stages were cut by wall-clock time"
+ },
+ "results-dolly/p95-old-warmup/profiles/balanced-file-dolly-d03d5896-ttft-p95.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "spec",
+    "vllm/bf16/ctx16384/b16/gmu0.95/sd=ngram_gpu:4"
+   ],
+   [
+    "spec",
+    "vllm/bf16/ctx16384/b16/gmu0.95/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+   ],
+   [
+    "prefill",
+    "vllm/bf16/ctx16384/b16/gmu0.95/pb2048"
+   ],
+   [
+    "prefill",
+    "vllm/bf16/ctx16384/b16/gmu0.95/pb8192"
+   ],
+   [
+    "prefill",
+    "vllm/bf16/ctx16384/b16/gmu0.95/pb16384"
+   ],
+   [
+    "kv",
+    "vllm/bf16/ctx16384/b16/gmu0.95/kvfp8_e5m2"
+   ]
+  ],
+  "recorded": "vllm/bf16/ctx8192/b64/gmu0.95/kvfp8_e5m2",
+  "replayed": "sglang/bf16/ctx16384/b256/gmu0.93/kvfp8_e5m2",
+  "trials": 25,
+  "unused": [
+   "vllm/bf16/ctx8192/b64/gmu0.95/kvfp8_e5m2",
+   "vllm/bf16/ctx8192/b64/gmu0.95/pb16384",
+   "vllm/bf16/ctx8192/b64/gmu0.95/pb16384/kvfp8_e5m2",
+   "vllm/bf16/ctx8192/b64/gmu0.95/pb2048",
+   "vllm/bf16/ctx8192/b64/gmu0.95/pb8192",
+   "vllm/bf16/ctx8192/b64/gmu0.95/pb8192/kvfp8_e5m2",
+   "vllm/bf16/ctx8192/b64/gmu0.95/pb8192/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b64/gmu0.95/pb8192/kvfp8_e5m2/sd=ngram_gpu:4",
+   "vllm/bf16/ctx8192/b64/gmu0.95/pb8192/kvint8_per_token_head"
+  ],
+  "verdict": "different"
+ },
+ "results-dolly/p95/profiles/balanced-file-dolly-d03d5896-ttft-p95.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "spec",
+    "vllm/bf16/ctx16384/b64/gmu0.95/sd=ngram_gpu:4"
+   ],
+   [
+    "prefill",
+    "vllm/bf16/ctx16384/b64/gmu0.95/pb8192/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+   ],
+   [
+    "kv",
+    "vllm/bf16/ctx16384/b256/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+   ]
+  ],
+  "recorded": "vllm/bf16/ctx16384/b64/gmu0.95/pb16384/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+  "replayed": "vllm/bf16/ctx16384/b64/gmu0.95/pb16384/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+  "trials": 25,
+  "unused": [
+   "sglang/bf16/ctx16384/b256/gmu0.93/kvfp8_e5m2",
+   "sglang/bf16/ctx16384/b64/gmu0.93/kvfp8_e5m2",
+   "sglang/bf16/ctx8192/b256/gmu0.93/kvfp8_e5m2",
+   "sglang/bf16/ctx8192/b256/gmu0.93/pb2048/kvfp8_e5m2",
+   "sglang/bf16/ctx8192/b256/gmu0.93/pb8192/kvfp8_e5m2",
+   "sglang/bf16/ctx8192/b64/gmu0.88/pb16384",
+   "sglang/bf16/ctx8192/b64/gmu0.93/kvfp8_e5m2",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb16384",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb2048",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb2048/kvfp8_e5m2",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb8192",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb8192/kvfp8_e5m2",
+   "vllm/bf16/ctx16384/b64/gmu0.95/pb2048/sd=ngram_gpu:4"
+  ],
+  "verdict": "inconclusive"
+ },
+ "results-dolly/profiles/balanced-file-dolly-d03d5896-budget-600s.json": {
+  "skipped": "budgeted: its stages were cut by wall-clock time"
+ },
+ "results-dolly/profiles/balanced-file-dolly-d03d5896.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "spec",
+    "vllm/bf16/ctx16384/b64/gmu0.95/sd=ngram_gpu:4"
+   ],
+   [
+    "prefill",
+    "vllm/bf16/ctx16384/b64/gmu0.95/pb2048/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+   ],
+   [
+    "combine",
+    "vllm/bf16/ctx16384/b64/gmu0.95/pb16384/kvfp8_e5m2"
+   ],
+   [
+    "combine",
+    "vllm/bf16/ctx16384/b64/gmu0.95/pb8192/kvfp8_e5m2"
+   ],
+   [
+    "combine",
+    "vllm/bf16/ctx16384/b256/gmu0.95/pb16384/kvfp8_e5m2"
+   ],
+   [
+    "combine",
+    "vllm/bf16/ctx16384/b256/gmu0.95/pb8192/kvfp8_e5m2"
+   ]
+  ],
+  "recorded": "vllm/bf16/ctx16384/b64/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+  "replayed": "vllm/bf16/ctx16384/b64/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+  "trials": 25,
+  "unused": [
+   "vllm/bf16/ctx16384/b256/gmu0.95/kvfp8_e5m2/sd=ngram:4",
+   "vllm/bf16/ctx16384/b256/gmu0.95/pb16384/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx16384/b256/gmu0.95/pb8192/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx16384/b64/gmu0.95/pb16384/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx16384/b64/gmu0.95/pb8192/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+  ],
+  "verdict": "inconclusive"
+ },
+ "results-l4/p95/profiles/balanced-sharegpt-ttft-p95.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "spec",
+    "vllm/fp8/ctx8192/b64/gmu0.95/sd=ngram:4"
+   ]
+  ],
+  "recorded": "vllm/fp8/ctx8192/b64/gmu0.95/pb8192",
+  "replayed": "vllm/fp8/ctx8192/b64/gmu0.95/pb8192",
+  "trials": 11,
+  "unused": [
+   "vllm/fp8/ctx8192/b64/gmu0.95/pb8192/sd=ngram:4"
+  ],
+  "verdict": "inconclusive"
+ },
+ "results-llama/profiles/4090/balanced-file-dolly-d03d5896-levels-all-ttft-p95.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "spec",
+    "vllm/fp8/ctx16384/b16/gmu0.95/sd=ngram_gpu:4"
+   ],
+   [
+    "spec",
+    "vllm/fp8/ctx16384/b16/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb2048"
+   ],
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb8192"
+   ],
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb16384"
+   ],
+   [
+    "kv",
+    "vllm/fp8/ctx16384/b16/gmu0.95/kvfp8"
+   ],
+   [
+    "kv",
+    "vllm/fp8/ctx16384/b16/gmu0.95/kvint8_per_token_head"
+   ]
+  ],
+  "recorded": "sglang/fp8/ctx16384/b16/gmu0.93",
+  "replayed": "sglang/fp8/ctx16384/b16/gmu0.93",
+  "trials": 19,
+  "unused": [
+   "sglang/fp8/ctx16384/b16/gmu0.88/pb16384",
+   "sglang/fp8/ctx16384/b16/gmu0.88/pb8192",
+   "sglang/fp8/ctx16384/b16/gmu0.93/pb16384",
+   "sglang/fp8/ctx16384/b16/gmu0.93/pb8192"
+  ],
+  "verdict": "inconclusive"
+ },
+ "results-llama/profiles/4090/balanced-file-dolly-d03d5896-ttft-p95-before-fix.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "spec",
+    "vllm/fp8/ctx16384/b16/gmu0.95/sd=ngram_gpu:4"
+   ],
+   [
+    "spec",
+    "vllm/fp8/ctx16384/b16/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb2048"
+   ],
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb8192"
+   ],
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb16384"
+   ],
+   [
+    "kv",
+    "vllm/fp8/ctx16384/b16/gmu0.95/kvfp8"
+   ],
+   [
+    "kv",
+    "vllm/fp8/ctx16384/b16/gmu0.95/kvint8_per_token_head"
+   ]
+  ],
+  "recorded": "sglang/fp8/ctx16384/b16/gmu0.93",
+  "replayed": "sglang/fp8/ctx16384/b16/gmu0.93",
+  "trials": 19,
+  "unused": [
+   "sglang/fp8/ctx16384/b16/gmu0.88/pb16384",
+   "sglang/fp8/ctx16384/b16/gmu0.88/pb8192",
+   "sglang/fp8/ctx16384/b16/gmu0.93/pb16384",
+   "sglang/fp8/ctx16384/b16/gmu0.93/pb8192"
+  ],
+  "verdict": "inconclusive"
+ },
+ "results-llama/profiles/4090/balanced-file-dolly-d03d5896-ttft-p95-explore.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb16384/sd=suffix:24"
+   ],
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb2048/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb8192/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb16384/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "kv",
+    "vllm/fp8/ctx16384/b16/gmu0.95/kvfp8/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "kv",
+    "vllm/fp8/ctx16384/b16/gmu0.95/kvint8_per_token_head/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ]
+  ],
+  "recorded": "vllm/fp8/ctx16384/b16/gmu0.95/sd=suffix:24",
+  "replayed": "vllm/fp8/ctx16384/b16/gmu0.95/sd=suffix:24",
+  "trials": 22,
+  "unused": [
+   "sglang/fp8/ctx16384/b16/gmu0.88/pb16384",
+   "sglang/fp8/ctx16384/b16/gmu0.88/pb8192",
+   "sglang/fp8/ctx16384/b16/gmu0.93/kvfp8_e5m2",
+   "sglang/fp8/ctx16384/b16/gmu0.93/pb16384",
+   "sglang/fp8/ctx16384/b16/gmu0.93/pb2048",
+   "sglang/fp8/ctx16384/b16/gmu0.93/pb2048/kvfp8_e5m2",
+   "sglang/fp8/ctx16384/b16/gmu0.93/pb8192",
+   "vllm/fp8/ctx16384/b16/gmu0.90/pb16384/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+   "vllm/fp8/ctx16384/b16/gmu0.95/kvfp8",
+   "vllm/fp8/ctx16384/b16/gmu0.95/kvint8_per_token_head",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb16384",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb2048",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb2048/kvfp8/sd=suffix:24",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb2048/kvint8_per_token_head/sd=suffix:24",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb8192",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb8192/kvfp8/sd=suffix:24",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb8192/kvint8_per_token_head/sd=suffix:24",
+   "vllm/fp8/ctx4096/b16/gmu0.80/pb8192/kvfp8/sd=ngram_gpu:4",
+   "vllm/fp8/ctx4096/b16/gmu0.90/pb8192/kvint8_per_token_head/sd=suffix:24",
+   "vllm/fp8/ctx4096/b64/gmu0.80/kvint8_per_token_head/sd=suffix:24",
+   "vllm/fp8/ctx4096/b64/gmu0.80/pb8192/kvfp8/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+   "vllm/fp8/ctx4096/b64/gmu0.90/pb2048/kvfp8/sd=suffix:24",
+   "vllm/fp8/ctx8192/b16/gmu0.80/pb2048/kvint8_per_token_head/sd=ngram_gpu:4",
+   "vllm/fp8/ctx8192/b16/gmu0.95/pb8192",
+   "vllm/fp8/ctx8192/b64/gmu0.90/pb2048/kvint8_per_token_head/sd=ngram_gpu:4"
+  ],
+  "verdict": "inconclusive"
+ },
+ "results-llama/profiles/4090/balanced-file-dolly-d03d5896-ttft-p95-specfirst.json": {
+  "cannot": [],
+  "missing": [],
+  "recorded": "vllm/fp8/ctx16384/b16/gmu0.95/pb2048/kvint8_per_token_head/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+  "replayed": "vllm/fp8/ctx16384/b16/gmu0.95/pb2048/kvint8_per_token_head/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+  "trials": 24,
+  "unused": [],
+  "verdict": "exact"
+ },
+ "results-llama/profiles/4090/balanced-file-dolly-d03d5896-ttft-p95.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb16384/sd=suffix:24"
+   ],
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb2048/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb8192/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b16/gmu0.95/pb16384/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "kv",
+    "vllm/fp8/ctx16384/b16/gmu0.95/kvfp8/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "kv",
+    "vllm/fp8/ctx16384/b16/gmu0.95/kvint8_per_token_head/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ]
+  ],
+  "recorded": "vllm/fp8/ctx16384/b16/gmu0.95/sd=suffix:24",
+  "replayed": "vllm/fp8/ctx16384/b16/gmu0.95/sd=suffix:24",
+  "trials": 22,
+  "unused": [
+   "sglang/fp8/ctx16384/b16/gmu0.88/pb16384",
+   "sglang/fp8/ctx16384/b16/gmu0.88/pb8192",
+   "sglang/fp8/ctx16384/b16/gmu0.93/kvfp8_e5m2",
+   "sglang/fp8/ctx16384/b16/gmu0.93/pb16384",
+   "sglang/fp8/ctx16384/b16/gmu0.93/pb2048",
+   "sglang/fp8/ctx16384/b16/gmu0.93/pb8192",
+   "vllm/fp8/ctx16384/b16/gmu0.95/kvfp8",
+   "vllm/fp8/ctx16384/b16/gmu0.95/kvint8_per_token_head",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb16384",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb2048",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb2048/kvfp8/sd=suffix:24",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb2048/kvint8_per_token_head/sd=suffix:24",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb8192",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb8192/kvfp8/sd=suffix:24",
+   "vllm/fp8/ctx16384/b16/gmu0.95/pb8192/kvint8_per_token_head/sd=suffix:24"
+  ],
+  "verdict": "inconclusive"
+ },
+ "results-llama/profiles/a100/balanced-file-dolly-d03d5896-ttft-p95-specfirst.json": {
+  "cannot": [],
+  "missing": [],
+  "recorded": "vllm/bf16/ctx16384/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+  "replayed": "vllm/bf16/ctx16384/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+  "trials": 20,
+  "unused": [],
+  "verdict": "exact"
+ },
+ "results-llama/profiles/a100/balanced-file-dolly-d03d5896-ttft-p95.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "prefill",
+    "vllm/bf16/ctx16384/b64/gmu0.95/pb8192/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "prefill",
+    "vllm/bf16/ctx16384/b64/gmu0.95/pb8192/sd=suffix:24"
+   ],
+   [
+    "kv",
+    "vllm/bf16/ctx16384/b64/gmu0.95/kvfp8_e5m2/sd=suffix:24"
+   ]
+  ],
+  "recorded": "vllm/bf16/ctx16384/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+  "replayed": "vllm/bf16/ctx16384/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+  "trials": 19,
+  "unused": [
+   "sglang/bf16/ctx16384/b16/gmu0.93/kvfp8_e5m2",
+   "sglang/bf16/ctx16384/b16/gmu0.93/pb16384",
+   "sglang/bf16/ctx16384/b16/gmu0.93/pb16384/kvfp8_e5m2",
+   "sglang/bf16/ctx16384/b16/gmu0.93/pb2048",
+   "sglang/bf16/ctx16384/b16/gmu0.93/pb2048/kvfp8_e5m2",
+   "sglang/bf16/ctx16384/b16/gmu0.93/pb8192",
+   "sglang/bf16/ctx16384/b64/gmu0.93/kvfp8_e5m2",
+   "vllm/bf16/ctx16384/b64/gmu0.95/kvfp8_e5m2",
+   "vllm/bf16/ctx16384/b64/gmu0.95/pb16384",
+   "vllm/bf16/ctx16384/b64/gmu0.95/pb16384/kvfp8_e5m2/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+   "vllm/bf16/ctx16384/b64/gmu0.95/pb2048",
+   "vllm/bf16/ctx16384/b64/gmu0.95/pb2048/kvfp8_e5m2/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+   "vllm/bf16/ctx16384/b64/gmu0.95/pb2048/kvfp8_e5m2/sd=suffix:24",
+   "vllm/bf16/ctx16384/b64/gmu0.95/pb8192"
+  ],
+  "verdict": "inconclusive"
+ },
+ "results-llama/profiles/a40/balanced-file-dolly-d03d5896-ttft-p95-specfirst.json": {
+  "cannot": [],
+  "missing": [],
+  "recorded": "vllm/bf16/ctx8192/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+  "replayed": "vllm/bf16/ctx8192/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+  "trials": 20,
+  "unused": [],
+  "verdict": "exact"
+ },
+ "results-llama/profiles/a40/balanced-file-dolly-d03d5896-ttft-p95.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "prefill",
+    "vllm/bf16/ctx8192/b64/gmu0.95/pb16384/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "prefill",
+    "vllm/bf16/ctx8192/b64/gmu0.95/pb8192/sd=suffix:24"
+   ],
+   [
+    "prefill",
+    "vllm/bf16/ctx8192/b64/gmu0.95/pb16384/sd=suffix:24"
+   ],
+   [
+    "combine",
+    "vllm/bf16/ctx8192/b64/gmu0.95/pb8192/kvfp8_e5m2/sd=suffix:24"
+   ]
+  ],
+  "recorded": "vllm/bf16/ctx8192/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+  "replayed": "vllm/bf16/ctx8192/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+  "trials": 20,
+  "unused": [
+   "sglang/bf16/ctx8192/b64/gmu0.88/pb16384",
+   "sglang/bf16/ctx8192/b64/gmu0.93/kvfp8_e5m2",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb16384",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb2048",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb2048/kvfp8_e5m2",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb8192",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb8192/kvfp8_e5m2",
+   "vllm/bf16/ctx8192/b64/gmu0.95/kvfp8_e5m2",
+   "vllm/bf16/ctx8192/b64/gmu0.95/pb16384",
+   "vllm/bf16/ctx8192/b64/gmu0.95/pb2048",
+   "vllm/bf16/ctx8192/b64/gmu0.95/pb2048/kvfp8_e5m2/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+   "vllm/bf16/ctx8192/b64/gmu0.95/pb8192",
+   "vllm/bf16/ctx8192/b64/gmu0.95/pb8192/kvfp8_e5m2/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+  ],
+  "verdict": "inconclusive"
+ },
+ "results-llama/profiles/a40/qwen2.5-3b-balanced-file-dolly-d03d5896-ttft-p95.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "spec",
+    "vllm/bf16/ctx16384/b64/gmu0.95/sd=ngram_gpu:4"
+   ],
+   [
+    "spec",
+    "vllm/bf16/ctx16384/b64/gmu0.95/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+   ],
+   [
+    "combine",
+    "vllm/bf16/ctx16384/b256/gmu0.95/pb16384/kvfp8_e5m2"
+   ],
+   [
+    "combine",
+    "vllm/bf16/ctx16384/b64/gmu0.95/pb16384/kvfp8_e5m2"
+   ],
+   [
+    "combine",
+    "vllm/bf16/ctx16384/b256/gmu0.95/pb8192/kvfp8_e5m2"
+   ],
+   [
+    "combine",
+    "vllm/bf16/ctx16384/b64/gmu0.95/pb8192/kvfp8_e5m2"
+   ],
+   [
+    "prefill",
+    "vllm/bf16/ctx16384/b64/gmu0.95/pb2048/sd=suffix:24"
+   ]
+  ],
+  "recorded": "vllm/bf16/ctx16384/b64/gmu0.95/pb8192/kvfp8_e5m2/sd=suffix:24",
+  "replayed": "vllm/bf16/ctx16384/b64/gmu0.95/pb8192/kvfp8_e5m2/sd=suffix:24",
+  "trials": 30,
+  "unused": [
+   "sglang/bf16/ctx8192/b64/gmu0.88/pb16384",
+   "sglang/bf16/ctx8192/b64/gmu0.93/kvfp8_e5m2",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb16384",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb2048",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb2048/kvfp8_e5m2",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb8192",
+   "sglang/bf16/ctx8192/b64/gmu0.93/pb8192/kvfp8_e5m2",
+   "vllm/bf16/ctx16384/b256/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx16384/b256/gmu0.95/kvfp8_e5m2/sd=ngram_gpu:4"
+  ],
+  "verdict": "inconclusive"
+ },
+ "results-llama/profiles/h100/balanced-file-dolly-d03d5896-ttft-p95.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "prefill",
+    "vllm/fp8/ctx16384/b64/gmu0.95/pb16384/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "kv",
+    "vllm/fp8/ctx16384/b64/gmu0.95/kvint8_per_token_head/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "kv",
+    "vllm/fp8/ctx16384/b256/gmu0.95/kvint8_per_token_head/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+   ],
+   [
+    "combine",
+    "vllm/fp8/ctx16384/b256/gmu0.95/pb2048/kvfp8"
+   ],
+   [
+    "combine",
+    "vllm/fp8/ctx16384/b64/gmu0.95/pb2048/kvfp8"
+   ],
+   [
+    "combine",
+    "vllm/fp8/ctx16384/b256/gmu0.95/pb8192/kvfp8"
+   ],
+   [
+    "combine",
+    "vllm/fp8/ctx16384/b64/gmu0.95/pb8192/kvfp8"
+   ]
+  ],
+  "recorded": "vllm/fp8/ctx16384/b64/gmu0.95/pb8192/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+  "replayed": "vllm/fp8/ctx16384/b64/gmu0.95/pb8192/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+  "trials": 29,
+  "unused": [
+   "vllm/fp8/ctx16384/b256/gmu0.95/pb2048/kvfp8/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+   "vllm/fp8/ctx16384/b256/gmu0.95/pb8192/kvfp8/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+   "vllm/fp8/ctx16384/b64/gmu0.95/pb2048/kvfp8/sd=draft:unsloth/Llama-3.2-1B-Instruct:4",
+   "vllm/fp8/ctx16384/b64/gmu0.95/pb8192/kvfp8/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+  ],
+  "verdict": "inconclusive"
+ },
+ "results-multigpu/profiles/2xa100/balanced-file-dolly-d03d5896-budget-1200s-layout-auto-ttft-p95.json": {
+  "skipped": "budgeted: its stages were cut by wall-clock time"
+ },
+ "results-multigpu/profiles/2xa100/balanced-file-dolly-d03d5896-budget-1200s-ttft-p95.json": {
+  "skipped": "budgeted: its stages were cut by wall-clock time"
+ },
+ "results-real/profiles/extract-run1.profile.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "spec",
+    "vllm/bf16/ctx8192/b256/gmu0.95/sd=ngram_gpu:4"
+   ],
+   [
+    "spec",
+    "vllm/bf16/ctx8192/b256/gmu0.95/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+   ],
+   [
+    "combine",
+    "vllm/bf16/ctx8192/b256/gmu0.95/pb2048/kvfp8_e5m2"
+   ]
+  ],
+  "recorded": "vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+  "replayed": "vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2",
+  "trials": 25,
+  "unused": [
+   "vllm/bf16/ctx8192/b256/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b256/gmu0.95/pb16384/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b256/gmu0.95/pb2048/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=ngram:4",
+   "vllm/bf16/ctx8192/b512/gmu0.95/pb16384/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b512/gmu0.95/pb2048/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+  ],
+  "verdict": "different"
+ },
+ "results-real/profiles/extract-run2.profile.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "spec",
+    "vllm/bf16/ctx8192/b256/gmu0.95/sd=ngram_gpu:4"
+   ],
+   [
+    "spec",
+    "vllm/bf16/ctx8192/b256/gmu0.95/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+   ],
+   [
+    "combine",
+    "vllm/bf16/ctx8192/b512/gmu0.95/pb2048/kvfp8_e5m2"
+   ]
+  ],
+  "recorded": "vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+  "replayed": "vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2",
+  "trials": 25,
+  "unused": [
+   "vllm/bf16/ctx8192/b256/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b256/gmu0.95/pb2048/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b256/gmu0.95/pb8192/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=ngram:4",
+   "vllm/bf16/ctx8192/b512/gmu0.95/pb2048/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b512/gmu0.95/pb8192/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+  ],
+  "verdict": "different"
+ },
+ "results-real/profiles/extract-run3.profile.json": {
+  "cannot": [],
+  "missing": [
+   [
+    "spec",
+    "vllm/bf16/ctx8192/b256/gmu0.95/sd=ngram_gpu:4"
+   ],
+   [
+    "prefill",
+    "vllm/bf16/ctx8192/b256/gmu0.95/pb2048/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+   ],
+   [
+    "prefill",
+    "vllm/bf16/ctx8192/b256/gmu0.95/pb8192/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+   ],
+   [
+    "prefill",
+    "vllm/bf16/ctx8192/b256/gmu0.95/pb16384/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+   ],
+   [
+    "combine",
+    "vllm/bf16/ctx8192/b512/gmu0.95/pb2048/kvfp8_e5m2"
+   ],
+   [
+    "combine",
+    "vllm/bf16/ctx8192/b256/gmu0.95/pb2048/kvfp8_e5m2"
+   ]
+  ],
+  "recorded": "vllm/bf16/ctx8192/b256/gmu0.95/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+  "replayed": "vllm/bf16/ctx8192/b256/gmu0.95/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+  "trials": 28,
+  "unused": [
+   "vllm/bf16/ctx8192/b256/gmu0.95/pb2048/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b256/gmu0.95/pb8192/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=ngram:4",
+   "vllm/bf16/ctx8192/b512/gmu0.95/pb2048/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+   "vllm/bf16/ctx8192/b512/gmu0.95/pb8192/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4"
+  ],
+  "verdict": "inconclusive"
+ },
+ "results-real/sglang/profiles/balanced-sharegpt.json": {
+  "cannot": [],
+  "missing": [],
+  "recorded": "sglang/bf16/ctx8192/b64/gmu0.93/kvfp8_e5m2",
+  "replayed": "sglang/bf16/ctx8192/b64/gmu0.93/kvfp8_e5m2",
+  "trials": 14,
+  "unused": [],
+  "verdict": "exact"
+ }
+}

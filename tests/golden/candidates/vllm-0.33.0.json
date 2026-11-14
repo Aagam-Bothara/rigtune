@@ -1,0 +1,904 @@
+{
+ "a40/gemma-4": {
+  "candidates": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    2048,
+    4096,
+    8192
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 54,
+   "quants": [
+    "awq",
+    "bf16"
+   ],
+   "sha256": "db53a665b23ac5b87e17f2cf7e39c75e6f829cbbce3d5b9a1255060fc31e467a"
+  },
+  "candidates_16k": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    16384,
+    32768,
+    65536
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 54,
+   "quants": [
+    "awq",
+    "bf16"
+   ],
+   "sha256": "058e52ae93d3b9d1fb52034e7b2b6056901e18d2f51f45ad762ce223adf2d24f"
+  },
+  "default": "vllm/bf16/ctx4096/b256/gmu0.90",
+  "kv_dtypes": [
+   "fp8_e5m2"
+  ],
+  "precisions": [
+   "bf16",
+   "awq",
+   "gptq",
+   "w8a8"
+  ],
+  "prefill_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb2048",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb8192",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb16384"
+  ],
+  "spec_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "spec_variants_all": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "supports": true
+ },
+ "a40/llama-3.1-8b": {
+  "candidates": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    2048,
+    4096,
+    8192
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 54,
+   "quants": [
+    "awq",
+    "bf16"
+   ],
+   "sha256": "db53a665b23ac5b87e17f2cf7e39c75e6f829cbbce3d5b9a1255060fc31e467a"
+  },
+  "candidates_16k": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    16384,
+    32768,
+    65536
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 54,
+   "quants": [
+    "awq",
+    "bf16"
+   ],
+   "sha256": "058e52ae93d3b9d1fb52034e7b2b6056901e18d2f51f45ad762ce223adf2d24f"
+  },
+  "default": "vllm/bf16/ctx4096/b256/gmu0.90",
+  "kv_dtypes": [
+   "fp8_e5m2"
+  ],
+  "precisions": [
+   "bf16",
+   "awq",
+   "gptq",
+   "w8a8"
+  ],
+  "prefill_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb2048",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb8192",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb16384"
+  ],
+  "spec_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=draft:meta-llama/Llama-3.2-1B-Instruct:4"
+  ],
+  "spec_variants_all": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=draft:meta-llama/Llama-3.2-1B-Instruct:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=eagle3:lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B:3"
+  ],
+  "supports": true
+ },
+ "a40/qwen2.5-7b": {
+  "candidates": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    2048,
+    4096,
+    8192
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 54,
+   "quants": [
+    "awq",
+    "bf16"
+   ],
+   "sha256": "db53a665b23ac5b87e17f2cf7e39c75e6f829cbbce3d5b9a1255060fc31e467a"
+  },
+  "candidates_16k": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    16384,
+    32768
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 36,
+   "quants": [
+    "awq",
+    "bf16"
+   ],
+   "sha256": "d718ae00b5650864f571ecf5f71685afbcd3a09a66ccbf4939e7f3289b0f7ce3"
+  },
+  "default": "vllm/bf16/ctx4096/b256/gmu0.90",
+  "kv_dtypes": [
+   "fp8_e5m2"
+  ],
+  "precisions": [
+   "bf16",
+   "awq",
+   "gptq",
+   "w8a8"
+  ],
+  "prefill_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb2048",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb8192",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb16384"
+  ],
+  "spec_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "spec_variants_all": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "supports": true
+ },
+ "a40/qwen3.5-9b": {
+  "candidates": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    2048,
+    4096,
+    8192
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 54,
+   "quants": [
+    "awq",
+    "bf16"
+   ],
+   "sha256": "db53a665b23ac5b87e17f2cf7e39c75e6f829cbbce3d5b9a1255060fc31e467a"
+  },
+  "candidates_16k": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    16384,
+    32768,
+    65536
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 54,
+   "quants": [
+    "awq",
+    "bf16"
+   ],
+   "sha256": "058e52ae93d3b9d1fb52034e7b2b6056901e18d2f51f45ad762ce223adf2d24f"
+  },
+  "default": "vllm/bf16/ctx4096/b256/gmu0.90",
+  "kv_dtypes": [
+   "fp8_e5m2"
+  ],
+  "precisions": [
+   "bf16",
+   "awq",
+   "gptq",
+   "w8a8"
+  ],
+  "prefill_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb2048",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb8192",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb16384"
+  ],
+  "spec_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "spec_variants_all": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "supports": true
+ },
+ "l4/gemma-4": {
+  "candidates": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    2048,
+    4096,
+    8192
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "43bb6d0e8f8948a411408f10a62769607540a25be82b1f8ea7b66d0e443edce3"
+  },
+  "candidates_16k": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    16384,
+    32768,
+    65536
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "8e2a4851ee28c9400c872943dfd2e093f67732de48f9efbc4530179e1e4f68e2"
+  },
+  "default": "vllm/bf16/ctx4096/b256/gmu0.90",
+  "kv_dtypes": [
+   "fp8",
+   "int8_per_token_head"
+  ],
+  "precisions": [
+   "bf16",
+   "fp8",
+   "awq",
+   "gptq",
+   "w8a8"
+  ],
+  "prefill_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb2048",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb8192",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb16384"
+  ],
+  "spec_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "spec_variants_all": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "supports": true
+ },
+ "l4/llama-3.1-8b": {
+  "candidates": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    2048,
+    4096,
+    8192
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "43bb6d0e8f8948a411408f10a62769607540a25be82b1f8ea7b66d0e443edce3"
+  },
+  "candidates_16k": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    16384,
+    32768,
+    65536
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "8e2a4851ee28c9400c872943dfd2e093f67732de48f9efbc4530179e1e4f68e2"
+  },
+  "default": "vllm/bf16/ctx4096/b256/gmu0.90",
+  "kv_dtypes": [
+   "fp8",
+   "int8_per_token_head"
+  ],
+  "precisions": [
+   "bf16",
+   "fp8",
+   "awq",
+   "gptq",
+   "w8a8"
+  ],
+  "prefill_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb2048",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb8192",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb16384"
+  ],
+  "spec_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=draft:meta-llama/Llama-3.2-1B-Instruct:4"
+  ],
+  "spec_variants_all": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=draft:meta-llama/Llama-3.2-1B-Instruct:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=eagle3:lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B:3"
+  ],
+  "supports": true
+ },
+ "l4/qwen2.5-7b": {
+  "candidates": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    2048,
+    4096,
+    8192
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "43bb6d0e8f8948a411408f10a62769607540a25be82b1f8ea7b66d0e443edce3"
+  },
+  "candidates_16k": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    16384,
+    32768
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 54,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "4840d5f0165ff1e03cdb8694901a9b954a68627745d6e96b3674dad88b61fb91"
+  },
+  "default": "vllm/bf16/ctx4096/b256/gmu0.90",
+  "kv_dtypes": [
+   "fp8",
+   "int8_per_token_head"
+  ],
+  "precisions": [
+   "bf16",
+   "fp8",
+   "awq",
+   "gptq",
+   "w8a8"
+  ],
+  "prefill_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb2048",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb8192",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb16384"
+  ],
+  "spec_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "spec_variants_all": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "supports": true
+ },
+ "l4/qwen3.5-9b": {
+  "candidates": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    2048,
+    4096,
+    8192
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "43bb6d0e8f8948a411408f10a62769607540a25be82b1f8ea7b66d0e443edce3"
+  },
+  "candidates_16k": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    16384,
+    32768,
+    65536
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "8e2a4851ee28c9400c872943dfd2e093f67732de48f9efbc4530179e1e4f68e2"
+  },
+  "default": "vllm/bf16/ctx4096/b256/gmu0.90",
+  "kv_dtypes": [
+   "fp8",
+   "int8_per_token_head"
+  ],
+  "precisions": [
+   "bf16",
+   "fp8",
+   "awq",
+   "gptq",
+   "w8a8"
+  ],
+  "prefill_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb2048",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb8192",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb16384"
+  ],
+  "spec_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "spec_variants_all": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "supports": true
+ },
+ "rtx4090/gemma-4": {
+  "candidates": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    2048,
+    4096,
+    8192
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "43bb6d0e8f8948a411408f10a62769607540a25be82b1f8ea7b66d0e443edce3"
+  },
+  "candidates_16k": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    16384,
+    32768,
+    65536
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "8e2a4851ee28c9400c872943dfd2e093f67732de48f9efbc4530179e1e4f68e2"
+  },
+  "default": "vllm/bf16/ctx4096/b256/gmu0.90",
+  "kv_dtypes": [
+   "fp8",
+   "int8_per_token_head"
+  ],
+  "precisions": [
+   "bf16",
+   "fp8",
+   "awq",
+   "gptq",
+   "w8a8"
+  ],
+  "prefill_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb2048",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb8192",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb16384"
+  ],
+  "spec_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "spec_variants_all": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "supports": true
+ },
+ "rtx4090/llama-3.1-8b": {
+  "candidates": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    2048,
+    4096,
+    8192
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "43bb6d0e8f8948a411408f10a62769607540a25be82b1f8ea7b66d0e443edce3"
+  },
+  "candidates_16k": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    16384,
+    32768,
+    65536
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "8e2a4851ee28c9400c872943dfd2e093f67732de48f9efbc4530179e1e4f68e2"
+  },
+  "default": "vllm/bf16/ctx4096/b256/gmu0.90",
+  "kv_dtypes": [
+   "fp8",
+   "int8_per_token_head"
+  ],
+  "precisions": [
+   "bf16",
+   "fp8",
+   "awq",
+   "gptq",
+   "w8a8"
+  ],
+  "prefill_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb2048",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb8192",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb16384"
+  ],
+  "spec_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=draft:meta-llama/Llama-3.2-1B-Instruct:4"
+  ],
+  "spec_variants_all": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=draft:meta-llama/Llama-3.2-1B-Instruct:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=eagle3:lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B:3"
+  ],
+  "supports": true
+ },
+ "rtx4090/qwen2.5-7b": {
+  "candidates": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    2048,
+    4096,
+    8192
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "43bb6d0e8f8948a411408f10a62769607540a25be82b1f8ea7b66d0e443edce3"
+  },
+  "candidates_16k": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    16384,
+    32768
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 54,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "4840d5f0165ff1e03cdb8694901a9b954a68627745d6e96b3674dad88b61fb91"
+  },
+  "default": "vllm/bf16/ctx4096/b256/gmu0.90",
+  "kv_dtypes": [
+   "fp8",
+   "int8_per_token_head"
+  ],
+  "precisions": [
+   "bf16",
+   "fp8",
+   "awq",
+   "gptq",
+   "w8a8"
+  ],
+  "prefill_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb2048",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb8192",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb16384"
+  ],
+  "spec_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "spec_variants_all": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "supports": true
+ },
+ "rtx4090/qwen3.5-9b": {
+  "candidates": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    2048,
+    4096,
+    8192
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "43bb6d0e8f8948a411408f10a62769607540a25be82b1f8ea7b66d0e443edce3"
+  },
+  "candidates_16k": {
+   "batches": [
+    16,
+    64,
+    256
+   ],
+   "ctxs": [
+    16384,
+    32768,
+    65536
+   ],
+   "fractions": [
+    "gmu0.80",
+    "gmu0.90",
+    "gmu0.95"
+   ],
+   "n": 81,
+   "quants": [
+    "awq",
+    "bf16",
+    "fp8"
+   ],
+   "sha256": "8e2a4851ee28c9400c872943dfd2e093f67732de48f9efbc4530179e1e4f68e2"
+  },
+  "default": "vllm/bf16/ctx4096/b256/gmu0.90",
+  "kv_dtypes": [
+   "fp8",
+   "int8_per_token_head"
+  ],
+  "precisions": [
+   "bf16",
+   "fp8",
+   "awq",
+   "gptq",
+   "w8a8"
+  ],
+  "prefill_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb2048",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb8192",
+   "vllm/bf16/ctx4096/b256/gmu0.90/pb16384"
+  ],
+  "spec_variants": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "spec_variants_all": [
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=ngram_gpu:4",
+   "vllm/bf16/ctx4096/b256/gmu0.90/sd=suffix:24"
+  ],
+  "supports": true
+ }
+}
