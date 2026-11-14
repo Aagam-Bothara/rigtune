@@ -901,6 +901,11 @@ def compare(
         help="Also measure vLLM and SGLang launched with the model and port alone, every other setting at "
              "the engine's own default (`<engine>-bare` rows), beside the `<engine>-default` rows, which "
              "pass what rigtune takes the defaults to be"),
+    levels: Optional[str] = typer.Option(
+        None, "--levels",
+        help="Measure every row at these numbers of users (comma-separated, e.g. 64,128,256) instead of the "
+             "workload's own, to see settings act that cannot at its levels; results are named "
+             "<workload>-c<levels>"),
     check_answers: Optional[str] = typer.Option(
         None, "--check-answers",
         help="Grade every row's answers on this labelled set (gsm8k, or a JSONL file as --eval-set takes), "
@@ -973,6 +978,15 @@ def compare(
         except EvalSetError as exc:
             raise typer.BadParameter(str(exc), param_hint="--check-answers")
         grader = RowGrader(items=graded.items, set_name=graded.name, sha256=graded.sha256)
+    users = None
+    if levels:
+        try:
+            users = [int(x) for x in levels.split(",") if x.strip()]
+            if not users or min(users) < 1:
+                raise ValueError
+        except ValueError:
+            raise typer.BadParameter(f"{levels!r}: numbers of users of at least 1, comma-separated",
+                                     param_hint="--levels")
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate,
                         strict=strict_constraints)
     hw = _probe()
@@ -1011,17 +1025,18 @@ def compare(
     target = runs = origin = requests = probe = None
     if verdict:  # a name no earlier run used, and every run on disk beside it the moment it is measured
         from rigtune.bench.compare import (copy_inputs, free_results_path, gpu_state, name_only, provenance,
-                                           results_path, runs_path_for)
+                                           results_path, runs_path_for, with_levels)
         from rigtune.bench.verdict import Thresholds
         from rigtune.hardware import hardware_hash
 
         named = ModelSpec(hf_id=name_only(spec.hf_id))  # a local model folder by its name, not its path
-        target = free_results_path(results_path(hardware_hash(hw), named, eval_wl.name,
+        measured = with_levels(eval_wl, users)[0].name if users else eval_wl.name
+        target = free_results_path(results_path(hardware_hash(hw), named, measured,
                                                 profile.objective, out))
         runs = runs_path_for(target)
         requests, probe = target.with_name(target.name.removesuffix(".json") + ".requests"), gpu_state
         prompts = {"calibration_prompts": workload_file, "measured_prompts": eval_workload_file}
-        options = {"objective": objective, "workload": wl.name, "measured_on": eval_wl.name,
+        options = {"objective": objective, "workload": wl.name, "measured_on": measured, "levels": users,
                    "repeats": repeats, "include": list(include or []), "backend": backend,
                    "ttft_ceiling_ms": cons.ttft_ceiling_ms, "ttft_percentile": ttft_percentile,
                    "tpot_ceiling_ms": cons.tpot_ceiling_ms, "expert": expert, "bare_stock": bare_stock,
@@ -1041,7 +1056,7 @@ def compare(
                       power=_power_controller(profile), repeats=repeats, extra=extra or None,
                       record_runs=verdict, runs_path=runs, answers=verdict, grader=grader,
                       answer_tolerance=max_accuracy_loss / 100, origin=origin, gpu_probe=probe,
-                      requests_dir=requests, bare_stock=bare_stock, rotate=verdict)
+                      requests_dir=requests, bare_stock=bare_stock, rotate=verdict, levels=users)
     path = save(result, out, path=target)
     console.print(to_markdown(result))
     console.print(f"[dim]saved {path}[/]")

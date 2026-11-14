@@ -204,6 +204,44 @@ def _graded(row: ComparisonRow) -> Optional[Dict[str, Any]]:
     return row.answer_check.model_dump(exclude={"outcomes"}) if row.answer_check is not None else None
 
 
+def binding_notes(result: ComparisonResult) -> List[str]:
+    """For each tuner or expert row, the settings it changes from its engine's stock row that cannot act at
+    the levels measured: a batch cap at or above the busiest level, a batched-token budget at or above what a
+    step can hold (busiest level x mean prompt tokens + one decode token per user), a context at or above the
+    mean prompt plus the longest answer the workload asks for. On those settings such a row measures like the
+    stock engine here, whatever it would do at more users. Memory reserved and prefix caching are not judged:
+    whether they act depends on how full the cache gets, which these results do not record."""
+    levels = result.workload_spec.get("concurrencies") or []
+    rig = result.rigtune_row
+    if not levels or rig is None:
+        return []
+    users = max(levels)
+    prompt = rig.metrics.prompt_tokens or int(result.workload_spec.get("prefill_tokens") or 0)
+    answer = int(result.workload_spec.get("decode_tokens") or 0)
+    step = users * prompt + users
+    stock = {r.config.backend: r.config for r in result.rows if r.label == f"{r.config.backend}-default"}
+    out = []
+    for row in result.rows:
+        if kind_of(row) not in ("tuner", "expert") or row.label == "rigtune":
+            continue
+        cfg, base = row.config, stock.get(row.config.backend)
+        idle = []
+        if (base is None or cfg.batch != base.batch) and cfg.batch >= users:
+            idle.append(f"a batch cap of {cfg.batch} (it binds above {cfg.batch} users)")
+        if cfg.prefill_budget and (base is None or cfg.prefill_budget != base.prefill_budget) and prompt:
+            if cfg.prefill_budget >= step:
+                idle.append(f"a batched-token budget of {cfg.prefill_budget} (a step here holds at most "
+                            f"{users} x {prompt} + {users} = {step} tokens)")
+        if (base is None or cfg.ctx != base.ctx) and prompt and cfg.ctx >= prompt + answer:
+            idle.append(f"a context of {cfg.ctx} (prompts here average {prompt} tokens, answers at most "
+                        f"{answer})")
+        if idle:
+            out.append(f"{row.label}: at up to {users} users, {'; '.join(idle)} cannot act, so on these "
+                       "settings it measures like its engine's stock row; measure at more users "
+                       "(compare --levels) to see them act")
+    return out
+
+
 def kind_of(row: ComparisonRow) -> str:
     if row.kind:
         return row.kind
@@ -486,6 +524,7 @@ def score(result: ComparisonResult, thresholds: Optional[Thresholds] = None, res
             listed = ", ".join(map(str, levels))
             notes.append(f"{row.label}'s counted runs were scored at different levels ({listed} users): each "
                          "run counts at the busiest level at which it met the limits")
+    notes += binding_notes(result)
     if not any(answers_of(row, level) for row in result.rows):
         notes.append("no answer statistics were recorded at rigtune's scored level (compare --verdict "
                      "records them): answer length, finish reasons and repetition are unknown, so no row is "

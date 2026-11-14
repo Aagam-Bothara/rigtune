@@ -295,6 +295,31 @@ class RunsLog:
         self._write({"type": "end", "runs": runs})
 
 
+def with_levels(workload: Workload, levels: List[int]) -> Tuple[Workload, str]:
+    """The workload measured at these numbers of users instead of its own, named `<name>-c<levels>` so its
+    results never stand in for the workload's own, and a note saying so. A synthetic workload with fewer
+    prompts than twice its busiest level gets that many (as the high-concurrency preset sends 256 for 128
+    users), so the busiest level can keep every slot busy; a file is what it holds, and the note says when it
+    is short."""
+    from dataclasses import replace
+
+    wanted = tuple(sorted(set(levels)))
+    if not wanted or wanted[0] < 1:
+        raise ValueError(f"levels must be numbers of users of at least 1, not {levels}")
+    name = f"{workload.name}-c{'-'.join(map(str, wanted))}"
+    changed = replace(workload, concurrencies=wanted, name=name)
+    note = (f"measured at {', '.join(map(str, wanted))} users instead of the workload's own "
+            f"{', '.join(map(str, workload.concurrencies))}")
+    busiest = wanted[-1]
+    if workload.source == "synthetic" and workload.n_prompts < 2 * busiest:
+        changed = replace(changed, n_prompts=2 * busiest, prompts=[])  # generated afresh, as many as asked
+        note += f", with {2 * busiest} prompts per level instead of {workload.n_prompts}"
+    elif workload.source != "synthetic" and len(workload.prompts) < 2 * busiest:
+        note += (f"; the prompt file holds {len(workload.prompts)} prompts, fewer than twice the busiest "
+                 "level, so that level may not stay full")
+    return changed, note
+
+
 def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -733,6 +758,7 @@ def compare(
     requests_dir: Optional[Path] = None,
     bare_stock: bool = False,
     rotate: bool = False,
+    levels: Optional[List[int]] = None,
 ) -> ComparisonResult:
     """Measure rigtune's winner and every reference config under the same workload. `extra` adds rows under
     their own labels (other searches' picks, say), measured like every other row and never filtered by `include`.
@@ -753,8 +779,13 @@ def compare(
     every run there (RequestLog). `bare_stock` adds an `<engine>-bare` row per vLLM or SGLang candidate: the
     engine launched with the model and port alone (references.BareStock). `rotate` starts each round one row
     later (round 2 with the second row, and so on), so that no row is always the one measured right after an
-    engine was torn down, or first on a cold card; each RunRecord keeps its place in its round."""
+    engine was torn down, or first on a cold card; each RunRecord keeps its place in its round.
+    `levels` measures every row at these numbers of users instead of the workload's own (with_levels)."""
     workload = workload or get_workload(profile.workload)
+    measured_on = workload.name  # the prompts' name, for the held-out note, whatever the levels
+    level_note = None
+    if levels:
+        workload, level_note = with_levels(workload, levels)
     cons = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                       tpot_ceiling_ms=workload.tpot_ceiling_ms)
     objective = profile.objective
@@ -854,10 +885,12 @@ def compare(
     if kept_note:
         result.notes.append(kept_note)
 
-    if profile.workload and profile.workload != workload.name:
+    if profile.workload and profile.workload != measured_on:
         result.calibrated_on = profile.workload
         result.notes.append(f"rigtune's pick was calibrated on `{profile.workload}`; every row here was measured on "
-                            f"`{workload.name}`, which calibration never saw")
+                            f"`{measured_on}`, which calibration never saw")
+    if level_note:
+        result.notes.append(level_note)
 
     swapped: Dict[str, Config] = {}  # added rows measured with their fallback: the first run failed to start
     seen: set = set()
