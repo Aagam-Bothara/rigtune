@@ -7,9 +7,12 @@ Result files are the raw material for the benchmark matrix and `rigtune report`:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -69,6 +72,8 @@ class RunRecord(BaseModel):
     ended_at: Optional[float] = None
     answers: Optional[AnswerStats] = None  # the scored level's answers, when compare recorded them
     level_answers: Dict[str, AnswerStats] = Field(default_factory=dict)  # every level's, by number of users
+    gpu_state: List[Dict[str, Any]] = Field(default_factory=list)  # each GPU's power limit, temperature
+    engine_logs: List[str] = Field(default_factory=list)  # the engine log files it wrote, by name
 
 
 class AnswerCheck(BaseModel):
@@ -124,10 +129,11 @@ class ComparisonRow(BaseModel):
     source: Optional[str] = None
     run_records: List[RunRecord] = Field(default_factory=list)  # every run, under --verdict; else not written
     answer_check: Optional[AnswerCheck] = None  # --check-answers only
+    launch_env: Dict[str, str] = Field(default_factory=dict)  # beside launch_args, under --verdict only
 
     @model_serializer(mode="wrap")
     def _omit_unset_provenance(self, handler) -> Dict[str, Any]:
-        return _drop(handler(self), ("kind", "source", "run_records", "answer_check"))
+        return _drop(handler(self), ("kind", "source", "run_records", "answer_check", "launch_env"))
 
 
 class SkippedRow(BaseModel):
@@ -167,10 +173,12 @@ class ComparisonResult(BaseModel):
     skipped: List[SkippedRow] = Field(default_factory=list)  # left out of the file when empty
     # Set only by read_runs, for a comparison that stopped before every row had all its repeats.
     incomplete: Optional[str] = None
+    # What the comparison ran on (provenance()), under --verdict only.
+    provenance: Optional[Dict[str, Any]] = None
 
     @model_serializer(mode="wrap")
     def _omit_empty_skipped(self, handler) -> Dict[str, Any]:
-        return _drop(handler(self), ("skipped", "incomplete"))
+        return _drop(handler(self), ("skipped", "incomplete", "provenance"))
 
     @property
     def rigtune_row(self) -> Optional[ComparisonRow]:
@@ -287,6 +295,279 @@ class RunsLog:
         self._write({"type": "end", "runs": runs})
 
 
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _own_checkout() -> Optional[Callable[..., str]]:
+    """git, run in rigtune's own checkout, when rigtune runs from one; None otherwise. The checkout must be
+    rigtune's own (its top level holds rigtune/ and a pyproject.toml naming rigtune): an installed copy can
+    sit inside some other repository, such as a home directory kept in git, whose state would mean nothing
+    here."""
+    here = Path(__file__).resolve().parent.parent  # the rigtune package directory
+
+    def git(*args: str, text: bool = True) -> Any:
+        out = subprocess.run(["git", "-C", str(here), *args], capture_output=True, text=text, timeout=10,
+                             check=True).stdout
+        return out.strip() if text else out
+
+    try:
+        top = Path(git("rev-parse", "--show-toplevel"))
+        project = (top / "pyproject.toml").read_text(encoding="utf-8")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if here.parent.resolve() != top.resolve() or 'name = "rigtune"' not in project:
+        return None
+    return git
+
+
+def rigtune_commit() -> Optional[str]:
+    """The commit rigtune runs from, with "+dirty" for local changes, untracked files included, when it runs
+    from a git checkout of rigtune itself (_own_checkout); None otherwise. A dirty tree is recorded, not
+    refused: rigtune_diff_sha256 says which changes."""
+    git = _own_checkout()
+    if git is None:
+        return None
+    try:
+        dirty = git("status", "--porcelain", "--untracked-files=normal")
+        return git("rev-parse", "HEAD") + ("+dirty" if dirty else "")
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def rigtune_diff_sha256() -> Optional[str]:
+    """For a dirty checkout of rigtune, the sha256 of its changes against the commit: the binary diff of
+    tracked files, then each untracked file's path and contents (ignored files left out). The same changes
+    give the same hash, so a verdict can be matched to the tree that produced it. None when clean or not a
+    checkout of rigtune."""
+    git = _own_checkout()
+    if git is None:
+        return None
+    try:
+        digest = hashlib.sha256(git("diff", "HEAD", "--binary", text=False))
+        untracked = sorted(git("ls-files", "--others", "--exclude-standard").splitlines())
+        top = Path(git("rev-parse", "--show-toplevel"))
+        for name in untracked:
+            digest.update(b"\0" + name.encode("utf-8") + b"\0" + (top / name).read_bytes())
+        if not untracked and not git("diff", "HEAD", "--stat"):
+            return None
+        return digest.hexdigest()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")  # C:\ or C:/
+_SHORT_FLAG = re.compile(r"^(-[A-Za-z])(.+)$")  # -o/home/me/out
+# An absolute path inside free text (an error, a traceback): a Windows drive or share path, a home-relative
+# one, or a POSIX path of two or more parts. API routes such as /v1/chat/completions are not paths here.
+_TEXT_PATH = re.compile(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\s'\"<>|*?,;()\[\]]*"
+                        r"|\\\\[^\s'\"<>|*?,;()\[\]]+"
+                        r"|~[\\/][^\s'\"<>|*?,;()\[\]]*"
+                        r"|(?:^|(?<=[\s'\"(=\[:,]))/(?!v1/)(?:[^\s'\"<>|:,;()\[\]/]+/)+"
+                        r"[^\s'\"<>|:,;()\[\]/]*")
+
+
+def is_path(value: str) -> bool:
+    """Whether `value` is an absolute or home-relative path on either kind of system, or a Windows path,
+    whatever system this is and whether or not it exists. A relative path such as at/rows.json, which names
+    no folder above the one it was run in, is not; nor is a Hub id such as Qwen/Qwen2.5-7B."""
+    return value.startswith(("/", "~", "\\")) or bool(_DRIVE.match(value)) or "\\" in value
+
+
+def last_part(value: str) -> str:
+    """The last part of a path, split on either separator: what Path(...).name gives on its own system."""
+    parts = [p for p in re.split(r"[\\/]+", value) if p]
+    return parts[-1] if parts else value
+
+
+def name_only(arg: str) -> str:
+    """A command-line argument with any path in it cut to its last part: a path can carry a user name.
+    `/home/me/at/rows.json`, `C:\\Users\\me\\rows.json`, `--rows=/home/me/rows.json` and `-o/home/me/out`
+    become `rows.json`, `rows.json`, `--rows=rows.json` and `-oout`, on any system; a Hub id such as
+    Qwen/Qwen2.5-7B and a relative path are kept."""
+    if arg.startswith("--") and "=" in arg:
+        flag, value = arg.split("=", 1)
+        return f"{flag}={name_only(value)}"
+    short = _SHORT_FLAG.match(arg)
+    if short and is_path(short.group(2)):
+        return short.group(1) + last_part(short.group(2))
+    return last_part(arg) if is_path(arg) else arg
+
+
+def scrub_text(text: str) -> str:
+    """Free text, an engine's error or traceback, with every absolute path in it cut to `<path>/` and its last
+    part, so the message stays readable without naming the folders it ran from."""
+    return _TEXT_PATH.sub(lambda m: f"<path>/{last_part(m.group(0))}", text)
+
+
+def scrub_row(row: "ComparisonRow") -> None:
+    """A measured row as a scored comparison writes it: launch arguments cut to names, and paths cut out of
+    its launch environment, its error and its requests' errors."""
+    row.launch_args = [name_only(a) for a in row.launch_args]
+    row.launch_env = {k: scrub_text(v) for k, v in row.launch_env.items()}
+    if row.error:
+        row.error = scrub_text(row.error)
+    for m in [row.metrics, *row.metrics.by_concurrency.values()]:
+        m.errors = [scrub_text(e) for e in m.errors]
+def model_provenance(spec: ModelSpec) -> Dict[str, Any]:
+    """The weights: the Hub id, the revision asked for, and the snapshot (commit) the local Hugging Face cache
+    holds for it, read from the cache without the network; None when it is not cached there."""
+    snapshot = None
+    try:
+        from huggingface_hub import try_to_load_from_cache
+
+        found = try_to_load_from_cache(spec.hf_id, "config.json", revision=spec.revision)
+        parts = Path(found).parts if isinstance(found, str) else ()
+        if "snapshots" in parts[:-1]:
+            snapshot = parts[parts.index("snapshots") + 1]
+    except Exception:  # an id that is a local folder, or no huggingface_hub: there is no snapshot to name
+        snapshot = None
+    return {"hf_id": name_only(spec.hf_id), "revision": spec.revision, "snapshot": snapshot}
+
+
+def workload_provenance(workload: Workload) -> Dict[str, Any]:
+    """What the prompts were and how they were sampled: name, source (a file's name only), seed, temperature
+    and whether answers stop naturally, and how to get the prompts again."""
+    from rigtune.calibrate.datasets import FILE_PREFIX
+
+    source = workload.source
+    if source.startswith(FILE_PREFIX):
+        source = FILE_PREFIX + last_part(source[len(FILE_PREFIX):])
+        again = "a copy of the file is beside the results"
+    else:
+        again = (f"rigtune.calibrate.datasets rebuilds them from `{source}` with seed {workload.seed} at the "
+                 "commit above: synthetic prompts are generated, a named dataset is downloaded from the "
+                 "Hugging Face Hub and sampled")
+    return {"name": workload.name, "source": source, "seed": workload.seed,
+            "temperature": workload.temperature, "natural_stop": workload.natural_stop, "prompts": again}
+
+
+def copy_inputs(target: Path, files: Dict[str, Optional[Path]]) -> Dict[str, str]:
+    """Copy each prompt file into `<name>.inputs/` beside the results `<name>.json`, so the comparison can be
+    rerun on exactly those prompts; {role: the copy's path relative to the results' folder}."""
+    import shutil
+
+    folder = target.with_name(target.name.removesuffix(".json") + ".inputs")
+    out = {}
+    for role, path in files.items():
+        if path is None:
+            continue
+        folder.mkdir(parents=True, exist_ok=True)
+        name = path.name if not (folder / path.name).exists() else f"{role}-{path.name}"
+        shutil.copyfile(path, folder / name)
+        out[role] = f"{folder.name}/{name}"
+    return out
+
+
+def gpu_state() -> List[Dict[str, Any]]:
+    """Each NVIDIA GPU's power limit, temperature and SM clock now, from nvidia-smi; [] when it cannot be
+    read. Recorded at the start of every run under compare --verdict: a card that starts a run hot or capped
+    measures differently."""
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=index,power.limit,temperature.gpu,clocks.sm",
+                              "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10,
+                             check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    def number(x: str) -> Optional[float]:
+        try:
+            return float(x)
+        except ValueError:  # "[N/A]" on a card that does not report it
+            return None
+
+    state = []
+    for line in out.strip().splitlines():
+        fields = [f.strip() for f in line.split(",")]
+        if len(fields) == 4:
+            state.append({"index": int(number(fields[0]) or 0), "power_limit_w": number(fields[1]),
+                          "temperature_c": number(fields[2]), "sm_clock_mhz": number(fields[3])})
+    return state
+
+
+class RequestLog:
+    """Every request of every run, as the load generator measured it, in `<folder>/<label>.r<round>.jsonl`:
+    one line per request with its level, whether it succeeded, its time to first token and end to end, its
+    prompt and completion tokens, its finish reason and the first line of any error. The runner calls it
+    after each level (run_trial's on_level); compare sets `current` before each run."""
+
+    def __init__(self, folder: Path):
+        self.folder = folder
+        self.current: Optional[Tuple[str, int]] = None
+
+    def __call__(self, level: int, outcomes: list) -> None:
+        if self.current is None:
+            return
+        label, rnd = self.current
+        self.folder.mkdir(parents=True, exist_ok=True)
+        with (self.folder / f"{label}.r{rnd}.jsonl").open("a", encoding="utf-8", newline="\n") as fh:
+            for i, o in enumerate(outcomes):
+                error = scrub_text(o.error.splitlines()[0])[:200] if o.error else None
+                line = {"level": level, "request": i, "ok": o.ok, "ttft_ms": round(o.ttft_s * 1000, 3),
+                        "e2e_ms": round(o.duration_s * 1000, 3), "prompt_tokens": o.prompt_tokens,
+                        "tokens": o.tokens, "finish_reason": getattr(o, "finish_reason", None),
+                        "error": error}
+                fh.write(json.dumps(line) + "\n")
+
+
+def provenance(hw: HardwareDescriptor, files: Dict[str, Optional[Path]], *, model: Optional[ModelSpec] = None,
+               workload: Optional[Workload] = None, options: Optional[Dict[str, Any]] = None,
+               command: Optional[List[str]] = None, rows: Optional[List[Path]] = None, expert: bool = False,
+               inputs: Optional[Dict[str, str]] = None, logs: Optional[str] = None) -> Dict[str, Any]:
+    """What a comparison ran on, for its results and verdict: rigtune's version and commit (with the hash of
+    any local changes), the OS and Python, each GPU's driver and CUDA, each available engine's version with
+    the torch, transformers and FlashInfer it found beside it, and each prompt file's name and full sha256
+    (names only: a path can carry a user name). Under `compare --verdict` also the weights' revision and
+    cached snapshot, the command line (paths cut to file names) and every option that shapes the result,
+    the workload's source, seed and temperature, the content and sha256 of each --rows file and of the expert
+    rows' data, where the copied prompt files and the engine logs are. Every run's start and end, its place
+    in its round, the GPUs' power limit and temperature at its start, and its engine logs are in its
+    RunRecord; its requests are in <name>.requests/."""
+    out: Dict[str, Any] = {
+        "rigtune_version": __version__,
+        "rigtune_commit": rigtune_commit(),
+        "os": hw.os,
+        "python": hw.python,
+        "gpus": [{"name": g.name, "driver_version": g.driver_version, "cuda_version": g.cuda_version,
+                  "vram_total_bytes": g.vram_total_bytes} for g in hw.gpus],
+        "engines": {name: {"version": b.version, "libs": dict(sorted(b.libs.items()))}
+                    for name, b in sorted(hw.backends.items()) if b.available},
+        "files": {role: {"name": p.name, "sha256": file_sha256(p)}
+                  for role, p in files.items() if p is not None},
+        "launch_args_port": "launch_args show port 0; each run's engine got a free port in its place",
+    }
+    if out["rigtune_commit"] and out["rigtune_commit"].endswith("+dirty"):
+        out["rigtune_diff_sha256"] = rigtune_diff_sha256()
+    if model is not None:
+        out["model"] = model_provenance(model)
+    if workload is not None:
+        out["workload"] = workload_provenance(workload)
+    if command is not None:
+        out["command"] = ["rigtune", *map(name_only, command[1:])]
+    if options is not None:
+        out["options"] = options
+    if rows:
+        out["rows_files"] = [{"name": p.name, "sha256": file_sha256(p),
+                              "content": json.loads(p.read_text(encoding="utf-8"))} for p in rows]
+    if expert:
+        from importlib import resources
+
+        text = resources.files("rigtune").joinpath("data", "expert_rows.json").read_text(encoding="utf-8")
+        out["expert_rows"] = {"name": "expert_rows.json",
+                              "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                              "content": json.loads(text)}
+    if inputs:
+        out["inputs"] = inputs
+    if logs:
+        out["engine_logs"] = f"{logs}, under rigtune's logs folder (rigtune.cache.logs_dir())"
+    return out
+def _logs(folder: Optional[Path]) -> set:
+    try:
+        return {p.name for p in folder.iterdir()} if folder is not None and folder.is_dir() else set()
+    except OSError:
+        return set()
+
+
 def runs_path_for(results: Path) -> Path:
     """<name>.runs.jsonl beside the results file <name>.json."""
     return results.with_name(results.name.removesuffix(".json") + ".runs.jsonl")
@@ -299,7 +580,8 @@ def free_results_path(path: Path) -> Path:
     while True:
         name = stem if n == 1 else f"{stem}-{n}"
         if not any((path.parent / f"{name}{suffix}").exists()
-                   for suffix in (".json", ".runs.jsonl", ".verdict.json", ".verdict.md")):
+                   for suffix in (".json", ".runs.jsonl", ".verdict.json", ".verdict.md", ".inputs",
+                                  ".requests")):
             return path.parent / f"{name}.json"
         n += 1
 
@@ -446,6 +728,9 @@ def compare(
     answers: bool = False,
     grader: Optional[object] = None,
     answer_tolerance: float = 0.03,
+    origin: Optional[Dict[str, Any]] = None,
+    gpu_probe: Optional[Callable[[], List[Dict[str, Any]]]] = None,
+    requests_dir: Optional[Path] = None,
 ) -> ComparisonResult:
     """Measure rigtune's winner and every reference config under the same workload. `extra` adds rows under
     their own labels (other searches' picks, say), measured like every other row and never filtered by `include`.
@@ -459,7 +744,11 @@ def compare(
     With `runs_path`, every run is also appended there as soon as it is measured (RunsLog). `answers`
     records each level's AnswerStats (answer lengths, finish reasons, repetition) in the metrics. `grader`
     (rigtune/bench/answers.py RowGrader) grades each row's answers on a labelled set while its engine is up,
-    and each row records its AnswerCheck against its engine's stock row at `answer_tolerance`."""
+    and each row records its AnswerCheck against its engine's stock row at `answer_tolerance`. `origin`
+    (provenance()) is recorded in the results, and each row's launch environment beside its launch args.
+    With `record_runs`, `gpu_probe` (gpu_state) is read at the start of every run and kept in its RunRecord
+    with the names of the engine logs the run wrote to `log_dir`; `requests_dir` keeps every request of
+    every run there (RequestLog)."""
     workload = workload or get_workload(profile.workload)
     cons = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                       tpot_ceiling_ms=workload.tpot_ceiling_ms)
@@ -506,10 +795,13 @@ def compare(
         refs[label] = row.config
         added[label] = row
 
+    sink = RequestLog(requests_dir) if requests_dir is not None else None
     if runner is None:
         more: Dict[str, Any] = {"answers": True} if answers else {}  # built as before unless asked for more
         if grader is not None:
             more["gate"] = grader
+        if sink is not None:
+            more["on_level"] = sink
         runner = SubprocessTrialRunner(backends=backends, models=models, hw=hw, workload=workload,
                                        log_dir=log_dir, power=power, **more)
 
@@ -518,14 +810,21 @@ def compare(
         hardware_hash=hardware_hash(hw),
         gpu=hw.gpu.name if hw.gpu else None,
         cpu=hw.cpu.model_name,
-        model_id=spec.hf_id,
+        model_id=spec.hf_id if origin is None else name_only(spec.hf_id),  # a local folder by its name
         objective=objective,
         workload=workload.name,
         workload_spec=workload.spec(),
         ttft_ceiling_ms=cons.ttft_ceiling_ms,
         tpot_ceiling_ms=cons.tpot_ceiling_ms,
         skipped=skipped,
+        provenance=origin,
     )
+    if origin is not None:  # with provenance a prompt file is named, not located: a path can carry a user
+        source = str(result.workload_spec.get("source", ""))
+        from rigtune.calibrate.datasets import FILE_PREFIX
+
+        if source.startswith(FILE_PREFIX):
+            result.workload_spec["source"] = FILE_PREFIX + last_part(source[len(FILE_PREFIX):])
     for label, row in added.items():
         article = "an" if row.kind == "expert" else "a"
         result.notes.append(f"{label} is {article} {row.kind} row: {row.source}")
@@ -562,14 +861,18 @@ def compare(
         if progress:
             progress(label, None)
         try:
-            row.launch_args = backend.launch_spec(cfg, models[cfg.backend], 0).args
+            launch = backend.launch_spec(cfg, models[cfg.backend], 0)
+            row.launch_args = launch.args
+            if origin is not None:  # with provenance, the environment each engine was launched with too
+                row.launch_env = dict(launch.env)
         except Exception:
             pass
         tr = runner.run(cfg, f"compare:{label}")
         spare = added[label].fallback if label in added else None
         if spare is not None and first and not tr.launched:
             swapped[label] = spare
-            error = (tr.error or "no error recorded").splitlines()[0][:200]
+            error = (tr.error or "no error recorded").splitlines()[0]
+            error = (scrub_text(error) if origin is not None else error)[:200]
             result.notes.append(f"{added[label].fallback_note} (it failed with: {error})")
             return run_row(label, spare)
         row.ok, row.error, row.metrics, row.memory = tr.ok, tr.error, tr.metrics, tr.memory
@@ -581,6 +884,8 @@ def compare(
     # rigtune's winner, re-measured now so it faces the same conditions as the references.
     measurers: List[Tuple[str, Callable[[], ComparisonRow]]] = []
     pick_more: Dict[str, Any] = {"answers": True} if answers else {}  # for a disaggregated or replicas pick
+    if sink is not None:
+        pick_more["on_level"] = sink
     pick_key = profile.config.key()  # the key rigtune's row is graded under
     if profile.disagg is not None:
         pick_key = profile.disagg.key()
@@ -620,9 +925,17 @@ def compare(
         log = RunsLog(runs_path, result, profile, planned, max(1, repeats))
     for repeat in range(1, max(1, repeats) + 1):
         for position, (label, measure) in enumerate(measurers, 1):
+            if sink is not None:
+                sink.current = (label, repeat)
+            state = gpu_probe() if gpu_probe is not None and record_runs else []
+            logs_before = _logs(log_dir) if record_runs else set()
             started = time.time()
             runs[label].append(measure())
+            if origin is not None:  # a scored comparison names files, never the folders they are in
+                scrub_row(runs[label][-1])
             record = run_record(runs[label][-1], repeat, position, started, time.time())
+            record.gpu_state = state
+            record.engine_logs = sorted(_logs(log_dir) - logs_before) if record_runs else []
             if record_runs:
                 records[label].append(record)
             if log is not None:

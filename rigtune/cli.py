@@ -1003,21 +1003,40 @@ def compare(
 
     if expert:
         extra = {**expert_rows(hw, planned.prepared, reg), **extra}
-    target = runs = None
+    target = runs = origin = requests = probe = None
     if verdict:  # a name no earlier run used, and every run on disk beside it the moment it is measured
-        from rigtune.bench.compare import free_results_path, results_path, runs_path_for
+        from rigtune.bench.compare import (copy_inputs, free_results_path, gpu_state, name_only, provenance,
+                                           results_path, runs_path_for)
+        from rigtune.bench.verdict import Thresholds
         from rigtune.hardware import hardware_hash
 
-        target = free_results_path(results_path(hardware_hash(hw), ModelSpec(hf_id=spec.hf_id), eval_wl.name,
+        named = ModelSpec(hf_id=name_only(spec.hf_id))  # a local model folder by its name, not its path
+        target = free_results_path(results_path(hardware_hash(hw), named, eval_wl.name,
                                                 profile.objective, out))
         runs = runs_path_for(target)
+        requests, probe = target.with_name(target.name.removesuffix(".json") + ".requests"), gpu_state
+        prompts = {"calibration_prompts": workload_file, "measured_prompts": eval_workload_file}
+        options = {"objective": objective, "workload": wl.name, "measured_on": eval_wl.name,
+                   "repeats": repeats, "include": list(include or []), "backend": backend,
+                   "ttft_ceiling_ms": cons.ttft_ceiling_ms, "ttft_percentile": ttft_percentile,
+                   "tpot_ceiling_ms": cons.tpot_ceiling_ms, "expert": expert,
+                   "rows": [p.name for p in rows or []],
+                   "check_answers": name_only(check_answers) if check_answers else None,
+                   "check_items": check_items if check_answers else None,
+                   "max_accuracy_loss_points": max_accuracy_loss if check_answers else None,
+                   "verdict_thresholds": vars(Thresholds())}
+        origin = provenance(hw, prompts, model=spec, workload=eval_wl, options=options, command=sys.argv,
+                            rows=list(rows or []), expert=expert, inputs=copy_inputs(target, prompts),
+                            logs=f"{named.safe_id if named.hf_id == spec.hf_id else '<the model>'}"
+                                 f"/compare-{eval_wl.name}")
         err.print(f"[dim]each run is appended to {runs} as it is measured[/]")
     result = _compare(hw, spec, profile, planned.prepared, reg, workload=eval_wl, constraints=cons,
                       ollama_tag=ollama_model, include=include or None, progress=_row_progress,
                       log_dir=profile_cache.logs_dir() / spec.safe_id / f"compare-{eval_wl.name}",
                       power=_power_controller(profile), repeats=repeats, extra=extra or None,
                       record_runs=verdict, runs_path=runs, answers=verdict, grader=grader,
-                      answer_tolerance=max_accuracy_loss / 100)
+                      answer_tolerance=max_accuracy_loss / 100, origin=origin, gpu_probe=probe,
+                      requests_dir=requests)
     path = save(result, out, path=target)
     console.print(to_markdown(result))
     console.print(f"[dim]saved {path}[/]")

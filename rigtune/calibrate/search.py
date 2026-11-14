@@ -262,6 +262,7 @@ class SubprocessTrialRunner:
         gate: Optional[object] = None,
         idle_tail_s: float = 0.0,
         answers: bool = False,
+        on_level: Optional[Callable[[int, list], None]] = None,
     ):
         self.backends = backends
         self.models = models
@@ -278,6 +279,7 @@ class SubprocessTrialRunner:
         self.gate = gate  # rigtune.accuracy_gate.AccuracyGate: grades each precision on labelled items
         self.idle_tail_s = idle_tail_s  # seconds of idle measured after each trial's last level (0 = none)
         self.answers = answers  # record each level's AnswerStats (compare --verdict); off for calibration
+        self.on_level = on_level  # given each level's requests as measured (compare --verdict keeps them)
 
     def _apply_power(self, cfg: Config) -> Optional[str]:
         """Apply cfg's power setting to the GPU. Returns an error message if it cannot be applied."""
@@ -360,6 +362,7 @@ class SubprocessTrialRunner:
                 f"http://127.0.0.1:{port}", hooks, self.workload, pid=proc.pid,
                 request_timeout=self.request_timeout, enough=self.enough, close_call=self.close_call,
                 idle_tail_s=self.idle_tail_s, arrival_rate=arrival_rate, answers=self.answers,
+                **({"on_level": self.on_level} if self.on_level is not None else {}),
             )
             if self.quality is not None and metrics.ok and arrival_rate is None:
                 # The engine is up and warm: answer the quality prompts here rather than launch it again later.

@@ -1406,6 +1406,7 @@ def run_trial(
     arrival_rate: Optional[float] = None,
     seed: int = 0,
     answers: bool = False,
+    on_level: Optional[Callable[[int, List[RequestOutcome]], None]] = None,
 ) -> TrialMetrics:
     """Run the workload at each concurrency level and fold into one TrialMetrics.
 
@@ -1414,7 +1415,8 @@ def run_trial(
 
     `answers` records each closed-loop level's AnswerStats (lengths, finish reasons, repetition), keeping each
     answer's text only until the level is summarised. They cover the level's own prompts only, not a close
-    call's re-measure, so every configuration's stats at a level come from the same prompts.
+    call's re-measure, so every configuration's stats at a level come from the same prompts. `on_level` is
+    given each closed-loop level's number of users and every request it sent, as measured.
 
     `enough` (see objectives.enough_level) measures the levels highest first and stops at the first one
     it accepts: when the objective scores a trial by its throughput, a lower level cannot beat a level
@@ -1518,6 +1520,8 @@ def run_trial(
         m = _metrics_from(outcomes, wall, c, hooks.tier_report)
         if answers:
             m.answers = answer_stats(own)
+        if on_level is not None:  # every request of the level, the re-measure's too, for the record
+            on_level(c, outcomes)
         if counters is not None:
             after = _prefix_counters(base_url, hooks)
             _engine_reuse(m, counters, after)

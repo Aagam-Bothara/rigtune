@@ -39,6 +39,7 @@ then counted as meeting the limits when the row's median run did, and the verdic
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -157,6 +158,9 @@ def workload_answers(result: ComparisonResult, row: ComparisonRow) -> Tuple[str,
 
     rig = result.rigtune_row
     level = rig.scored_concurrency if rig is not None else None
+    temperature = ((result.provenance or {}).get("workload") or {}).get("temperature")
+    if temperature:  # sampled answers differ by chance: the bars below are for greedy ones
+        return UNKNOWN, f"the workload was sampled at temperature {temperature:g}, not greedily"
     if not level:
         return UNKNOWN, "rigtune met the limits at no level, so there is no level to compare answers at"
     mine = answers_of(row, level)
@@ -326,6 +330,8 @@ class Verdict:
     rows: List[RowVerdict]
     overall: Dict[str, Any]
     notes: List[str]
+    provenance: Optional[Dict[str, Any]] = None  # what the comparison ran on, as its results recorded
+    results_sha256: Optional[str] = None  # of the file this verdict scored, so it can be matched to it
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=1) + "\n"
@@ -510,7 +516,7 @@ def score(result: ComparisonResult, thresholds: Optional[Thresholds] = None, res
                  "range_tok_s": (min(r.values()), max(r.values())) if r else None, "met_limits": bool(r),
                  "answers": answers_of(rig, level),
                  "workload_answers": f"{mine}: {mine_why}" if mine_why else mine, "graded": _graded(rig)},
-        rows=rows, overall=overall, notes=notes)
+        rows=rows, overall=overall, notes=notes, provenance=result.provenance)
 
 
 def _f(x: Optional[float]) -> str:
@@ -523,6 +529,52 @@ def _f0(x: Optional[int]) -> str:
 
 def _range(r: Optional[Tuple[float, float]]) -> str:
     return "-" if r is None else f"{_f(r[0])}-{_f(r[1])}"
+
+
+def _provenance_lines(v: Verdict) -> List[str]:
+    p, out = v.provenance or {}, []
+    if p:
+        gpus = "; ".join(f"{g['name']} (driver {g['driver_version'] or '?'}, CUDA {g['cuda_version'] or '?'})"
+                         for g in p.get("gpus", [])) or "no GPU"
+        def engine(name: str, e: Dict[str, Any]) -> str:
+            libs = ", ".join(f"{k} {x}" for k, x in e["libs"].items())
+            return f"{name} {e['version']}" + (f" ({libs})" if libs else "")
+
+        engines = "; ".join(engine(name, e) for name, e in p.get("engines", {}).items())
+        commit = p.get("rigtune_commit") or "not run from a checkout"
+        out.append(f"Ran on {gpus}, {p.get('os')}, Python {p.get('python')}; engines: {engines or 'none'}; "
+                   f"rigtune {p.get('rigtune_version')} ({commit}).")
+        if p.get("rigtune_diff_sha256"):
+            out[-1] = out[-1][:-1] + f"; its local changes hash to sha256 {p['rigtune_diff_sha256']}."
+        files = "; ".join(f"{role} `{f['name']}` sha256 {f['sha256']}"
+                          for role, f in p.get("files", {}).items())
+        if files:
+            out.append(f"Prompts: {files}.")
+        model, wl = p.get("model"), p.get("workload")
+        if model:
+            revision = model["revision"] or "main (none asked for)"
+            snapshot = model["snapshot"] or "not found in the local Hugging Face cache"
+            out.append(f"Weights: `{model['hf_id']}` at revision {revision}, cached snapshot {snapshot}.")
+        if wl:
+            out.append(f"Workload `{wl['name']}` from `{wl['source']}`, seed {wl['seed']}, temperature "
+                       f"{wl['temperature']:g}; to get the prompts again: {wl['prompts']}.")
+        if p.get("inputs"):
+            out.append("Prompt files copied to " + ", ".join(f"`{x}`" for x in p["inputs"].values()) + ".")
+        rows = [f"`{f['name']}` sha256 {f['sha256']}" for f in p.get("rows_files", [])]
+        if p.get("expert_rows"):
+            rows.append(f"`expert_rows.json` sha256 {p['expert_rows']['sha256']}")
+        if rows:
+            out.append(f"Added rows from {', '.join(rows)} (their content is in the verdict's JSON).")
+        if p.get("command"):
+            out.append(f"Command: `{' '.join(p['command'])}`.")
+        if p.get("options"):
+            shown = [f"{k} {v}" for k, v in p["options"].items() if v not in (None, [], False, "")]
+            out.append("Options: " + "; ".join(shown) + ".")
+        if p.get("engine_logs"):
+            out.append(f"Engine logs: {p['engine_logs']}; each run's log names are in its run record.")
+    if v.results_sha256:
+        out.append(f"Scored `{v.results}`, sha256 {v.results_sha256}.")
+    return out + ([""] if out else [])
 
 
 def to_markdown(v: Verdict) -> str:
@@ -541,6 +593,9 @@ def to_markdown(v: Verdict) -> str:
         "",
         f"{where}; objective `{v.objective}` ({limits}).",
         "",
+    ]
+    lines += _provenance_lines(v)
+    lines += [
         f"Rule: only runs that met the limits count. A win needs rigtune's median and its worst paired round "
         f"at least +{t.stock * 100:.0f}% above a stock row (+{t.tuner * 100:.0f}% above a tuner row, "
         f"+{t.expert * 100:.0f}% above an expert row) and every rigtune run above every run of that row; a "
@@ -629,6 +684,7 @@ def write(results_path: Path, thresholds: Optional[Thresholds] = None,
     else:
         result = ComparisonResult.model_validate_json(results_path.read_text(encoding="utf-8"))
     v = score(result, thresholds, results=results_path.name)
+    v.results_sha256 = hashlib.sha256(results_path.read_bytes()).hexdigest()
     js, md = verdict_paths(results_path, out)
     js.parent.mkdir(parents=True, exist_ok=True)
     js.write_text(v.to_json(), encoding="utf-8")

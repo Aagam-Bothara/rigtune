@@ -404,10 +404,12 @@ class DisaggTrialRunner:
     def __init__(self, backend: BaseBackend, model: PreparedModel, hw: HardwareDescriptor, workload: Workload,
                  log_dir: Optional[Path] = None, startup_timeout: float = 900.0, request_timeout: float = 180.0,
                  power_for_gpu: Optional[Callable[[int], Any]] = None, power_settle_s: float = 2.0,
-                 answers: bool = False, gate: Optional[Any] = None):
+                 answers: bool = False, gate: Optional[Any] = None,
+                 on_level: Optional[Callable[[int, list], None]] = None):
         self.backend = backend
         self.answers = answers  # record each level's AnswerStats (compare --verdict)
         self.gate = gate  # grades the pair's answers through the router (compare --check-answers)
+        self.on_level = on_level  # given each level's requests as measured (compare --verdict)
         self.model = model
         self.hw = hw
         self.workload = workload
@@ -468,7 +470,9 @@ class DisaggTrialRunner:
                                       disagg=variant)
                 else:
                     try:
-                        more = {"answers": True} if self.answers else {}  # the call is unchanged unless asked
+                        more: Dict[str, Any] = {"answers": True} if self.answers else {}  # if asked
+                        if self.on_level is not None:
+                            more["on_level"] = self.on_level
                         m = run_trial(router.url, hooks, _point_workload(self.workload, i, len(settings)), pid=None,
                                       request_timeout=self.request_timeout, clients=2, **more)
                         res = TrialResult(config=variant.decode, stage=stage, metrics=m, disagg=variant,
