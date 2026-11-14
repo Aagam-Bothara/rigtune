@@ -896,6 +896,17 @@ def compare(
              "score the result as a win, tie or loss against every row at the default thresholds, and write "
              "the verdict as JSON and Markdown beside it (`rigtune verdict` re-scores at others); never "
              "writes over an earlier run's files"),
+    check_answers: Optional[str] = typer.Option(
+        None, "--check-answers",
+        help="Grade every row's answers on this labelled set (gsm8k, or a JSONL file as --eval-set takes), "
+             "all of it unless --check-items says fewer, once per row while its engine is up, against its "
+             "engine's stock row, which answers twice to show its own noise; a row that loses more than "
+             "--max-accuracy-loss points, or was not checked, is not applicable in the verdict, and if "
+             "rigtune's own row is either, no row counts"),
+    check_items: int = typer.Option(
+        0, "--check-items", min=0,
+        help="With --check-answers: grade only the first N items (0, the default, grades them all: 1319 for "
+             "gsm8k)"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
     ttft_percentile: int = TTFT_PCT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None),
@@ -947,6 +958,16 @@ def compare(
             extra.update(read_rows_file(path, taken=extra))
         except RowsFileError as exc:
             raise typer.BadParameter(str(exc), param_hint="--rows")
+    grader = None
+    if check_answers:  # read now, so a bad set fails in seconds rather than after the search
+        from rigtune.bench.answers import RowGrader
+        from rigtune.evalset import EvalSetError, load_eval_set
+
+        try:
+            graded = load_eval_set(check_answers, check_items)
+        except EvalSetError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--check-answers")
+        grader = RowGrader(items=graded.items, set_name=graded.name, sha256=graded.sha256)
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate,
                         strict=strict_constraints)
     hw = _probe()
@@ -995,7 +1016,8 @@ def compare(
                       ollama_tag=ollama_model, include=include or None, progress=_row_progress,
                       log_dir=profile_cache.logs_dir() / spec.safe_id / f"compare-{eval_wl.name}",
                       power=_power_controller(profile), repeats=repeats, extra=extra or None,
-                      record_runs=verdict, runs_path=runs, answers=verdict)
+                      record_runs=verdict, runs_path=runs, answers=verdict, grader=grader,
+                      answer_tolerance=max_accuracy_loss / 100)
     path = save(result, out, path=target)
     console.print(to_markdown(result))
     console.print(f"[dim]saved {path}[/]")

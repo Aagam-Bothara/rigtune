@@ -71,6 +71,27 @@ class RunRecord(BaseModel):
     level_answers: Dict[str, AnswerStats] = Field(default_factory=dict)  # every level's, by number of users
 
 
+class AnswerCheck(BaseModel):
+    """A row's answers graded on a labelled set against its engine's stock row (rigtune/bench/answers.py)."""
+
+    eval_set: str
+    sha256: str
+    items: int
+    tolerance: float  # the largest loss in accuracy allowed, as a fraction
+    outcomes: str = ""  # per item: '1' right, '0' wrong, '-' unanswered
+    correct: int = 0
+    answered: int = 0
+    reference: Optional[str] = None  # the row it was compared with
+    lost: Optional[int] = None
+    gained: Optional[int] = None
+    paired: Optional[int] = None
+    lower_bound: Optional[float] = None  # of its accuracy minus the reference's, 95% score interval
+    noise_flips: Optional[int] = None  # items on which its reference's two passes disagreed: the floor
+    noise_paired: Optional[int] = None  # items both of those passes answered
+    passed: Optional[bool] = None  # None: not checked
+    reason: str = ""
+
+
 class ComparisonRow(BaseModel):
     label: Annotated[str, AfterValidator(self_label)]  # "rigtune" | "vllm-default" | "sglang-default" | "llamacpp-cuda-default" | "ollama-default"
     runtime: str  # backend name
@@ -102,10 +123,11 @@ class ComparisonRow(BaseModel):
     kind: Optional[str] = None
     source: Optional[str] = None
     run_records: List[RunRecord] = Field(default_factory=list)  # every run, under --verdict; else not written
+    answer_check: Optional[AnswerCheck] = None  # --check-answers only
 
     @model_serializer(mode="wrap")
     def _omit_unset_provenance(self, handler) -> Dict[str, Any]:
-        return _drop(handler(self), ("kind", "source", "run_records"))
+        return _drop(handler(self), ("kind", "source", "run_records", "answer_check"))
 
 
 class SkippedRow(BaseModel):
@@ -257,6 +279,10 @@ class RunsLog:
         self._write({"type": "run", "label": label, "record": json.loads(record.model_dump_json()),
                      "row": json.loads(row.model_dump_json())})
 
+    def answers(self, checks: Dict[str, "AnswerCheck"]) -> None:
+        dumped = {k: json.loads(v.model_dump_json()) for k, v in checks.items()}
+        self._write({"type": "answers", "checks": dumped})
+
     def end(self, runs: int) -> None:
         self._write({"type": "end", "runs": runs})
 
@@ -311,6 +337,9 @@ def read_runs(path: Path) -> "ComparisonResult":
             continue
         row = combine_runs([r for _, r in got])
         row.run_records = [rec for rec, _ in got]
+        found = [r["checks"][p["label"]] for r in mine
+                 if r.get("type") == "answers" and p["label"] in r["checks"]]
+        row.answer_check = AnswerCheck.model_validate(found[-1]) if found else None
         result.rows.append(row)
     if result.rigtune_row is not None:
         result.rigtune_row.calibration_seconds = header.get("calibration_seconds", 0.0)
@@ -415,6 +444,8 @@ def compare(
     record_runs: bool = False,
     runs_path: Optional[Path] = None,
     answers: bool = False,
+    grader: Optional[object] = None,
+    answer_tolerance: float = 0.03,
 ) -> ComparisonResult:
     """Measure rigtune's winner and every reference config under the same workload. `extra` adds rows under
     their own labels (other searches' picks, say), measured like every other row and never filtered by `include`.
@@ -426,7 +457,9 @@ def compare(
     so drift over the session (temperature, a noisy neighbour) falls on every row alike. `record_runs` keeps
     every run's RunRecord on its row (limit status, level, tail, place in its round, when) for the verdict.
     With `runs_path`, every run is also appended there as soon as it is measured (RunsLog). `answers`
-    records each level's AnswerStats (answer lengths, finish reasons, repetition) in the metrics."""
+    records each level's AnswerStats (answer lengths, finish reasons, repetition) in the metrics. `grader`
+    (rigtune/bench/answers.py RowGrader) grades each row's answers on a labelled set while its engine is up,
+    and each row records its AnswerCheck against its engine's stock row at `answer_tolerance`."""
     workload = workload or get_workload(profile.workload)
     cons = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                       tpot_ceiling_ms=workload.tpot_ceiling_ms)
@@ -451,8 +484,13 @@ def compare(
                 logger.warning("ollama reference skipped: %s", exc)
         else:
             logger.info("ollama binary not found; skipping the ollama-default row")
+    kept_note = None
     if include:
-        refs = {k: v for k, v in refs.items() if k in include}
+        need = f"{profile.backend}-default" if grader is not None else None  # rigtune's answers' reference
+        if need in refs and need not in include:
+            kept_note = (f"{need} is measured although --include leaves it out: --check-answers grades "
+                         "rigtune's answers against it, and without it they could not be checked")
+        refs = {k: v for k, v in refs.items() if k in include or k == need}
     added: Dict[str, ExtraRow] = {}
     skipped: List[SkippedRow] = []
     for label, row in (extra or {}).items():
@@ -469,7 +507,9 @@ def compare(
         added[label] = row
 
     if runner is None:
-        more = {"answers": True} if answers else {}  # the runner is built as before unless answers are kept
+        more: Dict[str, Any] = {"answers": True} if answers else {}  # built as before unless asked for more
+        if grader is not None:
+            more["gate"] = grader
         runner = SubprocessTrialRunner(backends=backends, models=models, hw=hw, workload=workload,
                                        log_dir=log_dir, power=power, **more)
 
@@ -490,7 +530,7 @@ def compare(
         article = "an" if row.kind == "expert" else "a"
         result.notes.append(f"{label} is {article} {row.kind} row: {row.source}")
         result.notes += row.notes
-        if row.changes_numerics:
+        if row.changes_numerics and grader is None:
             result.notes.append(f"{label} changes what the model computes (a quantized KV cache): this "
                                 "comparison measures its speed, not its answers")
         busiest = max(workload.concurrencies)
@@ -499,6 +539,8 @@ def compare(
                                 f"{row.acts_up_to_users}: {row.acts_note}")
     for s in skipped:
         result.notes.append(f"{s.label} ({s.kind}) was not measured: {s.reason}")
+    if kept_note:
+        result.notes.append(kept_note)
 
     if profile.workload and profile.workload != workload.name:
         result.calibrated_on = profile.workload
@@ -539,6 +581,19 @@ def compare(
     # rigtune's winner, re-measured now so it faces the same conditions as the references.
     measurers: List[Tuple[str, Callable[[], ComparisonRow]]] = []
     pick_more: Dict[str, Any] = {"answers": True} if answers else {}  # for a disaggregated or replicas pick
+    pick_key = profile.config.key()  # the key rigtune's row is graded under
+    if profile.disagg is not None:
+        pick_key = profile.disagg.key()
+    elif profile.replicas > 1:
+        pick_key = f"{profile.config.key()} x{profile.replicas}"
+    if grader is not None:
+        from rigtune.bench.answers import KeyedGate, reference_label
+
+        # The stock rows answer twice, to show their own noise; a disaggregated or replicas pick answers
+        # through its router or balancer, graded under its row's key.
+        grader.twice |= {cfg.key() for label, cfg in refs.items() if label == reference_label(cfg.backend)}
+        if profile.disagg is not None or profile.replicas > 1:
+            pick_more["gate"] = KeyedGate(grader, pick_key)
     if profile.disagg is not None:
         measurers.append(("rigtune", lambda: _run_disagg_row(profile, backends, models, hw, workload, log_dir, power,
                                                                disagg_runner, objective, cons, progress,
@@ -572,11 +627,22 @@ def compare(
                 records[label].append(record)
             if log is not None:
                 log.run(label, record, runs[label][-1])
+    checks: Dict[str, AnswerCheck] = {}
+    if grader is not None:
+        from rigtune.bench.answers import check
+
+        keys = {label: runs[label][0].config.key() for label, _ in measurers}
+        keys["rigtune"] = pick_key
+        checks = {label: check(label, runs[label][0].config.backend, keys[label], grader, keys,
+                               answer_tolerance) for label, _ in measurers}
     if log is not None:
+        if checks:
+            log.answers(checks)
         log.end(sum(map(len, runs.values())))
     for label, _ in measurers:
         result.rows.append(combine_runs(runs[label]))
         result.rows[-1].run_records = records[label]
+        result.rows[-1].answer_check = checks.get(label)
     ps = result.rigtune_row
     ps.calibration_seconds = profile.calibration_seconds
     ps.calibration_trials = profile.calibration_trials

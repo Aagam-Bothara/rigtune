@@ -116,7 +116,9 @@ def test_with_the_answers_checked_the_same_speed_is_a_win():
     looser = Thresholds(stock=0.15)
     assert score(res, looser).overall == {
         "outcome": WIN, "text": "win against every row (2 of 2)", "wins": 2, "ahead_answers_unchecked": 0,
-        "ties": 0, "behind": 0, "behind_beyond_spread": 0, "losses": 0, "provisional": 0, "not_applicable": 0}
+        "ties": 0, "behind": 0, "behind_beyond_spread": 0, "losses": 0, "provisional": 0, "not_applicable": 0,
+        "row_ahead_on_worse_answers": 0, "row_answers_worse": 0, "ahead_on_worse_answers": 0,
+        "rigtune_answers_worse": 0}
     few = _result(_row("rigtune", [130.0, None, 131.0]), _row("vllm-default", [100.0, 101.0, 102.0]))
     row = score(few).rows[0]
     assert (row.outcome, row.lean) == (PROVISIONAL, WIN) and row.reason.startswith("would be a win: +28.7%")
@@ -206,7 +208,9 @@ def test_a_baseline_that_could_not_start_is_not_applicable_never_a_win():
     assert score(res).overall == {"outcome": NA, "text": "no row could be compared", "wins": 0,
                                   "ahead_answers_unchecked": 0, "ties": 0, "behind": 0,
                                   "behind_beyond_spread": 0, "losses": 0, "provisional": 0,
-                                  "not_applicable": 4}
+                                  "not_applicable": 4, "row_ahead_on_worse_answers": 0,
+                                  "row_answers_worse": 0, "ahead_on_worse_answers": 0,
+                                  "rigtune_answers_worse": 0}
 
 
 def test_ahead_with_a_row_not_applicable_says_so():

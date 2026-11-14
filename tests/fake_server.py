@@ -53,7 +53,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(f"data: {json.dumps({'choices': [], 'usage': {'completion_tokens': tokens}})}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
         else:
-            body = json.dumps({"choices": [{"text": "x " * tokens}], "usage": {"completion_tokens": tokens}}).encode()
+            answer = "x " * tokens  # a completion's text, and a chat completion's message (graders read it)
+            choice = {"text": answer, "message": {"role": "assistant", "content": answer}}
+            body = json.dumps({"choices": [choice], "usage": {"completion_tokens": tokens}}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

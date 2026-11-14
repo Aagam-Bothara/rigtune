@@ -26,6 +26,12 @@ rigtune's:
 - **not applicable**: the row could not start or failed, never met the limits, measured nothing, or was not
   run (an added row skipped with a reason, such as a tool that produced no pick). Never a win. If rigtune's
   own row met the limits in no run, a row that met them in 3 or more is a loss.
+- Answers. A row whose answers changed on the workload from its engine's stock row's (workload_answers),
+  failed grading (compare --check-answers), or, when grading ran, were not checked, counts neither way: not
+  applicable, or for failed grading **behind on speed, row's answers worse** when the speed rule calls it a
+  loss or behind and **row's answers worse** otherwise. When rigtune's own answers changed, failed or were
+  not checked, no row counts; with failed answers a row rigtune would win against on speed reads **ahead on
+  speed, answers worse** and any other **rigtune's answers worse**.
 
 Results written before RunRecords existed hold each run's tok/s but not its limit status: a successful run is
 then counted as meeting the limits when the row's median run did, and the verdict says so.
@@ -43,6 +49,12 @@ from rigtune.bench.compare import ComparisonResult, ComparisonRow, read_runs
 WIN, TIE, BEHIND, LOSS, PROVISIONAL, NA = ("win", "tie", "behind, within noise", "loss", "provisional",
                                            "not applicable")
 SPEED_ONLY = "ahead on speed, answers unchecked"
+# Answers that failed the check. The speed is claimed only when the speed rule makes the claim: rigtune ahead
+# is what would otherwise be a win, the row ahead is a loss or "behind".
+RIG_WORSE = "ahead on speed, answers worse"  # rigtune would win on speed, but its answers failed the check
+ROW_WORSE = "behind on speed, row's answers worse"  # the row is clearly faster, but its answers failed
+RIG_WORSE_ONLY = "rigtune's answers worse"  # its answers failed, with no clear lead on speed
+ROW_WORSE_ONLY = "row's answers worse"  # the row's answers failed, and it is not clearly faster
 BEHIND_CLEAR = "behind"
 INCOMPLETE = "incomplete"  # overall only: a comparison read from a runs file that stopped before it finished
 MIN_RUNS = 3
@@ -79,6 +91,7 @@ class RowVerdict:
     lean: Optional[str] = None  # what a provisional row would be with enough runs
     answers: Optional[Dict[str, Any]] = None  # its answers at rigtune's scored level (answers_of)
     workload_answers: Optional[str] = None  # against its engine's stock row's answers (workload_answers)
+    graded: Optional[Dict[str, Any]] = None  # its AnswerCheck (--check-answers), less the per-item outcomes
 
 
 # A row's answers on the workload count as changed from its engine's stock row's, on the same prompts at the
@@ -183,6 +196,10 @@ def workload_answers(result: ComparisonResult, row: ComparisonRow) -> Tuple[str,
     return SAME, ""
 
 
+def _graded(row: ComparisonRow) -> Optional[Dict[str, Any]]:
+    return row.answer_check.model_dump(exclude={"outcomes"}) if row.answer_check is not None else None
+
+
 def kind_of(row: ComparisonRow) -> str:
     if row.kind:
         return row.kind
@@ -232,7 +249,7 @@ def judge(rig: ComparisonRow, row: ComparisonRow, t: Thresholds) -> RowVerdict:
     kind = kind_of(row)
     bar = t.for_kind(kind)
     out = RowVerdict(label=row.label, kind=kind, config_key=row.config_key, threshold=bar, outcome=NA,
-                     reason="", runs_tok_s=_every_run(row))
+                     reason="", runs_tok_s=_every_run(row), graded=_graded(row))
     b, r = counted(row), counted(rig)
     out.counted_runs = len(b)
     if not b:
@@ -320,9 +337,17 @@ def _plural(n: int, word: str) -> str:
 
 def _overall(rows: List[RowVerdict]) -> Dict[str, Any]:
     n = {o: sum(r.outcome == o for r in rows)
-         for o in (WIN, SPEED_ONLY, TIE, BEHIND, BEHIND_CLEAR, LOSS, PROVISIONAL, NA)}
-    judged = len(rows) - n[NA]
+         for o in (WIN, SPEED_ONLY, TIE, BEHIND, BEHIND_CLEAR, LOSS, PROVISIONAL, NA, ROW_WORSE, RIG_WORSE,
+                   ROW_WORSE_ONLY, RIG_WORSE_ONLY)}
+    out = n[NA] + n[ROW_WORSE] + n[RIG_WORSE] + n[ROW_WORSE_ONLY] + n[RIG_WORSE_ONLY]  # count neither way
+    judged = len(rows) - out
     na = f"; {n[NA]} not applicable" if n[NA] else ""
+    if n[ROW_WORSE]:
+        na += f"; {n[ROW_WORSE]} ahead of rigtune on worse answers"
+    if n[ROW_WORSE_ONLY]:
+        na += f"; {n[ROW_WORSE_ONLY]} whose answers are worse"
+    if n[RIG_WORSE]:
+        na += f"; {n[RIG_WORSE]} behind rigtune, whose answers are worse"
     tally = f"{_plural(n[WIN], 'win')}, {_plural(n[TIE], 'tie')}"
     if n[SPEED_ONLY]:
         tally += f", {n[SPEED_ONLY]} ahead on speed with answers unchecked"
@@ -334,14 +359,14 @@ def _overall(rows: List[RowVerdict]) -> Dict[str, Any]:
         text = f"{n[PROVISIONAL]} provisional: too few runs met the limits to call a win or a loss" + na
     elif not judged:
         outcome, text = NA, "no row could be compared"
-    elif n[WIN] == judged and n[NA]:
+    elif n[WIN] == judged and out:
         outcome = "win on the rows that could be compared"
-        text = (f"win on the {_plural(n[WIN], 'row')} that could be compared; {n[NA]} not applicable, so "
-                "not a win against every row")
+        text = (f"win on the {_plural(n[WIN], 'row')} that could be compared{na}, so not a win against every "
+                "row")
     elif n[WIN] == judged:
         outcome, text = WIN, f"win against every row ({n[WIN]} of {len(rows)})"
     elif ahead == judged:  # ahead of every row it could be compared with, but not every answer was checked
-        scope = (f"the {_plural(ahead, 'row')} that could be compared" + na if n[NA]
+        scope = (f"the {_plural(ahead, 'row')} that could be compared" + na if out
                  else f"every row ({ahead} of {len(rows)})")
         outcome = SPEED_ONLY
         text = (f"ahead on speed on {scope}, with rigtune's answers unchecked against "
@@ -356,18 +381,27 @@ def _overall(rows: List[RowVerdict]) -> Dict[str, Any]:
         outcome, text = TIE, f"no row ahead of rigtune: {tally}" + na
     return {"outcome": outcome, "text": text, "wins": n[WIN], "ahead_answers_unchecked": n[SPEED_ONLY],
             "ties": n[TIE], "behind": n[BEHIND], "behind_beyond_spread": n[BEHIND_CLEAR], "losses": n[LOSS],
-            "provisional": n[PROVISIONAL], "not_applicable": n[NA]}
+            "provisional": n[PROVISIONAL], "not_applicable": n[NA],
+            "row_ahead_on_worse_answers": n[ROW_WORSE], "row_answers_worse": n[ROW_WORSE_ONLY],
+            "ahead_on_worse_answers": n[RIG_WORSE], "rigtune_answers_worse": n[RIG_WORSE_ONLY]}
 
 
 def answers_unchecked(result: ComparisonResult, row: RowVerdict) -> Optional[str]:
     """Why rigtune's answers are not known to be checked and unchanged against this row, or None when they
-    are. A win needs them to be: on speed alone the row is ahead on speed, answers unchecked. Answers on the
-    workload that match its engine's stock row's are not enough on their own: nothing here grades them, so it
-    is never None."""
-    graded = "rigtune's answers were not graded"
-    state, why = workload_answers(result, result.rigtune_row)
-    if state != SAME:
+    are. A win needs both: its answers graded and holding against its engine's stock row's (compare
+    --check-answers; under it, a row whose own answers were not checked is not applicable before this is
+    asked), and its answers on the workload unchanged from that row's (workload_answers)."""
+    rig = result.rigtune_row
+    check = rig.answer_check
+    # Asked only of a row that would be a win: under grading, rigtune's answers that failed or went
+    # unchecked have already made every row count for nothing, so here they were not graded or they hold.
+    assert check is None or check.passed is True, "rigtune's failed or unchecked answers reached a win"
+    graded = "rigtune's answers were not graded" if check is None else None
+    state, why = workload_answers(result, rig)
+    if state != SAME and graded:
         return f"{graded}, nor matched against its stock row's on the workload ({why})"
+    if state != SAME:
+        return f"rigtune's answers on the workload were not matched against its stock row's ({why})"
     return graded
 
 
@@ -381,18 +415,47 @@ def score(result: ComparisonResult, thresholds: Optional[Thresholds] = None, res
     rows = [judge(rig, r, t) for r in others]
     level = rig.scored_concurrency
     mine, mine_why = workload_answers(result, rig)
+    graded = any(row.answer_check is not None for row in result.rows)  # compare --check-answers ran
     for verdict, row in zip(rows, others):
         verdict.answers = answers_of(row, level)
         state, why = workload_answers(result, row)
         verdict.workload_answers = f"{state}: {why}" if why else state
-        if state == CHANGED and verdict.outcome != NA:  # speed on different work counts neither way
+        if verdict.outcome == NA:
+            continue
+        check = row.answer_check
+        if graded and (check is None or check.passed is None):  # grading ran: unchecked counts for nothing
+            verdict.outcome, verdict.lean = NA, None
+            verdict.reason = f"answers not checked: {check.reason if check else 'it has no answer check'}"
+        elif check is not None and check.passed is False:  # faster on worse answers wins nothing either way
+            verdict.lean = None
+            if verdict.outcome in (LOSS, BEHIND_CLEAR):  # the speed rule says the row is ahead
+                verdict.outcome = ROW_WORSE
+                verdict.reason = f"{verdict.reason}; but its answers are worse: {check.reason}"
+            else:
+                verdict.outcome, verdict.reason = ROW_WORSE_ONLY, f"answers differ: {check.reason}"
+        elif state == CHANGED:  # speed on different work counts neither way
             verdict.outcome, verdict.lean = NA, None
             verdict.reason = f"answers changed on the workload {why}"
-    if mine == CHANGED:  # rigtune's speed came with different answers: nothing it measured counts
+    check = rig.answer_check
+    failed = None  # (for each row, for the overall): why nothing rigtune measured counts
+    if graded and (check is None or check.passed is None):
+        why = check.reason if check else "it has no answer check"
+        failed = (f"rigtune's answers were not checked: {why}", f"rigtune's answers were not checked ({why})")
+    elif check is not None and check.passed is False:
+        failed = (f"rigtune's answers differ: {check.reason}", f"rigtune's answers differ ({check.reason})")
+    elif mine == CHANGED:
+        failed = (f"rigtune's answers changed on the workload {mine_why}",
+                  f"rigtune's answers changed on the workload ({mine_why})")
+    worse = check is not None and check.passed is False
+    if failed:  # rigtune's speed came with answers that are worse, changed or unknown: no row counts
         for verdict in rows:
-            if verdict.outcome != NA:
-                verdict.outcome, verdict.lean = NA, None
-                verdict.reason = f"rigtune's answers changed on the workload {mine_why}"
+            if verdict.outcome == NA:
+                continue
+            verdict.lean = None
+            if worse and verdict.outcome == WIN:  # the speed rule says rigtune is ahead
+                verdict.outcome, verdict.reason = RIG_WORSE, f"{verdict.reason}; but {failed[0]}"
+            else:
+                verdict.outcome, verdict.reason = RIG_WORSE_ONLY if worse else NA, failed[0]
     for row in rows:
         lean_win = row.outcome == PROVISIONAL and row.lean == WIN
         why = answers_unchecked(result, row) if row.outcome == WIN or lean_win else None
@@ -421,10 +484,18 @@ def score(result: ComparisonResult, thresholds: Optional[Thresholds] = None, res
         notes.append("no answer statistics were recorded at rigtune's scored level (compare --verdict "
                      "records them): answer length, finish reasons and repetition are unknown, so no row is "
                      "a win")
+    if not graded:
+        notes.append("answers were not graded (compare --check-answers), so no row is a win: rigtune ahead "
+                     "of a row is ahead on speed, answers unchecked")
+    for row in result.rows:
+        if row.answer_check is not None and row.answer_check.passed is None:
+            notes.append(f"{row.label}'s answers were not checked: {row.answer_check.reason}")
     notes += result.notes  # the comparison's own: where each added row came from, held-out prompts, ...
     overall = _overall(rows)
-    if mine == CHANGED:
-        overall["text"] = f"rigtune's answers changed on the workload ({mine_why}), so no row counts"
+    if failed:
+        overall["outcome"] = (RIG_WORSE if any(r.outcome == RIG_WORSE for r in rows) else
+                              RIG_WORSE_ONLY if worse else NA)
+        overall["text"] = f"{failed[1]}, so no row counts"
     if result.incomplete:  # whatever the rows say, a comparison that did not finish settles nothing
         overall.update(outcome=INCOMPLETE, text=f"incomplete: {result.incomplete} (the rows so far: "
                                                 f"{overall['text']})")
@@ -438,12 +509,16 @@ def score(result: ComparisonResult, thresholds: Optional[Thresholds] = None, res
                  "runs_tok_s": _every_run(rig),
                  "range_tok_s": (min(r.values()), max(r.values())) if r else None, "met_limits": bool(r),
                  "answers": answers_of(rig, level),
-                 "workload_answers": f"{mine}: {mine_why}" if mine_why else mine},
+                 "workload_answers": f"{mine}: {mine_why}" if mine_why else mine, "graded": _graded(rig)},
         rows=rows, overall=overall, notes=notes)
 
 
 def _f(x: Optional[float]) -> str:
     return "-" if x is None else f"{x:.1f}"
+
+
+def _f0(x: Optional[int]) -> str:
+    return "-" if x is None else str(x)
 
 
 def _range(r: Optional[Tuple[float, float]]) -> str:
@@ -510,6 +585,24 @@ def to_markdown(v: Verdict) -> str:
             rep = "-" if a["repeated_4gram_share"] is None else f"{a['repeated_4gram_share'] * 100:.0f}%"
             lines.append(f"| {label} | {a['answers']} | {a['mean_tokens']:.0f} | {stop} | {cut} | {rep} | "
                          f"{a['looping_answers']} of {a['judged_for_repetition']} | {state or '-'} |")
+    graded = [("rigtune", rg["graded"])] + [(r.label, r.graded) for r in v.rows if r.config_key]
+    if any(g for _, g in graded):
+        first = next(g for _, g in graded if g)
+        lines += ["", f"Answers graded on `{first['eval_set']}` ({first['items']} items, greedy), each "
+                      "against its engine's stock row, allowed to lose at most "
+                      f"{first['tolerance'] * 100:g} points. The stock rows answer twice; the floor is how "
+                      "many items their two passes disagreed on:", "",
+                  "| Row | Right | Against | Lost | Gained | Lower bound | Floor | Check |",
+                  "|---|---|---|---|---|---|---|---|"]
+        for label, g in graded:
+            if not g:
+                lines.append(f"| {label} | not graded | | | | | | |")
+                continue
+            bound = "-" if g["lower_bound"] is None else f"{g['lower_bound'] * 100:+.1f} pts"
+            floor = "-" if g.get("noise_flips") is None else f"{g['noise_flips']} of {g['noise_paired']}"
+            state = {True: "holds", False: "**fails**", None: "not checked"}[g["passed"]]
+            lines.append(f"| {label} | {g['correct']} of {g['answered']} | {g['reference'] or '-'} | "
+                         f"{_f0(g['lost'])} | {_f0(g['gained'])} | {bound} | {floor} | {state} |")
     lines += ["", f"**Overall: {v.overall['text']}**"] + [f"_{n}_" for n in v.notes]
     return "\n".join(lines) + "\n"
 

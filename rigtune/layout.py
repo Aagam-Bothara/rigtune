@@ -184,7 +184,7 @@ class LayoutTrialRunner:
 
     def __init__(self, backend: BaseBackend, model: PreparedModel, hw: HardwareDescriptor, workload: Workload,
                  log_dir: Optional[Path] = None, startup_timeout: float = 900.0,
-                 request_timeout: float = 180.0, answers: bool = False):
+                 request_timeout: float = 180.0, answers: bool = False, gate: Optional[Any] = None):
         self.backend = backend
         self.model = model
         self.hw = hw
@@ -193,6 +193,7 @@ class LayoutTrialRunner:
         self.startup_timeout = startup_timeout
         self.request_timeout = request_timeout
         self.answers = answers  # record each level's AnswerStats (compare --verdict)
+        self.gate = gate  # grades the replicas' answers through the balancer (compare --check-answers)
 
     def run_replicas(self, cfg: Config, gpus: List[int], stage: str) -> TrialResult:
         cfg = _strip(cfg)
@@ -212,6 +213,8 @@ class LayoutTrialRunner:
             more = {"answers": True} if self.answers else {}  # the call is unchanged unless asked
             m = run_trial(lb.url, hooks, self.workload, pid=None, request_timeout=self.request_timeout,
                           clients=2 * len(gpus), **more)
+            if self.gate is not None and m.ok:  # the replicas are up and warm: grade them here
+                self.gate.record(lb.url, hooks.model_name, cfg)
             return TrialResult(config=cfg, stage=stage, metrics=m, replicas=len(gpus),
                                error=None if m.ok else m.failure_summary())
         except Exception as exc:

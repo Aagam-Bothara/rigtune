@@ -118,6 +118,14 @@ def test_several_client_processes_keep_the_answers_text_when_asked(monkeypatch):
     assert calls == [{}, {"keep_text": True}] and m.by_concurrency["4"].answers.looping_answers == 4
 
 
+class _Gate:  # compare --check-answers' gate, seen from a runner
+    def __init__(self):
+        self.asked = []
+
+    def record(self, url, model, cfg):
+        self.asked.append((url, model, cfg.key()))
+
+
 def test_a_replicas_runner_records_answers_through_its_balancer(tmp_path):
     """Through the fake engine and rigtune's own balancer, driven by several client processes: the answers'
     text comes back from each process, so this pick is judged on its answers like the rest."""
@@ -125,16 +133,18 @@ def test_a_replicas_runner_records_answers_through_its_balancer(tmp_path):
     from tests.conftest import make_hw
     from tests.test_supervisor import FakeBackend
 
+    gate = _Gate()
     wl = Workload(n_prompts=4, prefill_tokens=8, decode_tokens=12, concurrencies=(2,))
     cfg = Config(backend="fake", quant="none", ctx=128, batch=1)
     rep = LayoutTrialRunner(FakeBackend(), None, make_hw("cpu"), wl, log_dir=tmp_path, startup_timeout=15,
-                            answers=True).run_replicas(cfg, [0, 1], "layout")
+                            answers=True, gate=gate).run_replicas(cfg, [0, 1], "layout")
     assert rep.ok, rep.error
     level = rep.metrics.by_concurrency["2"].answers
     assert level.answers == 4 and level.judged_for_repetition == 4  # "x x x ...": twelve words, one 4-gram
+    assert [(model, key) for _, model, key in gate.asked] == [("fake", cfg.key())]
 
 
-def test_a_disaggregated_runner_asks_for_answers_through_its_router(monkeypatch):
+def test_a_disaggregated_runner_asks_for_answers_and_grades_through_its_router(monkeypatch):
     from rigtune import disagg as D
     from tests.conftest import make_hw
     from tests.test_phases import FakePDBackend, _pd_spec
@@ -167,10 +177,13 @@ def test_a_disaggregated_runner_asks_for_answers_through_its_router(monkeypatch)
     monkeypatch.setattr(D, "ProcessServer", Router)
     monkeypatch.setattr(D, "run_trial", run_trial)
     wl = Workload(n_prompts=2, prefill_tokens=8, decode_tokens=12, concurrencies=(1,))
+    gate = _Gate()
     D.DisaggTrialRunner(FakePDBackend(), None, make_hw("cpu"), wl).run(_pd_spec(), "pd")
-    res = D.DisaggTrialRunner(FakePDBackend(), None, make_hw("cpu"), wl, answers=True).run(_pd_spec(), "pd")
+    res = D.DisaggTrialRunner(FakePDBackend(), None, make_hw("cpu"), wl, answers=True, gate=gate).run(
+        _pd_spec(), "pd")
     assert res.ok, res.error
     assert asked == [("http://router", None, 2), ("http://router", True, 2)]
+    assert gate.asked == [("http://router", "fake", _pd_spec().decode.key())]
 
 
 @pytest.mark.usefixtures("no_network")

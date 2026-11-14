@@ -404,9 +404,10 @@ class DisaggTrialRunner:
     def __init__(self, backend: BaseBackend, model: PreparedModel, hw: HardwareDescriptor, workload: Workload,
                  log_dir: Optional[Path] = None, startup_timeout: float = 900.0, request_timeout: float = 180.0,
                  power_for_gpu: Optional[Callable[[int], Any]] = None, power_settle_s: float = 2.0,
-                 answers: bool = False):
+                 answers: bool = False, gate: Optional[Any] = None):
         self.backend = backend
         self.answers = answers  # record each level's AnswerStats (compare --verdict)
+        self.gate = gate  # grades the pair's answers through the router (compare --check-answers)
         self.model = model
         self.hw = hw
         self.workload = workload
@@ -472,6 +473,8 @@ class DisaggTrialRunner:
                                       request_timeout=self.request_timeout, clients=2, **more)
                         res = TrialResult(config=variant.decode, stage=stage, metrics=m, disagg=variant,
                                           error=None if m.ok else m.failure_summary())
+                        if self.gate is not None and m.ok:  # the pair is up and warm: grade it here
+                            self.gate.record(router.url, hooks.model_name, variant.decode)
                     except Exception as exc:
                         logger.exception("disaggregated trial crashed")
                         res = TrialResult(config=variant.decode, stage=stage, metrics=TrialMetrics(), error=str(exc),
