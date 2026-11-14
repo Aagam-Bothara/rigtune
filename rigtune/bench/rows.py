@@ -78,11 +78,12 @@ def _config(fields: Any, where: str) -> Config:
 
 
 def check_label(label: Any, where: str, taken: Dict[str, Any]) -> str:
-    """A label must be safe in a stage name, must not stand for rigtune's own row, a stock row (`*-default`)
-    or a shipped expert row (`*-expert-*`), whose thresholds and meaning differ, and must not repeat."""
+    """A label must be safe in a stage name, must not stand for rigtune's own row, a stock row (`*-default`,
+    `*-bare`) or a shipped expert row (`*-expert-*`), whose thresholds and meaning differ, and must not
+    repeat."""
     if not isinstance(label, str) or not LABEL.match(label):
         raise RowsFileError(f"{where}: label {label!r} must be letters, digits, '.', '_' or '-'")
-    if label == "rigtune" or label.endswith("-default") or EXPERT_LABEL.search(label):
+    if label == "rigtune" or label.endswith(("-default", "-bare")) or EXPERT_LABEL.search(label):
         raise RowsFileError(f"{where}: label {label!r} is reserved for rigtune's own row, the stock rows and "
                             "the shipped expert rows")
     if label in taken:

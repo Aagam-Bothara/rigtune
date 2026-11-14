@@ -896,6 +896,11 @@ def compare(
              "score the result as a win, tie or loss against every row at the default thresholds, and write "
              "the verdict as JSON and Markdown beside it (`rigtune verdict` re-scores at others); never "
              "writes over an earlier run's files"),
+    bare_stock: bool = typer.Option(
+        False, "--bare-stock",
+        help="Also measure vLLM and SGLang launched with the model and port alone, every other setting at "
+             "the engine's own default (`<engine>-bare` rows), beside the `<engine>-default` rows, which "
+             "pass what rigtune takes the defaults to be"),
     check_answers: Optional[str] = typer.Option(
         None, "--check-answers",
         help="Grade every row's answers on this labelled set (gsm8k, or a JSONL file as --eval-set takes), "
@@ -1019,7 +1024,7 @@ def compare(
         options = {"objective": objective, "workload": wl.name, "measured_on": eval_wl.name,
                    "repeats": repeats, "include": list(include or []), "backend": backend,
                    "ttft_ceiling_ms": cons.ttft_ceiling_ms, "ttft_percentile": ttft_percentile,
-                   "tpot_ceiling_ms": cons.tpot_ceiling_ms, "expert": expert,
+                   "tpot_ceiling_ms": cons.tpot_ceiling_ms, "expert": expert, "bare_stock": bare_stock,
                    "rows": [p.name for p in rows or []],
                    "check_answers": name_only(check_answers) if check_answers else None,
                    "check_items": check_items if check_answers else None,
@@ -1036,7 +1041,7 @@ def compare(
                       power=_power_controller(profile), repeats=repeats, extra=extra or None,
                       record_runs=verdict, runs_path=runs, answers=verdict, grader=grader,
                       answer_tolerance=max_accuracy_loss / 100, origin=origin, gpu_probe=probe,
-                      requests_dir=requests)
+                      requests_dir=requests, bare_stock=bare_stock)
     path = save(result, out, path=target)
     console.print(to_markdown(result))
     console.print(f"[dim]saved {path}[/]")

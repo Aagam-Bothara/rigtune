@@ -3,6 +3,7 @@
 - `<backend>-default`: the backend launched the way its own docs launch it (vLLM `vllm serve
   <model>`, SGLang `launch_server`, llama.cpp `llama-server -m model.gguf`).
 - `ollama-default`: the real Ollama binary serving its own quant with its own settings.
+- `<backend>-bare` (`compare --bare-stock` only): vLLM or SGLang launched with the model and port alone.
 
 These run through the same trial runner and workload as rigtune's winner, so every row in a
 results file was measured the same way at roughly the same time on the same GPU.
@@ -15,6 +16,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -61,6 +63,67 @@ def reference_configs(hw: HardwareDescriptor, prepared: Dict[str, PreparedModel]
         elif name == "vllm-cpu":
             out[f"{name}-default"] = Config(backend=name, quant="bf16", ctx=min(4096, max_pos), batch=256)
     return out
+
+
+# --------------------------------------------------------------------------- engines at their own defaults
+
+BARE_ENGINES = ("vllm", "sglang")
+BARE_KEY = "engine defaults"  # the config key a bare row shows: its Config carries no settings
+
+
+class BareStock(BaseBackend):
+    """An engine launched with the model and the port alone, every other setting at the engine's own default
+    (`compare --bare-stock`): `vllm serve <model>` and `python -m sglang.launch_server --model-path <model>`.
+
+    The `<engine>-default` rows pass what rigtune takes the defaults to be (`--max-num-seqs 256`, the model's
+    full context, SGLang's `--mem-fraction-static 0.88`), and those are not always the engine's own: vLLM's
+    `max_num_seqs` is 1024 from 70 GiB except on an A100 (engine/arg_utils.py EngineArgs.get_batch_defaults),
+    and SGLang computes its memory fraction from the card. Those rows stay as they are, so every earlier
+    result keeps its meaning; a bare row stands beside them. The host is pinned to 127.0.0.1, because rigtune
+    never serves on every interface, and the host changes nothing that is measured."""
+
+    def __init__(self, inner: BaseBackend):
+        self.inner = inner
+        self.name = f"{inner.name}-bare"
+        self.health_path = getattr(inner, "health_path", "/health")
+
+    def available(self, hw: HardwareDescriptor) -> bool:
+        return self.inner.available(hw)
+
+    def version(self, hw: HardwareDescriptor) -> Optional[str]:
+        return self.inner.version(hw)
+
+    def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
+        return self.inner.memory_model(hw)
+
+    def workload_hooks(self, hw: HardwareDescriptor, model: PreparedModel) -> LlmtraceHooks:
+        return self.inner.workload_hooks(hw, model)
+
+    def known_failure(self, cfg: Config) -> Optional[str]:
+        return None
+
+    def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:
+        path = model.spec.hf_id  # the model's own repository: it is also the name the engine serves it under
+        if self.inner.name == "vllm":
+            from rigtune.backends.vllm import vllm_serve_head
+
+            args = list(vllm_serve_head(path))
+        elif self.inner.name == "sglang":
+            from rigtune.hardware import sglang_python
+
+            args = [sglang_python() or sys.executable, "-m", "sglang.launch_server", "--model-path", path]
+        else:
+            raise ValueError(f"no bare launch for {self.inner.name}")
+        args += ["--host", "127.0.0.1", "--port", str(port)]
+        if model.spec.revision:
+            args += ["--revision", model.spec.revision]
+        return LaunchSpec(args=args, env={})
+
+
+def bare_configs(prepared: Dict[str, PreparedModel]) -> Dict[str, Config]:
+    """A row per engine this comparison has that can be launched bare, keyed `<engine>-bare`."""
+    return {f"{name}-bare": Config(backend=f"{name}-bare", quant="engine-default", ctx=0, batch=0)
+            for name in BARE_ENGINES if name in prepared}
 
 
 # --------------------------------------------------------------------------- Ollama

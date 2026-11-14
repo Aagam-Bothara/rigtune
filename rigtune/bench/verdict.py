@@ -207,7 +207,7 @@ def _graded(row: ComparisonRow) -> Optional[Dict[str, Any]]:
 def kind_of(row: ComparisonRow) -> str:
     if row.kind:
         return row.kind
-    return "stock" if row.label.endswith("-default") else "tuner"
+    return "stock" if row.label.endswith(("-default", "-bare")) else "tuner"
 
 
 def counted(row: ComparisonRow) -> Dict[int, float]:

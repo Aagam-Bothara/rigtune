@@ -186,7 +186,7 @@ class ComparisonResult(BaseModel):
 
     def default_rows(self) -> List[ComparisonRow]:
         """The rows that stand for not tuning: every row but rigtune's and the expert and tuner rows."""
-        return [r for r in self.rows if r.label != "rigtune" and r.kind is None]
+        return [r for r in self.rows if r.label != "rigtune" and r.kind in (None, "stock")]
 
     def other_rows(self) -> List[ComparisonRow]:
         return [r for r in self.rows if r.label != "rigtune"]
@@ -731,6 +731,7 @@ def compare(
     origin: Optional[Dict[str, Any]] = None,
     gpu_probe: Optional[Callable[[], List[Dict[str, Any]]]] = None,
     requests_dir: Optional[Path] = None,
+    bare_stock: bool = False,
 ) -> ComparisonResult:
     """Measure rigtune's winner and every reference config under the same workload. `extra` adds rows under
     their own labels (other searches' picks, say), measured like every other row and never filtered by `include`.
@@ -748,7 +749,8 @@ def compare(
     (provenance()) is recorded in the results, and each row's launch environment beside its launch args.
     With `record_runs`, `gpu_probe` (gpu_state) is read at the start of every run and kept in its RunRecord
     with the names of the engine logs the run wrote to `log_dir`; `requests_dir` keeps every request of
-    every run there (RequestLog)."""
+    every run there (RequestLog). `bare_stock` adds an `<engine>-bare` row per vLLM or SGLang candidate: the
+    engine launched with the model and port alone (references.BareStock)."""
     workload = workload or get_workload(profile.workload)
     cons = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                       tpot_ceiling_ms=workload.tpot_ceiling_ms)
@@ -780,6 +782,14 @@ def compare(
             kept_note = (f"{need} is measured although --include leaves it out: --check-answers grades "
                          "rigtune's answers against it, and without it they could not be checked")
         refs = {k: v for k, v in refs.items() if k in include or k == need}
+    bare: Dict[str, Config] = {}
+    if bare_stock:  # asked for by name, so --include does not filter them
+        from rigtune.bench.references import BareStock, bare_configs
+
+        for label, cfg in bare_configs(prepared).items():
+            engine = cfg.backend.removesuffix("-bare")
+            backends[cfg.backend], models[cfg.backend] = BareStock(reg[engine]), models[engine]
+            refs[label] = bare[label] = cfg
     added: Dict[str, ExtraRow] = {}
     skipped: List[SkippedRow] = []
     for label, row in (extra or {}).items():
@@ -858,6 +868,10 @@ def compare(
                             config_key=cfg.key())
         if label in added:
             row.kind, row.source = added[label].kind, added[label].source
+        if label in bare:
+            from rigtune.bench.references import BARE_KEY
+
+            row.kind, row.config_key = "stock", BARE_KEY
         if progress:
             progress(label, None)
         try:
@@ -920,7 +934,8 @@ def compare(
     log = None
     if runs_path is not None:
         planned = [{"label": label, "kind": added[label].kind if label in added else
-                    ("rigtune" if label == "rigtune" else "stock" if label.endswith("-default") else "tuner")}
+                    ("rigtune" if label == "rigtune" else
+                     "stock" if label.endswith(("-default", "-bare")) else "tuner")}
                    for label, _ in measurers]
         log = RunsLog(runs_path, result, profile, planned, max(1, repeats))
     for repeat in range(1, max(1, repeats) + 1):
