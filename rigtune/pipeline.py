@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from rigtune import __version__
+from rigtune import __version__, selfcheck
 from rigtune import cache as profile_cache
 from rigtune.backends import BaseBackend, registry as backend_registry
 from rigtune.calibrate.objectives import Constraints, close_call_level
@@ -836,7 +836,12 @@ def calibrate(
     gate = accuracy_gate_for(opts, feasible)
     if runner is not None and gate is not None and getattr(runner, "gate", False) is None:
         runner.gate = gate  # an injected runner that grades (tests) gets the same gate the search decides with
+    client_notes: List[str] = []
     if runner is None:
+        busiest = max(workload.concurrencies, default=0)
+        if busiest > selfcheck.CALIBRATION_ABOVE:  # can one load-generator process measure that many users here?
+            note = selfcheck.cached_note(busiest, profile_cache.rigtune_home() / "selfcheck.json", hw.cpu.model_name)
+            client_notes += [note] if note else []
         runner = SubprocessTrialRunner(
             backends={n: reg[n] for n in plan.candidates},
             models=plan.prepared,
@@ -873,7 +878,7 @@ def calibrate(
     if winner is None:
         raise RuntimeError("calibration failed: " + "; ".join(notes))
     elapsed = time.monotonic() - t0
-    notes = power_notes + list(plan.notes) + tier_notes + notes
+    notes = power_notes + list(plan.notes) + tier_notes + client_notes + notes
     notes += spec_state_notes_for(hw, reg, plan, winner.config, opts)
     if winner.config.text_only:
         notes.append(TEXT_ONLY_NOTE)

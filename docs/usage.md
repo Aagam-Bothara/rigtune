@@ -288,9 +288,12 @@ rigtune predict <model>       # predicted tok/s / TTFT for every feasible config
 rigtune fit [--apply]         # fit the predictor from cached calibrations; leave-one-out accuracy
 rigtune power status          # GPU power limit range, supported clocks, whether control is permitted
 rigtune power reset           # undo a power cap or clock lock left behind by a crashed run
+rigtune selfcheck             # can this machine's load generator measure 1, 32, 64 and 128 users? (--users, --itl-ms)
 ```
 
-To start serving without waiting for benchmarks, use `--skip-calibration`. This launches the first candidate backend with default settings and does not cache a profile.
+To start serving without waiting for benchmarks, use `--skip-calibration`.
+
+**Is the client fast enough?** Every number a calibration records comes from one Python process that parses every streamed chunk. `rigtune selfcheck [--users 1,32,64,128] [--ttft-ms 20] [--itl-ms 10] [--tokens 128] [--json]` drives that same code against a fake engine of known speed (`rigtune/bench/fake_engine.py`, run in a process of its own) and reports, per number of users, the client's median and p95 time to first token against the engine's own, its tokens per second against the engine's, and the p99 lateness of a 5 ms timer on the client's event loop. A level passes when its p95 is within max(5 ms, 5% of the engine's) and its throughput within 3%; the command exits 1 when one does not. `--itl-ms 0` makes the engine send as fast as it can, so the client's tokens per second are its ceiling. A calibration whose busiest level is above 32 users (the `high-concurrency` preset) runs the check at that level once per CPU and rigtune version, caches it in `selfcheck.json` under rigtune's home, and adds a note to the profile when the level missed; it never refuses or changes a pick. The thresholds are a design choice that has not been checked against an engine on a GPU. This launches the first candidate backend with default settings and does not cache a profile.
 
 **Who can reach it.** `serve` listens on `127.0.0.1`, this machine only. rigtune has no authentication, so `--host 0.0.0.0` puts the model and `/rigtune/profile` on every network the machine can reach, and the server says so when it starts; put an authenticating proxy in front of it before doing that. `RIGTUNE_HOST` sets the same thing, and the Docker image sets it to `0.0.0.0`, because inside a container that is the only address `-p` can reach; `-p 127.0.0.1:8000:8000` keeps a container local as well.
 

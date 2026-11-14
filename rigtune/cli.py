@@ -499,6 +499,51 @@ def workloads() -> None:
 
 
 @app.command()
+def selfcheck(
+    users: str = typer.Option("1,32,64,128", "--users", help="Comma-separated numbers of users to check"),
+    ttft_ms: float = typer.Option(20.0, "--ttft-ms", help="The fake engine's time to first token"),
+    itl_ms: float = typer.Option(10.0, "--itl-ms", help="Its time between tokens; 0 sends as fast as it can"),
+    tokens: int = typer.Option(128, "--tokens", help="Tokens in each answer"),
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+) -> None:
+    """Check that the load generator measures a fake engine of known speed faithfully at each number of users.
+    Exits 1 when a level misses a threshold."""
+    from rigtune import selfcheck as sc
+    from rigtune.hardware import probe_cpu
+
+    try:
+        levels = [int(u) for u in users.split(",") if u.strip()]
+    except ValueError:
+        raise typer.BadParameter(f"--users takes comma-separated numbers, not {users!r}")
+    reports = sc.run(levels, ttft_ms=ttft_ms, itl_ms=itl_ms, tokens=tokens)
+    cpu = probe_cpu().model_name
+    if as_json:
+        console.print_json(json.dumps({"cpu": cpu, "ttft_ms": ttft_ms, "itl_ms": itl_ms, "tokens": tokens,
+                                       "levels": [r.to_dict() for r in reports]}))
+    else:
+        t = Table(title=f"Client self-check on {cpu} (engine: {ttft_ms:g} ms to first token, {itl_ms:g} ms a token, "
+                        f"{tokens} tokens)")
+        for col in ("users", "TTFT p50 ms", "TTFT p95 ms", "engine p95 ms", "p95 error ms", "tok/s ratio",
+                    "loop lag p99 ms", "result"):
+            t.add_column(col, justify="right" if col != "result" else "left")
+        for r in reports:
+            t.add_row(str(r.users), _fmt(r.client_ttft_p50_ms), _fmt(r.client_ttft_p95_ms),
+                      _fmt(r.engine_ttft_p95_ms), f"{r.ttft_error_p95_ms:.1f} (< {r.ttft_allowance_ms:.1f})",
+                      f"{r.throughput_ratio:.3f}", _fmt(r.loop_lag_p99_ms),
+                      "ok" if r.passed else "; ".join(r.problems()))
+        console.print(t)
+        if itl_ms == 0:
+            for r in reports:
+                console.print(f"client ceiling at {r.users} users: {r.client_tok_s:.0f} tokens/s")
+        missed = [r for r in reports if not r.passed]
+        if missed:
+            console.print(f"[yellow]{len(missed)} of {len(reports)} levels missed a threshold.[/] At "
+                          f"{missed[-1].users} users, try: {sc.suggestion(missed[-1].users)}.")
+    if any(not r.passed for r in reports):
+        raise typer.Exit(1)
+
+
+@app.command()
 def probe(as_json: bool = typer.Option(False, "--json", help="Machine-readable output")) -> None:
     """Print the HardwareDescriptor."""
     from rigtune.hardware import hardware_hash, probe as _probe
