@@ -6,6 +6,7 @@ import functools
 import importlib.util
 import logging
 import math
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -28,8 +29,13 @@ MAMBA_SLOTS_PER_REQUEST = 3  # mem_cache/kv_cache_configurator.MAMBA_CACHE_SIZE_
 MAMBA_EXTRA_BUFFER_SLOTS = 2  # kv_cache_configurator.MAMBA_CACHE_V2_ADDITIONAL_RATIO_OVERLAP
 MAMBA_EXTRA_BUFFER_SLOTS_LAZY = 1  # MAMBA_CACHE_V2_ADDITIONAL_RATIO_OVERLAP_LAZY (and _NO_OVERLAP)
 SWA_FULL_TOKENS_RATIO = 0.8  # server_args.ServerArgs.swa_full_tokens_ratio
-SWA_EVICTION_INTERVAL = 128  # environ.SGLANG_SWA_EVICTION_INTERVAL
-SWA_CHUNKS_IN_FLIGHT = 2  # pool_configurator.SWAChunkCapPoolConfigurator, under the default overlap scheduler
+SWA_EVICTION_INTERVAL = 128  # environ.SGLANG_SWA_EVICTION_INTERVAL (line 637 at v0.5.19, 730 at v0.5.23)
+# pool_configurator.SWAChunkCapPoolConfigurator (v0.5.19; compute_swa_request_cap at v0.5.23), under the default
+# overlap scheduler.
+SWA_CHUNKS_IN_FLIGHT = 2
+# speculative_ngram_max_bfs_breadth's default, which arg_groups/speculative_hook.py::_handle_ngram makes the n-gram
+# top-k (server_args.py:2324-2328 at v0.5.19, arg_groups/fields/spec.py:256-259 at v0.5.23).
+NGRAM_BFS_BREADTH = 10
 # Architectures whose sliding layers get SGLang's hybrid SWA pool (configs/model_config.is_hybrid_swa_model, the
 # Gemma 4 entries and SWA_SINK_ARCHS). Gemma 2 and 3 are not among them, and arg_groups/model_overrides/
 # gemma2_gemma3.py sets disable_hybrid_swa_memory for them: every layer keeps a full KV cache.
@@ -45,12 +51,27 @@ SGLANG_EXTRA_BUFFER_ARCHS = frozenset({
 })
 
 
-def sglang_default_chunk(vram_total_bytes: int) -> int:
-    """chunked_prefill_size SGLang picks from GPU memory (memory_hook._handle_gpu_memory_settings)."""
+# SGLang 0.5.23 raised the default prefill chunk of cards with 20 to 35 GiB (an RTX 4090, an L4) from 2048 to
+# 4096 tokens: arg_groups/memory_hook.py::handle_gpu_memory_settings, line 111 at v0.5.23, line 81 at v0.5.19;
+# every other tier is the same at both tags. Only those two releases were read, so 0.5.20 to 0.5.22 keep
+# 0.5.19's rule, and so does a version not written as major.minor.patch (or none at all).
+SGLANG_CHUNK_4096_FROM = (0, 5, 23)
+
+
+def sglang_release(version: Optional[str]) -> Optional[Tuple[int, int, int]]:
+    """(major, minor, patch) of an SGLang version string such as "0.5.23" or "0.5.10.post1"; None otherwise."""
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", version or "")
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def sglang_default_chunk(vram_total_bytes: int, version: Optional[str] = None) -> int:
+    """chunked_prefill_size SGLang `version` picks from GPU memory (memory_hook.handle_gpu_memory_settings)."""
     mib = vram_total_bytes / 2**20
     if not mib:
         return 4096
-    for limit, chunk in ((35 * 1024, 2048), (60 * 1024, 4096), (160 * 1024, 8192)):
+    release = sglang_release(version)
+    mid = 4096 if release is not None and release >= SGLANG_CHUNK_4096_FROM else 2048
+    for limit, chunk in ((20 * 1024, 2048), (35 * 1024, mid), (60 * 1024, 4096), (160 * 1024, 8192)):
         if mib < limit:
             return chunk
     return 16384
@@ -82,9 +103,28 @@ def sglang_mamba_slots_per_request(cfg: Config, arch: ArchInfo) -> int:
     return MAMBA_SLOTS_PER_REQUEST
 
 
-def sglang_hybrid_kv(cfg: Config, arch: ArchInfo, vram_total_bytes: int) -> HybridKV:
-    """SGLang 0.5.19's pools for hybrid models, read from source (not yet run on hardware). Sliding layers only
-    count for SGLANG_HYBRID_SWA_ARCHS; for others MemoryModel.full_kv_fn keeps every layer full.
+def sglang_decode_alloc(spec: Optional[str]) -> int:
+    """KV tokens a request may hold for its next decode step beyond the window, under the overlap scheduler.
+
+    Without speculation, one page (1 token on CUDA). With it, the overlap allocator keeps two decode steps
+    outstanding, 2 x mem_cache/allocation_sizing.py::get_alloc_len_per_decode = 2 x max(steps x top-k, draft
+    tokens) (v0.5.19 line 17, v0.5.23 line 28). For an EAGLE3 head or a draft model, a chain of k steps at top-k 1
+    with k + 1 draft tokens, that is 2(k + 1); for n-gram, top-k is NGRAM_BFS_BREADTH and steps draft // top-k
+    (at least 1; speculative_hook.py::_handle_ngram), so 24 for its 12 draft tokens."""
+    draft = sglang_draft_tokens(spec)
+    if not draft:
+        return 1
+    kind, _, k = speculative.parse(spec or "")
+    if kind == "ngram":
+        steps_x_topk = max(1, draft // NGRAM_BFS_BREADTH) * NGRAM_BFS_BREADTH
+    else:
+        steps_x_topk = k  # top-k 1
+    return 2 * max(steps_x_topk, draft)
+
+
+def sglang_hybrid_kv(cfg: Config, arch: ArchInfo, vram_total_bytes: int, version: Optional[str] = None) -> HybridKV:
+    """SGLang 0.5.19's and 0.5.23's pools for hybrid models, read from source (not yet run on hardware). Sliding
+    layers only count for SGLANG_HYBRID_SWA_ARCHS; for others MemoryModel.full_kv_fn keeps every layer full.
 
     Radix cache on (the default; `--disable-radix-cache` when cfg.prefix_cache is False):
     - Linear layers: mem_cache/kv_cache_configurator._handle_max_mamba_cache gives the mamba pool
@@ -97,7 +137,13 @@ def sglang_hybrid_kv(cfg: Config, arch: ArchInfo, vram_total_bytes: int) -> Hybr
     Radix cache off, with --max-running-requests (always passed):
     - Linear layers: max_mamba_cache_size = max_running_requests, plus the padding slot.
     - Sliding layers: SWAChunkCapPoolConfigurator.is_applicable holds (chunked_prefill_size is always
-      resolved), so the SWA pool is (window + eviction interval + 2 pages) x requests + 2 prefill chunks + 1 page.
+      resolved), so the SWA pool is (window + eviction interval x D + 1 page + the next decode allocation)
+      x requests + 2 prefill chunks + 1 page (pool_configurator.py: SWAChunkCapPoolConfigurator.__init__ at
+      v0.5.19, compute_swa_request_cap at v0.5.23, where the class is SWARequestCapPoolConfigurator; same formula).
+      D is the draft tokens, 1 without speculation; the decode allocation is sglang_decode_alloc. So without
+      speculation, window + eviction interval + 2 pages. The default chunk depends on the card and the release
+      (sglang_default_chunk). With the overlap scheduler off (cfg.extra) SGLang holds one chunk and one decode
+      step, fewer than planned.
     Speculative decoding (D = --speculative-num-draft-tokens, as speculative.sglang_config passes it):
     _handle_max_mamba_cache also reserves an intermediate state per draft token for every request slot,
     per_req x (requests + 1) x D, inside the mamba share with the radix cache (the joint solve for K) and beside it
@@ -114,9 +160,10 @@ def sglang_hybrid_kv(cfg: Config, arch: ArchInfo, vram_total_bytes: int) -> Hybr
     swa_pool = None
     if arch.sliding_layers and arch.full_attention_layers:
         page = 1  # CUDA default (arg_groups/overrides.py page_size resolution)
-        chunk = cfg.prefill_budget or sglang_default_chunk(vram_total_bytes)
-        swa_pool = ((arch.sliding_window or 0) + SWA_EVICTION_INTERVAL + 2 * page) * cfg.batch \
-            + SWA_CHUNKS_IN_FLIGHT * chunk + page
+        chunk = cfg.prefill_budget or sglang_default_chunk(vram_total_bytes, version)
+        per_request = (arch.sliding_window or 0) + SWA_EVICTION_INTERVAL * max(1, draft) + page \
+            + (sglang_decode_alloc(cfg.spec_decode) if draft else page)
+        swa_pool = per_request * cfg.batch + SWA_CHUNKS_IN_FLIGHT * chunk + page
     return HybridKV(state_slots=(cfg.batch + 1) * (1 + draft), swa_pool_tokens=swa_pool)
 
 
@@ -378,8 +425,10 @@ class SglangBackend(BaseBackend):
 
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
         total = hw.gpu.vram_total_bytes if hw.gpu else 0
+        found = hw.backends.get(self.name)
+        version = found.version if found is not None else None
         return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "gpu",
-                                      hybrid_fn=lambda cfg, arch: sglang_hybrid_kv(cfg, arch, total),
+                                      hybrid_fn=lambda cfg, arch: sglang_hybrid_kv(cfg, arch, total, version),
                                       full_kv_fn=sglang_full_kv_reason)
 
     def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> List[Config]:
