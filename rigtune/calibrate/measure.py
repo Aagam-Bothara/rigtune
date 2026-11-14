@@ -537,6 +537,19 @@ def _cached_by_source(chunk: Dict[str, Any]) -> Dict[str, int]:
     return {k: int(details[k]) for k in TIER_SOURCES if isinstance(details.get(k), int)}
 
 
+# httpx.AsyncClient() pools at most 100 connections (httpx._config.DEFAULT_LIMITS), and _one_request starts its
+# clock before asking the pool for one, so above 100 users the wait for a free connection was timed as time to
+# first token. Up to 100 users the client is built exactly as before.
+POOL_DEFAULT = 100
+
+
+def _client(users: int) -> httpx.AsyncClient:
+    """An HTTP client with a connection for each of `users` requests in flight."""
+    if users <= POOL_DEFAULT:
+        return httpx.AsyncClient()
+    return httpx.AsyncClient(limits=httpx.Limits(max_connections=users, max_keepalive_connections=users))
+
+
 async def _drive(
     base_url: str,
     hooks: LlmtraceHooks,
@@ -553,7 +566,7 @@ async def _drive(
     url = base_url.rstrip("/") + hooks.completions_path
     results: List[RequestOutcome] = []
 
-    async with httpx.AsyncClient() as client:
+    async with _client(concurrency) as client:
 
         async def worker(prompt: str) -> None:
             body: Dict[str, Any] = {
@@ -621,7 +634,8 @@ async def _drive_open(base_url: str, hooks: LlmtraceHooks, workload: Workload, t
     loop = asyncio.get_running_loop()
     t0 = loop.time()
 
-    async with httpx.AsyncClient() as client:
+    # Open loop: every arrival can be in flight at once.
+    async with _client(min(len(times), len(workload.prompts))) as client:
 
         async def one(at: float, prompt: str) -> None:
             nonlocal in_flight, peak
@@ -871,7 +885,7 @@ async def _drive_sessions(base_url: str, hooks: LlmtraceHooks, workload: Workloa
                               _shared_system(workload))
     results: List[RequestOutcome] = []
 
-    async with httpx.AsyncClient() as client:
+    async with _client(concurrency) as client:
 
         async def send(state: _LiveSession, messages: Messages) -> RequestOutcome:
             step = state.session.steps[state.step]
