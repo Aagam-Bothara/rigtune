@@ -9,18 +9,21 @@
 # open question in docs/benchmarks.md asks about. Each workload is compared against stock settings twice:
 # `efficiency` (lowest joules per token above a throughput floor) and `balanced` (a power setting is
 # accepted only if it costs under 2% of throughput). The GPU's power limit and clocks are restored on exit.
+# OUT (the results directory) and RIGTUNE (the command, such as "/path/python -m rigtune.cli") may be set in the
+# environment.
 set -euo pipefail
 MODEL=${1:-Qwen/Qwen2.5-3B-Instruct}
 shift || true
 WORKLOADS=${*:-generation rag}
-OUT=benchmarks/strategies/results-power
+OUT=${OUT:-benchmarks/strategies/results-power}
+RIGTUNE=${RIGTUNE:-rigtune}
 
-rigtune power status
-trap 'rigtune power reset || true' EXIT
+$RIGTUNE power status
+trap '$RIGTUNE power reset || true' EXIT
 for wl in $WORKLOADS; do
   for objective in efficiency balanced; do
     echo "=== $MODEL / $wl / $objective / --power both"
-    rigtune compare "$MODEL" --workload "$wl" --objective "$objective" --power both --out "$OUT"
+    $RIGTUNE compare "$MODEL" --workload "$wl" --objective "$objective" --power both --out "$OUT"
   done
 done
 echo "results in $OUT; regenerate SUMMARY.md with the command in benchmarks/summarize_strategies.py"

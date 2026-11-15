@@ -510,7 +510,7 @@ Everything that run used now lives in the repository. On a GPU machine with vLLM
 
 ## Not yet measured
 
-These are gaps, not claims. In rough order of how much they would change the conclusions:
+These are gaps, not claims. In rough order of how much they would change the conclusions. `benchmarks/next_session_plan.py` writes the phases the next GPU session runs for items 5, 16, 18 and 19 and the comparisons against other tuners, and `benchmarks/gpu_pull.py` copies each phase off the pod as it ends; none of it has run on a GPU yet ([runbook](gpu-session.md)):
 
 1. **Task quality beyond one benchmark.** On GSM8K, quantization cost Qwen2.5-3B 2–5 points and Qwen2.5-7B about one, within noise, and fp8 with activation quantization on Ada cost 7B nothing. Other tasks (code, long-context retrieval), other model families, llama.cpp's GGUF formats and Hopper are ungraded, so whether 4-bit checkpoints could return to `--quant auto` for larger models is still open.
 2. **Long-context traffic where memory binds.** The model half of this gap is now measured: Qwen2.5-14B in fp8 on a 24 GB RTX 4090 left 2 of 54 configurations feasible, stock vLLM unable to start, and the staged search 4.4% ahead of random sampling ([Qwen2.5-14B where memory binds](#qwen25-14b-where-memory-binds)). What remains untested is long-context traffic at high concurrency, and a model without grouped-query attention, where the KV cache rather than the weights is what fills the card.
