@@ -162,6 +162,52 @@ def _no_hf_token(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_trial_ledger(monkeypatch):
+    """The trial ledger is on by default for calibrations that launch engines, and some tests drive calibrate()
+    through the real runner with only the engine faked: without this, every run of the suite appended their trials
+    to the developer's own ~/.rigtune/ledger. A test of the ledger turns it back on itself (delenv), under a home
+    of its own."""
+    monkeypatch.setenv("RIGTUNE_LEDGER", "off")
+
+
+@pytest.fixture
+def ledger_on(monkeypatch, tmp_home):
+    """The trial ledger as a calibration has it by default, under a temporary home: <tmp_home>/ledger."""
+    monkeypatch.delenv("RIGTUNE_LEDGER", raising=False)
+    monkeypatch.delenv("POLYSERVE_LEDGER", raising=False)
+    yield tmp_home / "ledger"
+
+
+def _real_ledger() -> Dict[str, int]:
+    """Every file under the ledger of the home this suite was started in, with its size."""
+    from rigtune import ledger, paths
+
+    roots = {paths.home() / "ledger"}
+    if ledger.root() is not None:
+        roots.add(ledger.root())
+    return {str(p): p.stat().st_size for r in roots if r.is_dir() for p in r.rglob("*") if p.is_file()}
+
+
+def pytest_sessionstart(session):
+    if not hasattr(session.config, "workerinput"):  # the controller, or a run without xdist
+        session.config._real_ledger = _real_ledger()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail the run if any test wrote to the real home's trial ledger."""
+    before = getattr(session.config, "_real_ledger", None)
+    if before is None:
+        return
+    after = _real_ledger()
+    if after != before:
+        changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+        tr = session.config.pluginmanager.get_plugin("terminalreporter")
+        msg = f"FAILED: a test wrote to the real trial ledger ({len(changed)} files): {changed[:3]}"
+        tr.write_line(msg, red=True) if tr is not None else print(msg)
+        session.exitstatus = 1
+
+
+@pytest.fixture(autouse=True)
 def _no_model_revision(monkeypatch):
     """A profile's model commit comes from this machine's Hugging Face cache, or the Hub: neither in tests. A test of
     the revision check sets these itself; tests/test_cache_hardening.py tests the readers on a cache of its own."""

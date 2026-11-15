@@ -592,3 +592,14 @@ class Profile(BaseModel):
     # --eval-set: what each weight precision scored and what the accuracy gate decided. Empty when ungated.
     accuracy: List[PrecisionAccuracy] = Field(default_factory=list)
     eval_set: Optional[EvalSetInfo] = None
+    # The calibration's id in the trial ledger (rigtune/ledger.py), where every trial behind this profile is
+    # recorded. Left out of the file when unset, so a profile calibrated without the ledger, and every profile
+    # written before it, is written exactly as before.
+    calibration_id: Optional[str] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_calibration_id(self, handler) -> Dict[str, Any]:
+        data = handler(self)
+        if data.get("calibration_id") is None:
+            data.pop("calibration_id", None)
+        return data

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Every calibration that launches engines appends each of its trials to a trial ledger,
+  `~/.rigtune/ledger/<hardware hash>/<model>.jsonl`, and the profile records its `calibration_id` there
+  ([the trial ledger](docs/usage.md#the-trial-ledger)). On by default; `RIGTUNE_LEDGER=off` turns it off. It
+  changes no trial and no pick, and a profile calibrated without it is written exactly as before.
 - The proxy reads streamed replies event by event, so token counts split across network chunks are no longer
   lost, and times TTFT at the first event with generated output rather than the first chunk (usually a role-only
   delta). Generated output includes `reasoning`, `reasoning_content` and `tool_calls`, in the proxy and in the

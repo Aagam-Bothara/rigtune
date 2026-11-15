@@ -650,6 +650,10 @@ class StagedSearch:
     # After the pick under `efficiency` at an arrival rate: measure the winner once with Poisson arrivals at that
     # rate and record the composed J/request beside the measured one. The pick never depends on it.
     rate_check: bool = True
+    # Given each trial the search does not launch (budget spent, or a speculation method already failed to start),
+    # which never reaches the runner: the trial ledger records them so the order trials ran in can be audited.
+    # None = nobody is told, as before.
+    on_skip: Optional[Callable[[TrialResult], None]] = None
     _variant_log: List[Tuple[str, Config, Config]] = field(default_factory=list)  # (dimension, leader, variant)
     results: List[TrialResult] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -756,6 +760,18 @@ class StagedSearch:
         typical = sum(self._trial_seconds) / len(self._trial_seconds)
         return self.clock() + typical > self._started + self.budget_s
 
+    def _skip(self, res: TrialResult) -> TrialResult:
+        """A trial the search did not launch, passed to on_skip."""
+        if self.on_skip is not None:
+            self.on_skip(res)
+        return res
+
+    def _budget_skip(self, cfg: Config, stage: str) -> None:
+        """A re-measurement the budget did not allow (confirm, rate check), for on_skip; it has no result otherwise."""
+        if self.on_skip is not None:
+            self._skip(TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
+                                   error=BUDGET_SKIPPED, failure_kind="skipped_budget"))
+
     def _run(self, cfg: Config, stage: str) -> TrialResult:
         cfg = self._as_run(cfg)  # the planner's grid knows nothing of a text-only retry
         key = cfg.key()
@@ -763,14 +779,15 @@ class StagedSearch:
             return self._done[key]
         if self._over_budget():
             self._skipped.append(f"{stage} {key}")
-            return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
-                               error=BUDGET_SKIPPED, failure_kind="skipped_budget")
+            return self._skip(TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
+                                          error=BUDGET_SKIPPED, failure_kind="skipped_budget"))
         spec_kind = (cfg.spec_decode or "").partition(":")[0]
         if spec_kind in self._spec_blocked:  # its start-up failure would only repeat
             self._spec_blocked[spec_kind].append(key)
-            return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
-                               error=f"skipped: {spec_kind} decoding failed to start earlier in this calibration",
-                               failure_kind="skipped_blocked")
+            return self._skip(TrialResult(
+                config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
+                error=f"skipped: {spec_kind} decoding failed to start earlier in this calibration",
+                failure_kind="skipped_blocked"))
         if self.progress:
             self.progress(stage, cfg, None)
         t0 = self.clock()
@@ -1305,6 +1322,7 @@ class StagedSearch:
         """A fresh trial of a config already measured, bypassing the cache; None once the budget is spent."""
         if self._over_budget():
             self._skipped.append(f"confirm {cfg.key()}")
+            self._budget_skip(cfg, "confirm")
             return None
         if self.progress:
             self.progress("confirm", cfg, None)
@@ -1510,6 +1528,7 @@ class StagedSearch:
                     f"{1 / MIN_OPEN_LOOP_RATE:.0f} s, the longest window it measures")
         if self._over_budget():
             self._skipped.append(f"rate-check {winner.config.key()}")
+            self._budget_skip(winner.config, "rate-check")
             return None
         # Scored as in the pick: among every trial, so in the request size the pick was counted in.
         ranked = [x for x in rank(self.results, self.objective, self.constraints) if x.result is winner] \

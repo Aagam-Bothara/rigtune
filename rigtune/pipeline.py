@@ -26,6 +26,7 @@ from rigtune.calibrate.search import ProgressFn, StagedSearch, SubprocessTrialRu
 from rigtune.calibrate.workload import Workload, get_workload, with_minimum_requests
 from rigtune.hardware import hardware_hash, llmtrace_version, probe
 from rigtune.hfconfig import resolve_revision
+from rigtune.ledger import Ledger, LedgerRunner
 from rigtune.memory import plan as memory_plan
 from rigtune.models import (
     Config,
@@ -926,7 +927,11 @@ def calibrate(
     power_points: Optional[list] = None,
     phase_tuning: bool = True,
     options: Optional[SearchOptions] = None,
+    ledger: Optional[Ledger] = None,
 ) -> Profile:
+    """Run the staged search and build the profile. Every trial is recorded in `ledger` as it ends; without one, a
+    calibration that launches engines (no `runner` given) records them in the trial ledger under rigtune's home
+    unless RIGTUNE_LEDGER=off, and one given a runner records nothing, since it measures nothing new."""
     opts = options or SearchOptions()
     workload = workload or get_workload("default")
     if opts.confirm_rounds < 1:
@@ -1004,6 +1009,14 @@ def calibrate(
             gate=gate,
             idle_tail_s=idle_tail_for(objective, opts),
         )
+        if ledger is None:
+            try:
+                key = opts.key(objective, constraints, workload)
+            except ValueError:  # the profile's own call below says why
+                key = {}
+            ledger = Ledger.for_calibration(hw, spec, workload, objective, key)
+    if ledger is not None:
+        runner = LedgerRunner(runner, ledger)
     from rigtune.predict import Predictor
 
     search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress,
@@ -1018,7 +1031,8 @@ def calibrate(
                           retry_floor=retry_floor_fn(hw, reg, plan) if opts.speculative_all else None,
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
                                             if phase_tuning and opts.phase_tuning else None),
-                          tier_variants=tier_fn, startup_failure=startup_failure_fn(hw, reg, plan))
+                          tier_variants=tier_fn, startup_failure=startup_failure_fn(hw, reg, plan),
+                          on_skip=ledger.trial if ledger is not None else None)
     t0 = time.monotonic()
     try:
         winner, notes = search.run(feasible)
@@ -1057,6 +1071,8 @@ def calibrate(
     if gate is not None:
         profile.accuracy = gate.records()
         profile.eval_set = gate.info
+    if ledger is not None:  # last: the record holds the profile exactly as it is returned
+        ledger.finish(profile)  # sets profile.calibration_id only once its record is written
     return profile
 
 

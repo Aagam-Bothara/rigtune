@@ -167,7 +167,7 @@ remove the wait.
 
 ## 7. Caching and reproducibility
 
-A profile is keyed by `(hardware_hash, model, objective)`. The hash covers the *shape* of the hardware (GPU model, compute capability, total VRAM, CPU model, core counts, SIMD flags, total RAM) and not free memory, so a busy machine does not invalidate its own cache. The profile stores the backend version; a version change invalidates it. It also stores the full calibration table, workload description and llmtrace version, so a decision can be re-derived offline.
+A profile is keyed by `(hardware_hash, model, objective)`. The hash covers the *shape* of the hardware (GPU model, compute capability, total VRAM, CPU model, core counts, SIMD flags, total RAM) and not free memory, so a busy machine does not invalidate its own cache. The profile stores the backend version; a version change invalidates it. It also stores the full calibration table, workload description and llmtrace version, so a decision can be re-derived offline. A recalibration replaces the profile, so every trial is also appended, as it ends, to a trial ledger under rigtune's home (`rigtune/ledger.py`): one JSON line per trial, failed and budget-skipped trials included, and a last line holding the profile and the ids of the trials in its table. The ledger is append-only and only written to, never read, by calibration.
 
 ## 8. Limitations
 
