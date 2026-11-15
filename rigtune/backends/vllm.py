@@ -35,8 +35,10 @@ KV_ATTENTION = {AMPERE_FP8_KV: "FLASHINFER", INT8_KV: "TRITON_ATTN"}
 
 logger = logging.getLogger(__name__)
 
-# Architectures known to load in vLLM; consulted only when the live registry is unavailable.
-KNOWN_ARCHS = {
+# Architectures known to load in vLLM, consulted when neither the engine probe (rigtune.backends.facts: the registry
+# of the engine that will run, listed in its own Python) nor an importable registry here lists the model's. Frozen: no
+# name is ever added, since the probe lists a new architecture as soon as an installed engine has it.
+FALLBACK_ARCHS = frozenset({
     "LlamaForCausalLM", "MistralForCausalLM", "MixtralForCausalLM", "Qwen2ForCausalLM", "Qwen3ForCausalLM",
     "Qwen2MoeForCausalLM", "Qwen3MoeForCausalLM", "GemmaForCausalLM", "Gemma2ForCausalLM", "Gemma3ForCausalLM",
     "Gemma3ForConditionalGeneration", "Phi3ForCausalLM", "PhiForCausalLM", "GPT2LMHeadModel", "GPTNeoXForCausalLM",
@@ -55,7 +57,7 @@ KNOWN_ARCHS = {
     "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration", "Qwen3_5ForCausalLM",
     "Qwen3_5MoeForCausalLM", "Gemma4UnifiedForConditionalGeneration", "Gemma4ForConditionalGeneration",
     "Gemma4ForCausalLM",
-}
+})
 
 # Paged-KV runtimes do not need KV for every (ctx x batch) token up front; they preempt when
 # occupancy is exceeded. Budget a fraction of the worst case so realistic batches survive planning.
@@ -642,10 +644,16 @@ class VllmBackend(BaseBackend):
         except Exception as exc:
             logger.warning("could not read config for %s: %s", model.hf_id, exc)
             return True
+        # The registry of the vLLM that will run, listed in its own Python by the engine probe. It can only add an
+        # architecture, never take one away: the probe imports no vLLM plugins, which can register out-of-tree models,
+        # and SGLang's registry skips any model module that fails to import, which one needing a GPU may do with none
+        # visible. A model refused that way would never be tried, while one offered wrongly costs a failed launch.
+        if probe_answer(lambda f: None if f.archs is None else arch in f.archs):
+            return True
         live = vllm_registry_archs()
         if live is not None:
             return arch in live
-        return arch in KNOWN_ARCHS or arch == "unknown"
+        return arch in FALLBACK_ARCHS or arch == "unknown"
 
     # ---- prepare
 

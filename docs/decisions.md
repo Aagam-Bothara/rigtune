@@ -354,7 +354,10 @@ run costs a note, never a crash or a changed pick. What the probe cannot do is s
 flag can exist and mean something else (SGLang 0.5.23 changed a 24 GB card's default prefill chunk behind an
 unchanged flag). Measured failures, version gates for what was checked on which release, the memory formulas
 and the tables of second models stay hand-written; a probe can only take a method away, never offer one they
-hold back. Whether a release behaves as rigtune plans is for a conformance run on a GPU to say.
+hold back. For architectures it is the other way round: the probe can add one the built-in list lacks
+(gpt-oss, on either engine), never remove one, because a registry listed with no GPU visible can miss a model
+whose module needs one to import, and refusing a working model would hide it from every calibration. Whether a
+release behaves as rigtune plans is for a conformance run on a GPU to say.
 
 ## Why not Bayesian optimisation?
 

@@ -144,7 +144,7 @@ HYBRID_ARCHS = ("Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGene
 
 
 def test_hybrid_architectures_are_known_without_the_engine_registry(hw_rtx4090, monkeypatch):
-    """SGLang usually runs from $SGLANG_PYTHON, so rigtune cannot import its registry and falls back to KNOWN_ARCHS;
+    """SGLang usually runs from $SGLANG_PYTHON, so rigtune cannot import its registry and falls back to FALLBACK_ARCHS;
     before these entries both engines refused the 2026 hybrid models whenever that happened."""
     import rigtune.backends.sglang as sg
     import rigtune.backends.vllm as vl

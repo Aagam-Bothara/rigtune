@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
 from rigtune import kvtier, speculative
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
-from rigtune.backends.vllm import KNOWN_ARCHS, PAGED_KV_FRACTION
+from rigtune.backends.vllm import FALLBACK_ARCHS, PAGED_KV_FRACTION
 from rigtune.hfconfig import dtype_bytes, load_arch
 from rigtune.memory import HOST_TIER_RESERVE, MIN_SAFETY_MARGIN, HybridKV, MemoryModel, estimate
 from rigtune.models import ArchInfo, Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
@@ -505,10 +505,14 @@ class SglangBackend(BaseBackend):
         except Exception as exc:
             logger.warning("could not read config for %s: %s", model.hf_id, exc)
             return True
+        # The registry of the SGLang that would be launched, listed in its own Python: the usual case, since rigtune
+        # cannot import it when it lives behind $SGLANG_PYTHON. It can only add an architecture (see VllmBackend).
+        if probe_answer(lambda f: None if f.archs is None else arch in f.archs):
+            return True
         live = sglang_registry_archs()
         if live is not None:
             return arch in live
-        return arch in KNOWN_ARCHS or arch == "unknown"
+        return arch in FALLBACK_ARCHS or arch == "unknown"
 
     def precisions(self, hw: HardwareDescriptor) -> List[str]:
         cc = hw.gpu.cc if hw.gpu else (0, 0)
