@@ -1644,5 +1644,102 @@ def power_reset(gpu: Optional[int] = typer.Option(None, "--gpu", help="GPU index
         console.print("no recorded change; unlocked clocks anyway")
 
 
+# --------------------------------------------------------------------------- trial ledger
+
+ledger_app = typer.Typer(help="The trial ledger: every calibration trial, kept under rigtune's home.",
+                         no_args_is_help=True)
+app.add_typer(ledger_app, name="ledger")
+
+
+def _ledger_root() -> Path:
+    from rigtune import ledger as lg
+
+    base = lg.root()
+    if base is None:
+        err.print("[yellow]the trial ledger is off (RIGTUNE_LEDGER=off)[/]")
+        raise typer.Exit(2)
+    return base
+
+
+@ledger_app.command("show")
+def ledger_show(
+    model: Optional[str] = typer.Option(None, "--model", help="Only calibrations of models whose id contains this"),
+    calibration: Optional[str] = typer.Option(None, "--calibration",
+                                              help="One calibration's trials: its id, or its first 6+ characters"),
+) -> None:
+    """List the calibrations in the ledger, or one calibration's trials. Paths are cut to their last part."""
+    from rigtune import ledger as lg
+
+    base = _ledger_root()
+    if calibration is not None:
+        try:
+            cal = lg.find(calibration, base)
+        except lg.LedgerError as exc:
+            err.print(f"[red]{exc}[/]")
+            raise typer.Exit(2)
+        t = Table(title=f"calibration {cal.calibration_id}")
+        for col in ("seq", "stage", "config", "outcome", "tok/s", "p95 TTFT ms", "score", "", "error"):
+            t.add_column(col, overflow="fold")
+        for row in lg.trial_rows(cal):
+            t.add_row(*row, style="bold green" if row[7] else None)
+        console.print(t, markup=False, highlight=False)
+        if cal.record is None:
+            console.print("no profile record: the calibration failed or was stopped before its pick")
+        for problem in cal.scan.problems():
+            err.print(f"[yellow]{problem}[/]")
+        return
+    rows, notes = lg.calibration_rows(base, model)
+    n, size = lg.sizes(base)
+    if not rows:
+        console.print(f"no calibrations in the ledger ({n} files)")
+    else:
+        t = Table(title=f"trial ledger: {n} file{'s' if n != 1 else ''}, {size / 2**20:.1f} MiB")
+        for col in ("calibration", "model", "began (UTC)", "objective", "trials", "failed", "skipped", "pick"):
+            t.add_column(col, overflow="fold")
+        for row in rows:
+            t.add_row(*row)
+        console.print(t, markup=False, highlight=False)
+    for note in notes:
+        err.print(f"[yellow]{note}[/]")
+
+
+@ledger_app.command("verify")
+def ledger_verify(
+    which: str = typer.Argument(..., help="A profile JSON, or part of a cached profile's model id"),
+) -> None:
+    """Check a profile against the ledger: its records are intact, they rebuild this profile and its table trial
+    for trial, and the pick re-derived from the table is its configuration. Exits 0 when every check passed, 1 when
+    any differs, 2 when there is no calibration to check against, 3 when nothing differs but something could not be
+    checked (a --layout or --phases profile's own choice, an accuracy-gated pick)."""
+    from rigtune import ledger as lg
+
+    v = lg.verify(_find_profile(which), _ledger_root())
+    for status, text in v.findings:
+        console.print(f"{status:<12} {lg._scrub(text)}", markup=False, highlight=False)
+    if v.exit_code:
+        raise typer.Exit(v.exit_code)
+
+
+@ledger_app.command("rebuild")
+def ledger_rebuild(
+    calibration_id: str = typer.Argument(..., help="The calibration's id, or its first 6+ characters"),
+    out: Path = typer.Option(..., "--out", help="Where to write the rebuilt profile JSON"),
+) -> None:
+    """Write the profile a calibration recorded, rebuilt from the ledger: the same file it saved, for a profile that
+    was lost or replaced by a later calibration. The profile cache is left alone."""
+    from rigtune import ledger as lg
+
+    try:
+        profile = lg.rebuild(lg.find(calibration_id, _ledger_root()))
+    except lg.LedgerError as exc:
+        err.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
+    console.print(f"wrote {out}: {lg._model_name(profile.model_id)} {profile.objective}, "
+                  f"{lg._scrub(profile.config.key())}, "
+                  f"{len(profile.calibration_table)} trials", markup=False, highlight=False)
+
+
 if __name__ == "__main__":
     app()

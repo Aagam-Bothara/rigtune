@@ -196,13 +196,16 @@ class Scan:
         return out
 
 
-def read(path: Path, scan: Optional[Scan] = None, calibration_id: Optional[str] = None) -> Iterator[Dict[str, Any]]:
+def read(path: Path, scan: Optional[Scan] = None, calibration_id: Optional[str] = None,
+         contains: Optional[str] = None) -> Iterator[Dict[str, Any]]:
     """The intact records of a ledger file, in file order, one line at a time, so a file of any size is read in
-    constant memory. With `calibration_id`, only that calibration's (lines without it are not even parsed)."""
+    constant memory. With `calibration_id`, only that calibration's; with `contains`, only lines holding that text.
+    Lines without the text asked for are not even parsed, so `scan` then counts only the problems among the rest."""
     scan = scan if scan is not None else Scan()
     if not path.exists():
         return
-    needle = calibration_id.encode("utf-8") if calibration_id else None
+    text = calibration_id or contains
+    needle = text.encode("utf-8") if text else None
     with path.open("rb") as fh:
         for raw in fh:
             line = raw.strip()
@@ -399,3 +402,358 @@ class LedgerRunner:
         for res in results:  # one launch for every point: no duration of its own
             self.ledger.trial(res)
         return results
+
+
+# --------------------------------------------------------------------------- calibrations: show, verify, rebuild
+
+
+class LedgerError(ValueError):
+    """A calibration the ledger cannot give: not found, ambiguous, or without its profile record."""
+
+
+@dataclass
+class Calibration:
+    """One calibration's records: its trials in the order they ran, and its calibration record if it has one."""
+
+    calibration_id: str
+    path: Path
+    trials: List[Dict[str, Any]] = field(default_factory=list)
+    record: Optional[Dict[str, Any]] = None
+    scan: Scan = field(default_factory=Scan)
+
+    def table_records(self) -> List[Dict[str, Any]]:
+        """The trial records that make up the profile's table, in its order. Raises LedgerError for a calibration
+        without its profile record or with any of those trials missing."""
+        if self.record is None:
+            raise LedgerError(f"calibration {self.calibration_id} has no profile record: it failed or was stopped "
+                              f"before its pick ({len(self.trials)} trials recorded)")
+        by_id = {r["id"]: r for r in self.trials}
+        ids = self.record.get("trials") or []
+        missing = sum(1 for i in ids if i not in by_id)
+        if missing:
+            raise LedgerError(f"calibration {self.calibration_id}: {missing} of the {len(ids)} trials in its table "
+                              "are not in the ledger (a write failed, or the line was cut short or changed)"
+                              + (f"; {'; '.join(self.scan.problems())}" if self.scan.problems() else ""))
+        return [by_id[i] for i in ids]
+
+
+def calibrations(path: Path, scan: Optional[Scan] = None) -> List[Calibration]:
+    """Every calibration in one ledger file, in the order each began, read in one pass."""
+    scan = scan if scan is not None else Scan()
+    found: Dict[str, Calibration] = {}
+    for rec in read(path, scan):
+        cid = rec.get("calibration_id")
+        if not isinstance(cid, str):
+            scan.unreadable += 1
+            continue
+        cal = found.setdefault(cid, Calibration(calibration_id=cid, path=path, scan=scan))
+        if rec.get("type") == "calibration":
+            cal.record = rec
+        elif rec.get("type") == "trial":
+            cal.trials.append(rec)
+    for cal in found.values():
+        cal.trials.sort(key=lambda r: r.get("seq", 0))
+    return list(found.values())
+
+
+def find(calibration_id: str, base: Optional[Path] = None) -> Calibration:
+    """The calibration whose id is `calibration_id`, or starts with it (at least 6 characters), looked for in every
+    ledger file under `base`. Raises LedgerError when there is none, or more than one, in whichever files they are."""
+    if len(calibration_id) < 6:
+        raise LedgerError("give at least the first 6 characters of a calibration id")
+    found: Dict[Tuple[str, Path], Calibration] = {}
+    for path in files(base):
+        scan = Scan()
+        for rec in read(path, scan, contains=calibration_id):
+            cid = rec.get("calibration_id")
+            if isinstance(cid, str) and cid.startswith(calibration_id):
+                cal = found.setdefault((cid, path), Calibration(calibration_id=cid, path=path, scan=scan))
+                if rec.get("type") == "calibration":
+                    cal.record = rec
+                elif rec.get("type") == "trial":
+                    cal.trials.append(rec)
+    if len(found) > 1:
+        raise LedgerError(f"{calibration_id} is the start of {len(found)} calibrations' ids; give more of it")
+    if not found:
+        raise LedgerError(f"no calibration {calibration_id} in the ledger")
+    cal = next(iter(found.values()))
+    cal.trials.sort(key=lambda r: r.get("seq", 0))
+    return cal
+
+
+def rebuild(cal: Calibration) -> Profile:
+    """The profile the calibration wrote, from its profile record and its trials: the same profile, field for
+    field, with the same cache path, as long as its records are intact."""
+    data = dict(cal.record or {}).get("profile")
+    table = [r["trial"] for r in cal.table_records()]
+    return Profile.model_validate({**data, "calibration_table": table})
+
+
+def _median_runs(runs: List[TrialResult], objective: str, cons: Any) -> Optional[TrialResult]:
+    """A configuration's representative among its confirm runs, as search.stage_confirm takes it: the middle of its
+    successful runs best first, the worse of the middle two for an even count."""
+    from rigtune.calibrate.objectives import rank
+
+    order = rank(runs, objective, cons)
+    return order[len(order) // 2].result if order else None
+
+
+def rederive_pick(profile: Profile) -> Tuple[Optional[TrialResult], Optional[float], str]:
+    """(the trial the pick comes from, its score, how it was chosen) from the profile's own table, objective and
+    constraints, by the rule the search ends with: objectives.pick over the confirm stage's representative run of
+    each re-measured configuration (with the power stage's runs after it), or over every trial when nothing was
+    re-measured; precisions an accuracy gate refused are never eligible. (None, None, why) when the table alone
+    cannot settle it: a gated calibration chooses among graded configurations, which the table does not show."""
+    from rigtune.calibrate.objectives import pick, rank
+    from rigtune.tradeoff import profile_constraints
+
+    if profile.eval_set is not None:
+        return None, None, "an accuracy-gated calibration chooses among graded configurations; not re-derived"
+    cons = profile_constraints(profile)
+    refused = {(a.backend, a.quant) for a in profile.accuracy if a.admitted is False}
+    eligible = [r for r in profile.calibration_table if (r.config.backend, r.config.quant) not in refused]
+    confirm: Dict[str, List[TrialResult]] = {}
+    for r in eligible:
+        if r.stage == "confirm":
+            confirm.setdefault(r.config.key(), []).append(r)
+    if confirm:
+        pool = [m for runs in confirm.values() if (m := _median_runs(runs, profile.objective, cons)) is not None]
+        pool += [r for r in eligible if r.stage == "power"]
+        how = f"the median re-measured run of each of {len(confirm)} confirmed configurations"
+    else:
+        pool, how = eligible, f"every one of the {len(eligible)} trials"
+    winner, _ = pick(pool, profile.objective, cons)
+    if winner is None:
+        return None, None, "no successful trial to pick from"
+    score = next(x.score for x in rank(pool, profile.objective, cons) if x.result is winner)
+    return winner, score, how
+
+
+OK, DIFFERS, NOT_CHECKED = "ok", "DIFFERS", "NOT CHECKED"
+# `rigtune ledger verify` exits with: 0 every check passed, 1 something differs, 2 nothing to check against (no
+# calibration id, the ledger off, the calibration not found or incomplete), 3 nothing differs but something could not
+# be checked. A check that cannot be made is never reported as passed.
+EXIT_OK, EXIT_DIFFERS, EXIT_NOT_FOUND, EXIT_NOT_CHECKED = 0, 1, 2, 3
+# What --layout (layout.calibrate_layout) and --phases (disagg.calibrate_disaggregated, disagg._fallback) leave as the
+# single-engine calibration had it, so a profile they built must still hold it.
+_KEPT_BY_DERIVED = ("rigtune_version", "hardware_hash", "hardware", "model_id", "model_revision",
+                    "calibration_constraints", "objective", "workload", "workload_spec", "backend", "backend_version",
+                    "prepared", "prepared_all", "launch_env", "llmtrace_version", "created_at", "accuracy", "eval_set",
+                    "calibration_id")
+_DERIVED_OPTIONS = ("layout", "tier")  # options a layout adds to the calibration's (pipeline._resolve_layout)
+
+
+@dataclass
+class Verification:
+    calibration_id: Optional[str]
+    findings: List[Tuple[str, str]] = field(default_factory=list)  # (OK | DIFFERS | NOT_CHECKED, what)
+    found: bool = True  # whether there was a calibration to check against
+
+    @property
+    def ok(self) -> bool:
+        return bool(self.findings) and all(status == OK for status, _ in self.findings)
+
+    @property
+    def exit_code(self) -> int:
+        if not self.found:
+            return EXIT_NOT_FOUND
+        if any(status == DIFFERS for status, _ in self.findings):
+            return EXIT_DIFFERS
+        return EXIT_OK if self.ok else EXIT_NOT_CHECKED
+
+    def add(self, passed: bool, text: str) -> None:
+        self.findings.append((OK if passed else DIFFERS, text))
+
+    def unchecked(self, text: str) -> None:
+        self.findings.append((NOT_CHECKED, text))
+
+    def missing(self, text: str) -> "Verification":
+        self.found = False
+        self.findings.append((DIFFERS, text))
+        return self
+
+
+def _same_trials(mine: List[TrialResult], theirs: List[TrialResult]) -> Optional[int]:
+    """None when `mine` starts with `theirs`, trial for trial; else the 1-based trial where it stops doing so."""
+    for i, b in enumerate(theirs):
+        if i >= len(mine) or mine[i].model_dump_json() != b.model_dump_json():
+            return i + 1
+    return None
+
+
+def verify(profile: Profile, base: Optional[Path] = None) -> Verification:
+    """Check a profile against the ledger: its calibration's records are intact and complete, the profile they
+    rebuild is this one (its table trial for trial), the trial count matches, and the pick re-derived from the
+    table is the profile's configuration. A --layout or --phases profile is checked against the single-engine
+    calibration it was built on, as far as that can be (_verify_derived). What cannot be checked is reported as
+    NOT_CHECKED, never as passed."""
+    out = Verification(calibration_id=profile.calibration_id)
+    if profile.calibration_id is None:
+        return out.missing("the profile names no calibration: it was calibrated without the ledger, before it "
+                           "existed, or its record could not be written")
+    base = base if base is not None else root()
+    if base is None:
+        return out.missing("the ledger is off (RIGTUNE_LEDGER=off)")
+    try:
+        cal = find(profile.calibration_id, base)
+        rebuilt = rebuild(cal)
+    except LedgerError as exc:
+        return out.missing(str(exc))
+    for problem in cal.scan.problems():
+        out.add(True, f"elsewhere in its ledger file: {problem}")
+    out.add(True, f"{len(cal.trials)} trial records, the profile record, every id matches its content")
+    theirs = rebuilt.calibration_table
+    trials = sum(1 for r in theirs if not r.metrics.open_loop)
+    if profile.layout != "single" or profile.phases != "unified" or profile.disagg is not None:
+        _verify_derived(out, profile, rebuilt, cal.calibration_id)
+    else:
+        bad = _same_trials(profile.calibration_table, theirs)
+        if bad is None and len(profile.calibration_table) == len(theirs):
+            out.add(True, f"the table: {len(theirs)} trials, each identical to its record")
+        else:
+            out.add(False, f"the table differs from the ledger's ({len(profile.calibration_table)} trials against "
+                           f"{len(theirs)}), first at trial {bad or len(theirs) + 1}")
+        a, b = profile.model_dump(exclude={"calibration_table"}), rebuilt.model_dump(exclude={"calibration_table"})
+        fields = sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+        out.add(not fields, "the rest of the profile is the one the calibration recorded" if not fields else
+                f"the profile differs from the one the calibration recorded in: {', '.join(fields)}")
+        out.add(trials == profile.calibration_trials,
+                f"trial count {profile.calibration_trials}, and the table has {trials} (the rate check not counted)")
+    winner, score, how = rederive_pick(rebuilt)
+    if winner is None:
+        out.unchecked(f"the calibration's pick: {how}")
+    else:
+        same_pick = winner.config.key() == rebuilt.config.key()
+        out.add(same_pick, f"the calibration's pick re-derived from {how} under {rebuilt.objective}: "
+                           f"{winner.config.key()}, score {score:.6g}"
+                           + ("" if same_pick else f"; its profile serves {rebuilt.config.key()}"))
+    return out
+
+
+def _verify_derived(out: Verification, profile: Profile, rebuilt: Profile, calibration_id: str) -> None:
+    """A --layout or --phases profile: a copy of its calibration's profile with the layout's own trials added to the
+    table and its choice among them (layout.py, disagg.py). The ledger holds only the calibration, so check what
+    must still be the calibration's, and that what the layout chose is among its trials; the choice itself, and the
+    launch arguments built for it, cannot be checked."""
+    theirs, mine = rebuilt.calibration_table, profile.calibration_table
+    out.add(True, f"built on calibration {calibration_id} by --layout or --phases; checked against that calibration")
+    bad = _same_trials(mine, theirs)
+    out.add(bad is None, f"its table starts with the calibration's {len(theirs)} trials, each identical to its record"
+            if bad is None else f"its table does not start with the calibration's {len(theirs)} trials (first "
+            f"differs at trial {bad})")
+    added = len(mine) - len(theirs)
+    want = rebuilt.calibration_trials + added
+    out.add(added >= 0 and profile.calibration_trials == want,
+            f"trial count {profile.calibration_trials}: the calibration's {rebuilt.calibration_trials} and the "
+            f"{max(added, 0)} trials the layout added" + ("" if profile.calibration_trials == want else
+                                                          f" make {want}"))
+    if profile.disagg is not None:
+        served = any(r.disagg is not None and r.disagg.key() == profile.disagg.key() for r in mine)
+        what = profile.disagg.key()
+    else:
+        served = any(r.config.key() == profile.config.key() and r.replicas == profile.replicas and r.disagg is None
+                     for r in mine)
+        what = profile.config.key() + (f" x{profile.replicas}" if profile.replicas > 1 else "")
+    out.add(served, f"what it serves, {what}, is among its trials" if served else
+            f"what it serves, {what}, is not among its trials")
+    a, b = profile.model_dump(include=set(_KEPT_BY_DERIVED)), rebuilt.model_dump(include=set(_KEPT_BY_DERIVED))
+    fields = sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+    strip = {k: v for k, v in profile.options.items() if k not in _DERIVED_OPTIONS}
+    if strip != {k: v for k, v in rebuilt.options.items() if k not in _DERIVED_OPTIONS}:
+        fields.append("options")
+    out.add(not fields, "the fields a layout leaves alone are the calibration's" if not fields else
+            f"it differs from its calibration where a layout changes nothing: {', '.join(fields)}")
+    out.unchecked("the layout's choice among its own trials, and the launch arguments built for it: the ledger does "
+                  "not hold a layout's trials")
+
+
+def _scrub(text: str) -> str:
+    """Paths cut to their last part, as compare --verdict cuts them from what it publishes."""
+    from rigtune.bench.compare import scrub_text
+
+    return scrub_text(text)
+
+
+def _model_name(model_id: str) -> str:
+    from rigtune.bench.compare import name_only
+
+    return name_only(model_id)
+
+
+def calibration_rows(base: Optional[Path] = None, model: Optional[str] = None) -> Tuple[List[List[str]], List[str]]:
+    """One row per calibration in the ledger (oldest first), and notes on what a read skipped: id, model, when it
+    began, objective, trials, failed, skipped, and its pick, or that it has none. Paths are cut out."""
+    from collections import Counter
+
+    rows: List[Tuple[str, str, List[str]]] = []
+    notes: List[str] = []
+    for path in files(base):
+        scan = Scan()
+        label = "a ledger file"  # a file is named by the model in it, cut to a name, never by its file name
+        for cal in calibrations(path, scan):
+            first = cal.trials[0] if cal.trials else (cal.record or {})
+            mid = str((first.get("model") or {}).get("id") or "?")
+            label = _model_name(mid)
+            if model and model.lower() not in mid.lower():
+                continue
+            kinds = Counter(str((r.get("outcome") or {}).get("kind")) for r in cal.trials)
+            skipped = sum(n for k, n in kinds.items() if k.startswith("skipped_"))
+            failed = sum(n for k, n in kinds.items() if k != "ok") - skipped
+            objective = str((first.get("objective") or {}).get("name") or "?")
+            pick = "no pick (failed or stopped)"
+            if cal.record is not None:
+                try:
+                    pick = _scrub(Profile.model_validate({**cal.record["profile"], "calibration_table": []}).config.key())
+                except Exception:
+                    pick = "unreadable profile record"
+            when = str(first.get("recorded_at") or "")
+            rows.append((when, cal.calibration_id, [cal.calibration_id[:12], _model_name(mid), when, objective,
+                                                    str(len(cal.trials) - skipped), str(failed), str(skipped), pick]))
+        notes += [f"the ledger of {label} (hardware {path.parent.name[:8]}): {p}" for p in scan.problems()]
+    return [r for _, _, r in sorted(rows, key=lambda x: (x[0], x[1]))], notes
+
+
+def trial_rows(cal: Calibration) -> List[List[str]]:
+    """One row per trial of a calibration, in the order they ran: seq, stage, configuration, outcome, tok/s, p95 TTFT,
+    the objective's score among the calibration's trials (lower is better), whether it is the pick's configuration,
+    and the first line of its error. Paths are cut out."""
+    from rigtune.calibrate.objectives import rank
+    from rigtune.tradeoff import profile_constraints
+
+    results: List[Optional[TrialResult]] = []
+    for r in cal.trials:
+        try:
+            results.append(TrialResult.model_validate(r["trial"]))
+        except Exception:
+            results.append(None)
+    scores: Dict[int, float] = {}
+    pick = None
+    if cal.record is not None:
+        try:
+            profile = Profile.model_validate({**cal.record["profile"], "calibration_table": []})
+            pick = profile.config.key()
+            ok = [x for x in results if x is not None]
+            scores = {id(x.result): x.score for x in rank(ok, profile.objective, profile_constraints(profile))}
+        except Exception:
+            pass
+
+    def num(x: Optional[float], nd: int = 1) -> str:
+        return "-" if x is None else f"{x:.{nd}f}"
+
+    rows = []
+    for rec, res in zip(cal.trials, results):
+        error = ((res.error if res is not None else None) or "").strip().splitlines()
+        rows.append([str(rec.get("seq")), str(rec.get("stage")), _scrub(str(rec.get("config_key"))),
+                     str((rec.get("outcome") or {}).get("kind")),
+                     num(res.metrics.tok_s) if res is not None and res.ok else "-",
+                     num(res.metrics.ttft_p95_ms, 0) if res is not None and res.ok else "-",
+                     f"{scores[id(res)]:.4g}" if res is not None and id(res) in scores else "-",
+                     "pick" if pick is not None and rec.get("config_key") == pick else "",
+                     _scrub(error[0])[:80] if error else ""])
+    return rows
+
+
+def sizes(base: Optional[Path] = None) -> Tuple[int, int]:
+    """(ledger files, bytes in them)."""
+    found = files(base)
+    return len(found), sum(p.stat().st_size for p in found)
