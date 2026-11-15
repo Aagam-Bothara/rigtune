@@ -678,6 +678,9 @@ def probe(
         data["hardware_hash"] = hardware_hash(hw)
         if engines or reprobe:
             data["engine_facts"] = {name: f.model_dump(mode="json") if f else None for name, f in facts.items()}
+            data["feature_checks"] = {name: {check: {"probe": _plain(p), "source": _plain(s)}
+                                             for check, (p, s) in report.items()}
+                                      for name, report in _feature_reports().items()}
         console.print_json(json.dumps(data))
         return
     console.print(f"[bold]hardware hash[/]: {hardware_hash(hw)}   [dim]{hw.os}, python {hw.python}[/]")
@@ -698,6 +701,7 @@ def probe(
     _print_checked_engines(hw)
     if engines or reprobe:
         _print_engine_facts(facts)
+        _print_feature_reports(_feature_reports())
 
 
 def _engine_facts(refresh: bool) -> dict:
@@ -707,6 +711,31 @@ def _engine_facts(refresh: bool) -> dict:
 
     reg = registry()
     return {name: reg[name].facts(refresh=refresh) for name in ("vllm", "sglang")}
+
+
+def _feature_reports() -> dict:
+    """Each engine's feature checks, answered by the probe and by the source (backends' feature_report)."""
+    import rigtune.backends.sglang as sg
+    import rigtune.backends.vllm as vl
+
+    return {"vllm": vl.feature_report(), "sglang": sg.feature_report()}
+
+
+def _plain(value):
+    return sorted(value) if isinstance(value, (set, frozenset)) else value
+
+
+def _print_feature_reports(reports: dict) -> None:
+    t = Table(title="Feature checks: the probe's answer, the source's, and which one rigtune uses",
+              title_justify="left")
+    for col in ("engine", "check", "probe", "source", "used"):
+        t.add_column(col)
+    for name, report in reports.items():
+        for check, (probed, source) in report.items():
+            used = "source (no probe answer)" if probed is None else (
+                "probe" if _plain(probed) == _plain(source) else "probe; [yellow]the source disagrees[/]")
+            t.add_row(name, check, "-" if probed is None else str(_plain(probed)), str(_plain(source)), used)
+    console.print(t)
 
 
 def _print_engine_facts(facts: dict) -> None:

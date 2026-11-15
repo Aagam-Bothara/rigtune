@@ -286,6 +286,7 @@ def test_probe_engines_prints_each_engines_answers(monkeypatch):
                "sglang": None}
     monkeypatch.setattr("rigtune.hardware.probe", lambda: make_hw("rtx4090"))
     monkeypatch.setattr(cli, "_engine_facts", lambda refresh: answers)
+    monkeypatch.setattr(cli, "_feature_reports", lambda: {})
     out = CliRunner().invoke(cli.app, ["probe", "--engines"], env={"COLUMNS": "300"})
     assert out.exit_code == 0, out.output
     assert "0.33.0" in out.output and "mtp, ngram" in out.output and "features: ImportError: x" in out.output

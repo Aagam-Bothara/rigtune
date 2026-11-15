@@ -169,6 +169,8 @@ remove the wait.
 
 A profile is keyed by `(hardware_hash, model, objective)`. The hash covers the *shape* of the hardware (GPU model, compute capability, total VRAM, CPU model, core counts, SIMD flags, total RAM) and not free memory, so a busy machine does not invalidate its own cache. The profile stores the backend version; a version change invalidates it. It also stores the full calibration table, workload description and llmtrace version, so a decision can be re-derived offline. A recalibration replaces the profile, so every trial is also appended, as it ends, to a trial ledger under rigtune's home (`rigtune/ledger.py`): one JSON line per trial, failed and budget-skipped trials included, and a last line holding the profile and the ids of the trials in its table. The ledger is append-only and only written to, never read, by calibration.
 
+**What an engine offers.** Which flags, KV-cache types and speculative methods an installed engine takes is asked of the engine itself: a stand-alone script runs once per install in the engine's own Python and reports its server parser's options, its model registry and its speculative config (`rigtune/backends/facts.py`). The feature checks take those answers first and read the engine's source only where the probe gave none, so a probe that cannot run changes nothing. Measured failures and version gates stay hand-written: a probe says what exists, not what works ([why](decisions.md#why-ask-the-engine-instead-of-reading-its-source)).
+
 ## 8. Limitations
 
 - One GPU. Tensor parallel is a stage the search does not have yet.

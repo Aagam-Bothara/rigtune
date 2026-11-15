@@ -11,7 +11,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from rigtune import speculative
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
@@ -469,6 +469,71 @@ def _offload_features() -> frozenset:
     return offload_features_in(sources)
 
 
+def offload_features_from(probed: Optional[dict]) -> Optional[frozenset]:
+    """The OFFLOAD_FEATURES the engine probe's `features` answer shows (None when it gave none), by the rules
+    offload_features_in applies to the source: "cpu" needs the connector and offload_prompt_only, the others need
+    "cpu"."""
+    if probed is None:
+        return None
+    if not (probed.get("offloading_connector") and probed.get("offload_prompt_only")):
+        return frozenset()
+    return frozenset({"cpu"} | ({"hma"} if probed.get("supports_hma") else set())
+                     | ({"shm"} if probed.get("shm_region") else set()))
+
+
+def probe_answer(read: Callable[[Any], Any]) -> Any:
+    """`read` applied to what the vLLM that will run told the engine probe (rigtune.backends.facts), or None when it
+    was not asked or did not answer that question."""
+    try:
+        facts = _engine_facts()
+        return None if facts is None else read(facts)
+    except Exception as exc:  # never a reason to fail: the source check answers instead
+        logger.debug("no engine probe answer: %s", exc)
+        return None
+
+
+# Each feature check rigtune makes of vLLM: (the engine probe's answer, None when it has none; the check that reads
+# vLLM's source, which answers otherwise). The probe asks the parser `vllm serve` builds, wherever the release defines
+# its arguments: the source checks look in the files one release kept them in, and found no
+# --enable-prompt-tokens-details on 0.33 until told where 0.33 moved it.
+# The source checks are looked up when asked, so a test that replaces one replaces it here too.
+FEATURE_CHECKS: Dict[str, Tuple[Callable[[Any], Any], Callable[[], Any]]] = {
+    "attention_backend": (lambda f: f.has_flag("--attention-backend"), lambda: _attention_backend_flag()),
+    "prompt_tokens_details": (lambda f: f.has_flag("--enable-prompt-tokens-details"),
+                              lambda: _prompt_tokens_details_flag()),
+    "language_model_only": (lambda f: f.has_flag("--language-model-only"), lambda: _language_model_only_flag()),
+    "offload": (lambda f: offload_features_from(f.features), lambda: _offload_features()),
+}
+
+
+def feature_answer(name: str) -> Tuple[Any, str]:
+    """(a feature check's answer, where it came from): the engine probe's (FEATURE_CHECKS), else the source's. The
+    second part is for a refusal's text: "(read from its source)" as before the probe, or what the probe asked."""
+    probed, from_source = FEATURE_CHECKS[name]
+    answer = probe_answer(probed)
+    if answer is None:
+        return from_source(), "(read from its source)"
+    return answer, "(asked in its own Python)"
+
+
+def feature(name: str) -> Any:
+    """A feature check's answer (FEATURE_CHECKS): the engine probe's, else the source's."""
+    return feature_answer(name)[0]
+
+
+def feature_report() -> Dict[str, Tuple[Any, Any]]:
+    """Each feature check's (probe answer or None, source answer), for `rigtune probe --engines`: where both answered
+    and they differ, one of the two is wrong."""
+    return {name: (probe_answer(probed), from_source()) for name, (probed, from_source) in FEATURE_CHECKS.items()}
+
+
+def _probe_lists(field: str, value: str) -> bool:
+    """False only when the engine probe answered `field` (spec_methods, kv_dtypes) without `value`: a version gate that
+    holds still needs the engine to list what it gates."""
+    answer = probe_answer(lambda f: None if getattr(f, field) is None else value in getattr(f, field))
+    return answer is not False
+
+
 # Which architectures the vLLM that will run can serve with their own MTP head, read from its source (importing vLLM
 # costs seconds). config/speculative.py SpeculativeConfig.hf_config_override rewrites a draft of each model type below
 # to "qwen3_5_mtp" (v0.29.0 lines 882-899, v0.33.0 987-1007), and model_executor/models/qwen3_5_mtp.py defines the
@@ -616,7 +681,7 @@ class VllmBackend(BaseBackend):
             out.append("fp8")
         elif cc >= (8, 0) and importlib.util.find_spec("flashinfer") is not None:  # Ampere, via FlashInfer
             out.append(AMPERE_FP8_KV)
-        if cc >= (8, 9) and _vllm_version() >= INT8_KV_FROM:
+        if cc >= (8, 9) and _vllm_version() >= INT8_KV_FROM and _probe_lists("kv_dtypes", INT8_KV):
             out.append(INT8_KV)
         return out
 
@@ -787,7 +852,7 @@ class VllmBackend(BaseBackend):
         attention = cfg.extra.get("attention_backend") or KV_ATTENTION.get(cfg.kv_dtype)
         if attention:
             env["VLLM_ATTENTION_BACKEND"] = str(attention)  # vLLM 0.11
-            if _attention_backend_flag():
+            if feature("attention_backend"):
                 args += ["--attention-backend", str(attention)]
         # PCIe-only GPUs: peer-to-peer can hang at start-up inside containers. Measured on a pair of
         # A40s: NCCL's P2P path hangs at init, and with only that disabled the engine's custom
@@ -795,7 +860,7 @@ class VllmBackend(BaseBackend):
         if cfg.tp > 1 and nvlink_between(list(range(cfg.tp))) is False:
             env["NCCL_P2P_DISABLE"] = "1"
             args += ["--disable-custom-all-reduce"]
-        if self.report_reuse and _prompt_tokens_details_flag():
+        if self.report_reuse and feature("prompt_tokens_details"):
             args += ["--enable-prompt-tokens-details"]
         if cfg.kv_tier is not None:
             args += ["--kv-transfer-config", json.dumps(vllm_tier_config(cfg, port))]
@@ -807,17 +872,17 @@ class VllmBackend(BaseBackend):
         return arctic_plugin_note()
 
     def text_only_refusal(self) -> Optional[str]:
-        if not _language_model_only_flag():
-            return "the vLLM that would run has no --language-model-only (read from its source)"
+        has, origin = feature_answer("language_model_only")
+        if not has:
+            return f"the vLLM that would run has no --language-model-only {origin}"
         return None
 
     # ---- KV-cache tier
 
     def tier_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
-        features = _offload_features()
+        features, origin = feature_answer("offload")
         if "cpu" not in features:
-            return ("the vLLM that would run has no OffloadingConnector with offload_prompt_only (read from "
-                    "its source)")
+            return f"the vLLM that would run has no OffloadingConnector with offload_prompt_only {origin}"
         if cfg.tp > 1:
             return "not offered with tensor parallelism (not read for it, and never run)"
         if "expandable_segments:True" in os.environ.get("PYTORCH_CUDA_ALLOC_CONF", ""):
@@ -840,7 +905,7 @@ class VllmBackend(BaseBackend):
         return VLLM_NO_DISK
 
     def tier_host_cap(self) -> Optional[int]:
-        return _shm_free() if "shm" in _offload_features() else None
+        return _shm_free() if "shm" in feature("offload") else None
 
     # Chunked-prefill token budgets to try. Small budgets interleave prefill with decode and protect
     # per-token latency; large ones finish long prompts in fewer steps and cut time to first token.

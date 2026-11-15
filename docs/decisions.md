@@ -337,6 +337,25 @@ laid out, so the A/B would compare two cache layouts as well as a tier), and a s
 its current PyPI release depends on a CUDA 13 build of cupy. Each of those is a confound or a failure mode the
 native tiers do not have, so LMCache is not searched.
 
+## Why ask the engine instead of reading its source?
+
+rigtune's feature checks read an engine's source text for a name, in the files where one release keeps it,
+because importing vLLM costs seconds and SGLang usually lives in another environment. That broke on the next
+release: vLLM 0.33 moved its server arguments to `entrypoints/common/cli_args.py`, and the check for
+`--enable-prompt-tokens-details` answered no on 0.33 until it was told the new path, so session-file
+calibrations launched without per-reply cached tokens. SGLang 0.5.23 moved its argument definitions to
+`arg_groups/fields/`, and its checks still answer only because a tuple of field names elsewhere happens to
+list them. The parser an engine builds for its own server, its model registry and its speculative config say
+the same things wherever the release keeps them.
+
+So rigtune asks the engine's own Python, once per install, with no GPU visible and a 120-second limit, and
+keeps the answers. The probe comes first and the source checks stay as the fallback, so a probe that cannot
+run costs a note, never a crash or a changed pick. What the probe cannot do is say that something works: a
+flag can exist and mean something else (SGLang 0.5.23 changed a 24 GB card's default prefill chunk behind an
+unchanged flag). Measured failures, version gates for what was checked on which release, the memory formulas
+and the tables of second models stay hand-written; a probe can only take a method away, never offer one they
+hold back. Whether a release behaves as rigtune plans is for a conformance run on a GPU to say.
+
 ## Why not Bayesian optimisation?
 
 At roughly 30 trials over a space this shape, the published results for SLO-aware Bayesian tuners do not separate

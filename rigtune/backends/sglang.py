@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import FrozenSet, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
 from rigtune import kvtier, speculative
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
@@ -388,6 +388,83 @@ def _tier_details_flag() -> bool:
     return TIER_DETAILS_FIELD in protocol
 
 
+# rigtune's spec kinds and the SpeculativeAlgorithm names each needs (speculative/spec_info.py; members at v0.5.19 and
+# v0.5.23: DFLASH, DSPARK, EAGLE, EAGLE3, FROZEN_KV_MTP, STANDALONE, NGRAM, NONE, and UNO at v0.5.23). The same gates as
+# spec_methods_in: nothing before STANDALONE, and a second model only where DSPARK marks a release whose second-model
+# behaviour was read.
+SGLANG_ALGORITHMS = {"ngram": (SGLANG_SPEC_FROM, "NGRAM"),
+                     "eagle3": (SGLANG_SPEC_FROM, "EAGLE3", SGLANG_SECOND_MODEL_MARKER),
+                     "draft": (SGLANG_SPEC_FROM, SGLANG_SECOND_MODEL_MARKER)}
+
+
+def spec_methods_from(algorithms: Optional[List[str]]) -> Optional[FrozenSet[str]]:
+    """rigtune's spec kinds the engine probe's list of SGLang's algorithms shows; None when it gave none."""
+    if algorithms is None:
+        return None
+    have = set(algorithms)
+    return frozenset(kind for kind, needs in SGLANG_ALGORITHMS.items() if have.issuperset(needs))
+
+
+def hicache_features_from(flags: Optional[dict], env_vars: Optional[List[str]]) -> Optional[FrozenSet[str]]:
+    """hicache_features_in's answer from the engine probe's flags and environment variables; None unless it gave
+    both."""
+    if flags is None or env_vars is None:
+        return None
+    out = set()
+    if "--enable-hierarchical-cache" in flags and "--hicache-size" in flags:
+        out.add("hicache")
+        if "--hicache-storage-backend" in flags and FILE_DIR_VAR in env_vars:
+            out.add("file")
+            if FILE_CAP_VAR in env_vars:
+                out.add("file_cap")
+    return frozenset(out)
+
+
+def probe_answer(read: Callable[[Any], Any]) -> Any:
+    """`read` applied to what the SGLang that would be launched told the engine probe (rigtune.backends.facts), or
+    None when it was not asked or did not answer that question."""
+    try:
+        facts = _engine_facts()
+        return None if facts is None else read(facts)
+    except Exception as exc:  # never a reason to fail: the source check answers instead
+        logger.debug("no engine probe answer: %s", exc)
+        return None
+
+
+# Each feature check rigtune makes of SGLang: (the engine probe's answer, None when it has none; the check that reads
+# SGLang's source, which answers otherwise). SGLang 0.5.23 moved its argument definitions to srt/arg_groups/fields/,
+# which the source checks do not read: they still answer only because arg_groups/field_order.py lists the names. The
+# probe asks the parser `sglang serve` builds.
+# The source checks are looked up when asked, so a test that replaces one replaces it here too.
+FEATURE_CHECKS: Dict[str, Tuple[Callable[[Any], Any], Callable[[], Any]]] = {
+    "spec_methods": (lambda f: spec_methods_from(f.spec_methods), lambda: sglang_spec_methods()),
+    "cache_report": (lambda f: f.has_flag("--enable-cache-report"), lambda: _cache_report_flag()),
+    "hicache": (lambda f: hicache_features_from(f.flags, f.env_vars), lambda: _hicache_features()),
+    "tier_details": (lambda f: None if f.request_fields is None else TIER_DETAILS_FIELD in f.request_fields,
+                     lambda: _tier_details_flag()),
+}
+
+
+def feature_answer(name: str) -> Tuple[Any, str]:
+    """(a feature check's answer, where it came from): the engine probe's (FEATURE_CHECKS), else the source's."""
+    probed, from_source = FEATURE_CHECKS[name]
+    answer = probe_answer(probed)
+    if answer is None:
+        return from_source(), "(read from its source)"
+    return answer, "(asked in its own Python)"
+
+
+def feature(name: str) -> Any:
+    """A feature check's answer (FEATURE_CHECKS): the engine probe's, else the source's."""
+    return feature_answer(name)[0]
+
+
+def feature_report() -> Dict[str, Tuple[Any, Any]]:
+    """Each feature check's (probe answer or None, source answer), for `rigtune probe --engines`: where both answered
+    and they differ, one of the two is wrong."""
+    return {name: (probe_answer(probed), from_source()) for name, (probed, from_source) in FEATURE_CHECKS.items()}
+
+
 def sglang_tier_launch(cfg: Config, port: int) -> Tuple[List[str], dict]:
     """Arguments and environment for cfg.kv_tier: a host pool of the tier's GiB in SGLang's decimal GB
     (rounded down), and for "+disk" the file backend in this engine's own directory (kvtier.trial_dir), always
@@ -457,7 +534,7 @@ class SglangBackend(BaseBackend):
         SGLang could load, with their sizes, since the memory left outside the reservation depends on them
         (spec_fraction). One whose size is unknown is not offered. Returns notes for the profile when the Hub could
         not be asked."""
-        methods = sglang_spec_methods()
+        methods = feature("spec_methods")
         notes: List[str] = []
         if "eagle3" in methods:
             try:
@@ -570,7 +647,7 @@ class SglangBackend(BaseBackend):
             env["NCCL_P2P_DISABLE"] = "1"
             args += ["--disable-custom-all-reduce"]
         # SGLang's own counter, sglang:cached_tokens_total, needs --enable-metrics too, so only the per-reply count.
-        if self.report_reuse and _cache_report_flag():
+        if self.report_reuse and feature("cache_report"):
             args += ["--enable-cache-report"]
         if cfg.kv_tier is not None:
             tier_args, tier_env = sglang_tier_launch(cfg, port)
@@ -581,9 +658,9 @@ class SglangBackend(BaseBackend):
     # ---- KV-cache tier
 
     def tier_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
-        if "hicache" not in _hicache_features():
-            return ("the SGLang that would run has no --enable-hierarchical-cache with --hicache-size (read "
-                    "from its source)")
+        features, origin = feature_answer("hicache")
+        if "hicache" not in features:
+            return f"the SGLang that would run has no --enable-hierarchical-cache with --hicache-size {origin}"
         if cfg.prefix_cache is False:
             return "SGLang's hierarchical cache refuses --disable-radix-cache"
         if cfg.tp > 1:
@@ -591,7 +668,7 @@ class SglangBackend(BaseBackend):
         return None
 
     def tier_disk_refusal(self) -> Optional[str]:
-        features = _hicache_features()
+        features = feature("hicache")
         if "file" not in features:
             return "the SGLang that would run has no file backend with a directory rigtune can set"
         if "file_cap" not in features:
@@ -602,7 +679,7 @@ class SglangBackend(BaseBackend):
         return max(HOST_TIER_RESERVE, SGLANG_HOST_RESERVE)
 
     def tier_details_field(self) -> Optional[str]:
-        return TIER_DETAILS_FIELD if _tier_details_flag() else None
+        return TIER_DETAILS_FIELD if feature("tier_details") else None
 
     def tier_host_need(self, cfg: Config, host_bytes: int) -> int:
         """With an EAGLE3 head, a draft model or the checkpoint's own MTP head SGLang adds a host pool for the draft's
@@ -651,7 +728,7 @@ class SglangBackend(BaseBackend):
         lowered it, so the variants of a draft-model leader are not measured at its 0.79."""
         if not all_methods:
             return []
-        methods = sglang_spec_methods()
+        methods = feature("spec_methods")
         specs: List[str] = []
         if "ngram" in methods:
             specs.append(speculative.ngram(speculative.NGRAM_TOKENS_SGLANG))

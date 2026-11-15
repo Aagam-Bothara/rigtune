@@ -100,9 +100,17 @@ def prepared(model: str, engine: str, revision: Optional[str] = None):
     return pm
 
 
+def facts_fixture(engine: str, version: str):
+    """The engine probe's answers for a release, hand-built from its source (tests/fixtures/facts/)."""
+    from rigtune.backends.facts import EngineFacts
+
+    return EngineFacts.model_validate_json((FIXTURES / "facts" / f"{engine}-{version}.json").read_text(encoding="utf-8"))
+
+
 @contextlib.contextmanager
-def release(engine: str, version: str, tmp: Path) -> Iterator[None]:
-    """rigtune as it sees `engine` `version` installed, with nothing of this machine's state."""
+def release(engine: str, version: str, tmp: Path, facts: Any = None) -> Iterator[None]:
+    """rigtune as it sees `engine` `version` installed, with nothing of this machine's state. With `facts`
+    (EngineFacts), the engine answers the probe with them, and its source is read only for what they leave out."""
     import rigtune.backends.sglang as sg
     import rigtune.backends.vllm as vl
 
@@ -119,6 +127,8 @@ def release(engine: str, version: str, tmp: Path) -> Iterator[None]:
         # Two PCIe cards: the tensor-parallel case shows the peer-to-peer workaround.
         stack.enter_context(mock.patch.object(vl, "nvlink_between", lambda gpus: False))
         stack.enter_context(mock.patch.object(sg, "nvlink_between", lambda gpus: False))
+        if facts is not None:
+            stack.enter_context(mock.patch.object(vl if engine == "vllm" else sg, "_engine_facts", lambda: facts))
         yield
 
 
@@ -189,12 +199,12 @@ def _model(spec: str, engine: str):
     return prepared(name, engine, revision or None)
 
 
-def launches(engine: str, version: str, tmp: Path) -> Dict[str, Any]:
+def launches(engine: str, version: str, tmp: Path, facts: Any = None) -> Dict[str, Any]:
     from rigtune.backends import registry
     from rigtune.models import Config
 
     out: Dict[str, Any] = {}
-    with release(engine, version, tmp):
+    with release(engine, version, tmp, facts):
         plain, reporting = registry()[engine], registry(report_reuse=True)[engine]
         card = hw("rtx4090", engine, version)
         for name, model, fields, reuse in launch_cases(engine):
@@ -225,12 +235,12 @@ def _grouped(keys: List[str]) -> Dict[str, Any]:
             "sha256": hashlib.sha256("\n".join(keys).encode()).hexdigest()}
 
 
-def candidates(engine: str, version: str, tmp: Path) -> Dict[str, Any]:
+def candidates(engine: str, version: str, tmp: Path, facts: Any = None) -> Dict[str, Any]:
     from rigtune.backends import registry
     from rigtune.models import ModelSpec
 
     out: Dict[str, Any] = {}
-    with release(engine, version, tmp):
+    with release(engine, version, tmp, facts):
         be = registry()[engine]
         be_mod = sys.modules[type(be).__module__]
         for card in sorted(CARDS):
@@ -275,13 +285,13 @@ def plan_grid(be, h, pm) -> List[Any]:
     return [grid[k] for k in sorted(grid)]
 
 
-def plans(engine: str, version: str, tmp: Path) -> Dict[str, Any]:
+def plans(engine: str, version: str, tmp: Path, facts: Any = None) -> Dict[str, Any]:
     """[key, weights, KV cache, total, budget, feasible] for every configuration of plan_grid."""
     from rigtune.backends import registry
     from rigtune.memory import estimate
 
     out: Dict[str, Any] = {}
-    with release(engine, version, tmp):
+    with release(engine, version, tmp, facts):
         be = registry()[engine]
         for card in sorted(CARDS):
             h = hw(card, engine, version)

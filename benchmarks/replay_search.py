@@ -188,7 +188,8 @@ def recorded_environment(profile: Profile) -> Iterator[None]:
         return real_find_spec(name, *args, **kwargs)
 
     with tempfile.TemporaryDirectory() as home, contextlib.ExitStack() as stack:
-        stack.enter_context(mock.patch.dict(os.environ, {"RIGTUNE_HOME": home}))
+        # The engines installed here, if any, are not the recorded ones: none is asked what it offers.
+        stack.enter_context(mock.patch.dict(os.environ, {"RIGTUNE_HOME": home, "RIGTUNE_ENGINE_PROBE": "off"}))
         stack.enter_context(mock.patch.object(importlib.util, "find_spec", find_spec))
         stack.enter_context(mock.patch.object(vllm_backend, "_vllm_version", lambda: _version_tuple(version)))
         stack.enter_context(mock.patch.object(speculative, "_vllm_version", lambda: version))

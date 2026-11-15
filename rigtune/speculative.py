@@ -249,24 +249,36 @@ def _vllm_at_least(minimum: Tuple[int, int], version: Optional[str] = None) -> b
     return bool(m) and (int(m.group(1)), int(m.group(2))) >= minimum
 
 
+def _vllm_lists(method: str, version: Optional[str]) -> bool:
+    """For the installed vLLM (no `version` given): False only when it answered the engine probe and its
+    SpeculativeMethod does not list `method`. The version gates above stay: the probe can take a method away, never
+    offer one a gate holds back, since a gate records which releases were checked or measured, which a Literal cannot
+    say."""
+    if version is not None:
+        return True
+    from rigtune.backends.vllm import _probe_lists
+
+    return _probe_lists("spec_methods", method)
+
+
 def vllm_supports_draft(version: Optional[str] = None) -> bool:
     """Whether the installed (or given) vLLM accepts a draft model for speculative decoding."""
-    return _vllm_at_least(VLLM_DRAFT_MIN, version)
+    return _vllm_at_least(VLLM_DRAFT_MIN, version) and _vllm_lists("draft_model", version)
 
 
 def vllm_supports_ngram_gpu(version: Optional[str] = None) -> bool:
     """Whether the installed (or given) vLLM runs n-gram lookup on the GPU."""
-    return _vllm_at_least(VLLM_NGRAM_GPU_MIN, version)
+    return _vllm_at_least(VLLM_NGRAM_GPU_MIN, version) and _vllm_lists("ngram_gpu", version)
 
 
 def vllm_supports_eagle3(version: Optional[str] = None) -> bool:
     """Whether the installed (or given) vLLM is one checked to run an EAGLE3 head."""
-    return _vllm_at_least(VLLM_EAGLE3_MIN, version)
+    return _vllm_at_least(VLLM_EAGLE3_MIN, version) and _vllm_lists("eagle3", version)
 
 
 def vllm_suffix_release(version: Optional[str] = None) -> bool:
     """Whether the installed (or given) vLLM is a release with suffix decoding."""
-    return _vllm_at_least(VLLM_SUFFIX_MIN, version)
+    return _vllm_at_least(VLLM_SUFFIX_MIN, version) and _vllm_lists("suffix", version)
 
 
 def vllm_suffix_refusal() -> Optional[str]:
