@@ -141,13 +141,18 @@ def test_over_http_a_chained_request_is_the_next_to_arrive_once_its_predecessor_
     drive(app, wl, c)
     events = app.state.events
     arrived = [key for kind, key in events if kind == "arrive"]
-    checked = 0
+    checked, in_flight = 0, 0
     for i, (kind, (sid, k)) in enumerate(events):
+        in_flight += 1 if kind == "arrive" else -1
         if kind != "done" or k not in (3, 4) or (sid, k + 1) not in arrived:  # requests 3 and 4 chain to the next
             continue
+        # Slots already free but not refilled when this answer finished: a busy client may still be sending the
+        # requests that fill them, so that many unchained arrivals may land first. Unloaded, there are none.
+        owed = c - 1 - in_flight
         after = [key for what, key in events[i + 1:] if what == "arrive"]
         between = after[:after.index((sid, k + 1))]
-        assert all(n in (4, 5) for _, n in between), (sid, k, after[:3])  # requests 4 and 5 are the chained ones
+        unchained = [key for key in between if key[1] not in (4, 5)]  # requests 4 and 5 are the chained ones
+        assert len(unchained) <= owed, (sid, k, owed, after[:3])
         checked += 1
     assert checked >= 4
 
