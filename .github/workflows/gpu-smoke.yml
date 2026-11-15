@@ -1,0 +1,56 @@
+name: GPU smoke (manual)
+
+# Deliberate dispatch only: never execute untrusted pull requests on a GPU runner.
+on:
+  workflow_dispatch:
+    inputs:
+      backend:
+        type: choice
+        options: [vllm, sglang]
+        default: vllm
+        description: Engine already installed in the runner environment
+      model:
+        type: string
+        default: Qwen/Qwen2.5-0.5B-Instruct
+        description: Public model to launch and measure
+      features:
+        type: choice
+        options: [base, strategies]
+        default: base
+        description: Base HTTP/streaming smoke or the existing strategy sweep
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, linux, x64, rigtune-gpu]
+    timeout-minutes: 60
+    env:
+      SMOKE_BACKEND: ${{ inputs.backend }}
+      SMOKE_MODEL: ${{ inputs.model }}
+      SMOKE_FEATURES: ${{ inputs.features }}
+      RIGTUNE_HOME: ${{ runner.temp }}/rigtune-gpu-smoke
+    steps:
+      - uses: actions/checkout@v5
+      # The runner owns its CUDA/torch/engine combination; do not silently upgrade it in this workflow.
+      - run: nvidia-smi
+      - run: python -m pip install -e .
+      - name: Record hardware and actual engine library versions
+        run: |
+          mkdir -p gpu-artifacts
+          rigtune probe --json > gpu-artifacts/hardware.json
+      - name: Launch and measure real engines
+        shell: bash
+        run: |
+          set -o pipefail
+          if [ "$SMOKE_FEATURES" = base ]; then
+            python -m benchmarks.smoke_features --model "$SMOKE_MODEL" --backends "$SMOKE_BACKEND" --only base --log-dir gpu-artifacts/logs | tee gpu-artifacts/smoke.txt
+          else
+            python -m benchmarks.smoke_features --model "$SMOKE_MODEL" --backends "$SMOKE_BACKEND" --log-dir gpu-artifacts/logs | tee gpu-artifacts/smoke.txt
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpu-smoke-${{ inputs.backend }}-${{ github.run_id }}
+          path: gpu-artifacts/
