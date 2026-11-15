@@ -1,0 +1,2552 @@
+{
+ "balanced/default": {
+  "idle_tail_s": 0.0,
+  "notes": [
+   "re-measured the best 2 configurations and chose on the fresh runs: the pick measured 330 tok/s in the search and 333 re-measured",
+   "winner scored at concurrency 8: 333.4 tok/s, TTFT 150 ms (p95 220), 0.629 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/bf16/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64r"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64r"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90/kvfp8",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90/kvfp8",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b64/gmu0.90/kvfp8"
+ },
+ "balanced/median-floor": {
+  "idle_tail_s": 0.0,
+  "notes": [
+   "re-measured the best 2 configurations and chose on the fresh runs: the pick measured 330 tok/s in the search and 333 re-measured",
+   "winner scored at concurrency 8: 333.4 tok/s, TTFT 150 ms (p95 220), 0.629 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8r"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8r"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8r",
+     "1r"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8r",
+     "1r"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/bf16/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64r",
+     "32r",
+     "8r"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1r"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64r",
+     "32r",
+     "8r"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1r"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90/kvfp8",
+    "levels": [
+     "64",
+     "32",
+     "8r"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90/kvfp8",
+    "levels": [
+     "64",
+     "32",
+     "8r"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8r"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b64/gmu0.90/kvfp8"
+ },
+ "balanced/strict": {
+  "idle_tail_s": 0.0,
+  "notes": [
+   "re-measured the best 1 configuration and chose on the fresh runs: the pick measured 62 tok/s in the search and 63 re-measured",
+   "strict constraints: no measured configuration met the balanced constraints (the closest missed by 89.4); refusing to serve the least-violating one"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/bf16/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90/kvfp8",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90/kvfp8",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": null
+ },
+ "balanced/tpot": {
+  "idle_tail_s": 0.0,
+  "notes": [
+   "re-measured the best 2 configurations and chose on the fresh runs: the pick measured 330 tok/s in the search and 333 re-measured",
+   "winner scored at concurrency 8: 333.4 tok/s, TTFT 150 ms (p95 220), 0.629 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/bf16/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64r",
+     "32r",
+     "8"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64r",
+     "32r",
+     "8"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90/kvfp8",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90/kvfp8",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b64/gmu0.90/kvfp8"
+ },
+ "efficiency/default": {
+  "idle_tail_s": 3.0,
+  "notes": [
+   "re-measured the best 3 configurations and chose on the fresh runs: the pick measured 660 tok/s in the search and 667 re-measured",
+   "winner scored at concurrency 64: 666.8 tok/s, TTFT 468 ms (p95 689), 0.536 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/bf16/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8"
+ },
+ "efficiency/median-floor": {
+  "idle_tail_s": 3.0,
+  "notes": [
+   "re-measured the best 2 configurations and chose on the fresh runs: the pick measured 660 tok/s in the search and 667 re-measured",
+   "winner scored at concurrency 64: 666.8 tok/s, TTFT 468 ms (p95 689), 0.536 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "sglang/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8"
+ },
+ "efficiency/strict": {
+  "idle_tail_s": 3.0,
+  "notes": [
+   "re-measured the best 3 configurations and chose on the fresh runs: the pick measured 660 tok/s in the search and 667 re-measured",
+   "winner scored at concurrency 64: 666.8 tok/s, TTFT 468 ms (p95 689), 0.536 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/bf16/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8"
+ },
+ "efficiency/tpot": {
+  "idle_tail_s": 3.0,
+  "notes": [
+   "re-measured the best 2 configurations and chose on the fresh runs: the pick measured 413 tok/s in the search and 417 re-measured",
+   "winner scored at concurrency 8: 416.7 tok/s, TTFT 215 ms (p95 316), 0.687 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "sglang/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8"
+ },
+ "latency/default": {
+  "idle_tail_s": 0.0,
+  "notes": [
+   "re-measured the best 2 configurations and chose on the fresh runs: the pick measured 413 tok/s in the search and 417 re-measured",
+   "winner scored at concurrency 8: 416.7 tok/s, TTFT 215 ms (p95 316), 0.687 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "sglang/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8"
+ },
+ "latency/median-floor": {
+  "idle_tail_s": 0.0,
+  "notes": [
+   "re-measured the best 2 configurations and chose on the fresh runs: the pick measured 608 tok/s in the search and 614 re-measured",
+   "winner scored at concurrency 32: 614.1 tok/s, TTFT 324 ms (p95 476), 0.552 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "sglang/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8"
+ },
+ "latency/strict": {
+  "idle_tail_s": 0.0,
+  "notes": [
+   "re-measured the best 2 configurations and chose on the fresh runs: the pick measured 413 tok/s in the search and 417 re-measured",
+   "winner scored at concurrency 8: 416.7 tok/s, TTFT 215 ms (p95 316), 0.687 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "sglang/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8"
+ },
+ "latency/tpot": {
+  "idle_tail_s": 0.0,
+  "notes": [
+   "re-measured the best 2 configurations and chose on the fresh runs: the pick measured 413 tok/s in the search and 417 re-measured",
+   "winner scored at concurrency 8: 416.7 tok/s, TTFT 215 ms (p95 316), 0.687 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "sglang/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "1",
+     "8",
+     "32",
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8"
+ },
+ "throughput/default": {
+  "idle_tail_s": 0.0,
+  "notes": [
+   "re-measured the best 2 configurations and chose on the fresh runs: the pick measured 660 tok/s in the search and 667 re-measured",
+   "winner scored at concurrency 64: 666.8 tok/s, TTFT 468 ms (p95 689), 0.536 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "sglang/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8"
+ },
+ "throughput/median-floor": {
+  "idle_tail_s": 0.0,
+  "notes": [
+   "re-measured the best 2 configurations and chose on the fresh runs: the pick measured 660 tok/s in the search and 667 re-measured",
+   "winner scored at concurrency 64: 666.8 tok/s, TTFT 468 ms (p95 689), 0.536 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "sglang/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8"
+ },
+ "throughput/strict": {
+  "idle_tail_s": 0.0,
+  "notes": [
+   "re-measured the best 2 configurations and chose on the fresh runs: the pick measured 660 tok/s in the search and 667 re-measured",
+   "winner scored at concurrency 64: 666.8 tok/s, TTFT 468 ms (p95 689), 0.536 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "sglang/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8"
+ },
+ "throughput/tpot": {
+  "idle_tail_s": 0.0,
+  "notes": [
+   "re-measured the best 2 configurations and chose on the fresh runs: the pick measured 413 tok/s in the search and 417 re-measured",
+   "winner scored at concurrency 8: 416.7 tok/s, TTFT 215 ms (p95 316), 0.687 J/tok"
+  ],
+  "trials": [
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/bf16/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "quant"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b64/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "quant"
+   },
+   {
+    "config": "vllm/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "sglang/fp8/ctx4096/b64/gmu0.95",
+    "levels": [],
+    "ok": false,
+    "stage": "memory"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b16/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "sglang/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8",
+     "1"
+    ],
+    "ok": true,
+    "stage": "batch"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "kv"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   },
+   {
+    "config": "vllm/fp8/ctx8192/b256/gmu0.90",
+    "levels": [
+     "64",
+     "32",
+     "8"
+    ],
+    "ok": true,
+    "stage": "confirm"
+   }
+  ],
+  "winner": "vllm/fp8/ctx8192/b256/gmu0.90/kvfp8"
+ }
+}
