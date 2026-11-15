@@ -1,0 +1,172 @@
+{
+ "_fixture_note": "CONSTRUCTED SAMPLE, not output of a real run: built by hand on 15 November 2026 from llm-optimizer's source at github.com/bentoml/llm-optimizer (cli.py writes metadata, best_configurations and test_results; bench_client.py's result keys; args.py's server_args as underscored names with typed values). Replace it with the --output-json file from the GPU session.",
+ "metadata": {
+  "gpu_type": "NVIDIA A40",
+  "gpu_count": 1,
+  "model_tag": "Qwen/Qwen3.5-9B",
+  "total_tests": 1,
+  "constraints": "ttft:p95<500ms;itl:mean<50ms",
+  "input_len": 63,
+  "output_len": 395
+ },
+ "best_configurations": {
+  "best_input_throughput": {
+   "throughput": 252.4,
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_running_requests": 64,
+     "chunked_prefill_size": 4096,
+     "context_length": 4096,
+     "schedule_conservativeness": 0.3
+    },
+    "server_cmd_args": [
+     "--max-running-requests=64",
+     "--chunked-prefill-size=4096",
+     "--context-length=4096",
+     "--schedule-conservativeness=0.3"
+    ]
+   },
+   "cmd": "/opt/sglang/bin/python -m sglang.launch_server --model-path Qwen/Qwen3.5-9B --host 127.0.0.1 --port 30000 --max-running-requests=64 --chunked-prefill-size=4096 --context-length=4096 --schedule-conservativeness=0.3"
+  },
+  "best_output_throughput": {
+   "throughput": 252.4,
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_running_requests": 64,
+     "chunked_prefill_size": 4096,
+     "context_length": 4096,
+     "schedule_conservativeness": 0.3
+    },
+    "server_cmd_args": [
+     "--max-running-requests=64",
+     "--chunked-prefill-size=4096",
+     "--context-length=4096",
+     "--schedule-conservativeness=0.3"
+    ]
+   },
+   "cmd": "/opt/sglang/bin/python -m sglang.launch_server --model-path Qwen/Qwen3.5-9B --host 127.0.0.1 --port 30000 --max-running-requests=64 --chunked-prefill-size=4096 --context-length=4096 --schedule-conservativeness=0.3"
+  },
+  "best_input_throughput_constrained": {
+   "throughput": 252.4,
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_running_requests": 64,
+     "chunked_prefill_size": 4096,
+     "context_length": 4096,
+     "schedule_conservativeness": 0.3
+    },
+    "server_cmd_args": [
+     "--max-running-requests=64",
+     "--chunked-prefill-size=4096",
+     "--context-length=4096",
+     "--schedule-conservativeness=0.3"
+    ]
+   },
+   "cmd": "/opt/sglang/bin/python -m sglang.launch_server --model-path Qwen/Qwen3.5-9B --host 127.0.0.1 --port 30000 --max-running-requests=64 --chunked-prefill-size=4096 --context-length=4096 --schedule-conservativeness=0.3"
+  },
+  "best_output_throughput_constrained": {
+   "throughput": 252.4,
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_running_requests": 64,
+     "chunked_prefill_size": 4096,
+     "context_length": 4096,
+     "schedule_conservativeness": 0.3
+    },
+    "server_cmd_args": [
+     "--max-running-requests=64",
+     "--chunked-prefill-size=4096",
+     "--context-length=4096",
+     "--schedule-conservativeness=0.3"
+    ]
+   },
+   "cmd": "/opt/sglang/bin/python -m sglang.launch_server --model-path Qwen/Qwen3.5-9B --host 127.0.0.1 --port 30000 --max-running-requests=64 --chunked-prefill-size=4096 --context-length=4096 --schedule-conservativeness=0.3"
+  }
+ },
+ "test_results": [
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_running_requests": 64,
+     "chunked_prefill_size": 4096,
+     "context_length": 4096,
+     "schedule_conservativeness": 0.3
+    },
+    "server_cmd_args": [
+     "--max-running-requests=64",
+     "--chunked-prefill-size=4096",
+     "--context-length=4096",
+     "--schedule-conservativeness=0.3"
+    ]
+   },
+   "results": {
+    "backend": "sglang",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 8,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.639,
+    "input_throughput": 40.3,
+    "output_throughput": 252.4,
+    "mean_ttft_ms": 108.0,
+    "median_ttft_ms": 99.00000000000001,
+    "p95_ttft_ms": 180,
+    "p99_ttft_ms": 216.0,
+    "mean_itl_ms": 22.0,
+    "median_itl_ms": 22.0,
+    "p95_itl_ms": 33.0,
+    "mean_tpot_ms": 22.0,
+    "mean_e2e_latency_ms": 8800.0,
+    "concurrency": 7.9,
+    "accept_length": null
+   },
+   "cmd": "/opt/sglang/bin/python -m sglang.launch_server --model-path Qwen/Qwen3.5-9B --host 127.0.0.1 --port 30000 --max-running-requests=64 --chunked-prefill-size=4096 --context-length=4096 --schedule-conservativeness=0.3",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  }
+ ]
+}

@@ -1,0 +1,1416 @@
+{
+ "_fixture_note": "CONSTRUCTED SAMPLE, not output of a real run: built by hand on 15 November 2026 from llm-optimizer's source at github.com/bentoml/llm-optimizer (cli.py writes metadata, best_configurations and test_results; bench_client.py's result keys; args.py's server_args as underscored names with typed values). Replace it with the --output-json file from the GPU session.",
+ "metadata": {
+  "gpu_type": "NVIDIA A40",
+  "gpu_count": 1,
+  "model_tag": "Qwen/Qwen3.5-9B",
+  "total_tests": 27,
+  "constraints": "ttft:p95<5ms;itl:mean<50ms",
+  "input_len": 63,
+  "output_len": 395
+ },
+ "best_configurations": {
+  "best_input_throughput": {
+   "throughput": 277.2,
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 128,
+     "max_num_batched_tokens": 16384,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=128",
+     "--max-num-batched-tokens=16384",
+     "--max-model-len=4096"
+    ]
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=128 --max-num-batched-tokens=16384 --max-model-len=4096"
+  },
+  "best_output_throughput": {
+   "throughput": 277.2,
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 128,
+     "max_num_batched_tokens": 16384,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=128",
+     "--max-num-batched-tokens=16384",
+     "--max-model-len=4096"
+    ]
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=128 --max-num-batched-tokens=16384 --max-model-len=4096"
+  },
+  "best_input_throughput_constrained": null,
+  "best_output_throughput_constrained": null
+ },
+ "test_results": [
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 1,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 64,
+     "max_num_batched_tokens": 2048,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=64",
+     "--max-num-batched-tokens=2048",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 1,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.076,
+    "input_throughput": 4.8,
+    "output_throughput": 30.0,
+    "mean_ttft_ms": 61.199999999999996,
+    "median_ttft_ms": 56.1,
+    "p95_ttft_ms": 102,
+    "p99_ttft_ms": 122.39999999999999,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 0.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=64 --max-num-batched-tokens=2048 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 4,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 64,
+     "max_num_batched_tokens": 2048,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=64",
+     "--max-num-batched-tokens=2048",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 4,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.304,
+    "input_throughput": 19.1,
+    "output_throughput": 120.0,
+    "mean_ttft_ms": 82.8,
+    "median_ttft_ms": 75.9,
+    "p95_ttft_ms": 138,
+    "p99_ttft_ms": 165.6,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 3.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=64 --max-num-batched-tokens=2048 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 64,
+     "max_num_batched_tokens": 2048,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=64",
+     "--max-num-batched-tokens=2048",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 8,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.608,
+    "input_throughput": 38.3,
+    "output_throughput": 240.0,
+    "mean_ttft_ms": 111.6,
+    "median_ttft_ms": 102.30000000000001,
+    "p95_ttft_ms": 186,
+    "p99_ttft_ms": 223.2,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 7.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=64 --max-num-batched-tokens=2048 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 1,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 64,
+     "max_num_batched_tokens": 8192,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=64",
+     "--max-num-batched-tokens=8192",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 1,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.078,
+    "input_throughput": 4.9,
+    "output_throughput": 30.9,
+    "mean_ttft_ms": 61.199999999999996,
+    "median_ttft_ms": 56.1,
+    "p95_ttft_ms": 102,
+    "p99_ttft_ms": 122.39999999999999,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 0.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=64 --max-num-batched-tokens=8192 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 4,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 64,
+     "max_num_batched_tokens": 8192,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=64",
+     "--max-num-batched-tokens=8192",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 4,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.313,
+    "input_throughput": 19.7,
+    "output_throughput": 123.6,
+    "mean_ttft_ms": 82.8,
+    "median_ttft_ms": 75.9,
+    "p95_ttft_ms": 138,
+    "p99_ttft_ms": 165.6,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 3.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=64 --max-num-batched-tokens=8192 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 64,
+     "max_num_batched_tokens": 8192,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=64",
+     "--max-num-batched-tokens=8192",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 8,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.626,
+    "input_throughput": 39.4,
+    "output_throughput": 247.2,
+    "mean_ttft_ms": 111.6,
+    "median_ttft_ms": 102.30000000000001,
+    "p95_ttft_ms": 186,
+    "p99_ttft_ms": 223.2,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 7.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=64 --max-num-batched-tokens=8192 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 1,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 64,
+     "max_num_batched_tokens": 16384,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=64",
+     "--max-num-batched-tokens=16384",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 1,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.076,
+    "input_throughput": 5.3,
+    "output_throughput": 33.0,
+    "mean_ttft_ms": 361.2,
+    "median_ttft_ms": 331.1,
+    "p95_ttft_ms": 602,
+    "p99_ttft_ms": 722.4,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 0.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=64 --max-num-batched-tokens=16384 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 4,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 64,
+     "max_num_batched_tokens": 16384,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=64",
+     "--max-num-batched-tokens=16384",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 4,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.304,
+    "input_throughput": 21.1,
+    "output_throughput": 132.0,
+    "mean_ttft_ms": 382.8,
+    "median_ttft_ms": 350.90000000000003,
+    "p95_ttft_ms": 638,
+    "p99_ttft_ms": 765.6,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 3.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=64 --max-num-batched-tokens=16384 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 64,
+     "max_num_batched_tokens": 16384,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=64",
+     "--max-num-batched-tokens=16384",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 8,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.608,
+    "input_throughput": 42.1,
+    "output_throughput": 264.0,
+    "mean_ttft_ms": 411.59999999999997,
+    "median_ttft_ms": 377.3,
+    "p95_ttft_ms": 686,
+    "p99_ttft_ms": 823.1999999999999,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 7.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=64 --max-num-batched-tokens=16384 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 1,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 128,
+     "max_num_batched_tokens": 2048,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=128",
+     "--max-num-batched-tokens=2048",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 1,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.08,
+    "input_throughput": 5.0,
+    "output_throughput": 31.5,
+    "mean_ttft_ms": 61.199999999999996,
+    "median_ttft_ms": 56.1,
+    "p95_ttft_ms": 102,
+    "p99_ttft_ms": 122.39999999999999,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 0.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=128 --max-num-batched-tokens=2048 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 4,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 128,
+     "max_num_batched_tokens": 2048,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=128",
+     "--max-num-batched-tokens=2048",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 4,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.319,
+    "input_throughput": 20.1,
+    "output_throughput": 126.0,
+    "mean_ttft_ms": 82.8,
+    "median_ttft_ms": 75.9,
+    "p95_ttft_ms": 138,
+    "p99_ttft_ms": 165.6,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 3.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=128 --max-num-batched-tokens=2048 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 128,
+     "max_num_batched_tokens": 2048,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=128",
+     "--max-num-batched-tokens=2048",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 8,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.638,
+    "input_throughput": 40.2,
+    "output_throughput": 252.0,
+    "mean_ttft_ms": 111.6,
+    "median_ttft_ms": 102.30000000000001,
+    "p95_ttft_ms": 186,
+    "p99_ttft_ms": 223.2,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 7.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=128 --max-num-batched-tokens=2048 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 1,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 128,
+     "max_num_batched_tokens": 8192,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=128",
+     "--max-num-batched-tokens=8192",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 1,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.082,
+    "input_throughput": 5.2,
+    "output_throughput": 32.4,
+    "mean_ttft_ms": 61.199999999999996,
+    "median_ttft_ms": 56.1,
+    "p95_ttft_ms": 102,
+    "p99_ttft_ms": 122.39999999999999,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 0.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=128 --max-num-batched-tokens=8192 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 4,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 128,
+     "max_num_batched_tokens": 8192,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=128",
+     "--max-num-batched-tokens=8192",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 4,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.328,
+    "input_throughput": 20.7,
+    "output_throughput": 129.6,
+    "mean_ttft_ms": 82.8,
+    "median_ttft_ms": 75.9,
+    "p95_ttft_ms": 138,
+    "p99_ttft_ms": 165.6,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 3.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=128 --max-num-batched-tokens=8192 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 128,
+     "max_num_batched_tokens": 8192,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=128",
+     "--max-num-batched-tokens=8192",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 8,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.656,
+    "input_throughput": 41.3,
+    "output_throughput": 259.2,
+    "mean_ttft_ms": 111.6,
+    "median_ttft_ms": 102.30000000000001,
+    "p95_ttft_ms": 186,
+    "p99_ttft_ms": 223.2,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 7.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=128 --max-num-batched-tokens=8192 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 1,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 128,
+     "max_num_batched_tokens": 16384,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=128",
+     "--max-num-batched-tokens=16384",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 1,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.08,
+    "input_throughput": 5.5,
+    "output_throughput": 34.7,
+    "mean_ttft_ms": 361.2,
+    "median_ttft_ms": 331.1,
+    "p95_ttft_ms": 602,
+    "p99_ttft_ms": 722.4,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 0.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=128 --max-num-batched-tokens=16384 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 4,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 128,
+     "max_num_batched_tokens": 16384,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=128",
+     "--max-num-batched-tokens=16384",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 4,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.319,
+    "input_throughput": 22.1,
+    "output_throughput": 138.6,
+    "mean_ttft_ms": 382.8,
+    "median_ttft_ms": 350.90000000000003,
+    "p95_ttft_ms": 638,
+    "p99_ttft_ms": 765.6,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 3.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=128 --max-num-batched-tokens=16384 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 128,
+     "max_num_batched_tokens": 16384,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=128",
+     "--max-num-batched-tokens=16384",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 8,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.638,
+    "input_throughput": 44.2,
+    "output_throughput": 277.2,
+    "mean_ttft_ms": 411.59999999999997,
+    "median_ttft_ms": 377.3,
+    "p95_ttft_ms": 686,
+    "p99_ttft_ms": 823.1999999999999,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 7.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=128 --max-num-batched-tokens=16384 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 1,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 256,
+     "max_num_batched_tokens": 2048,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=256",
+     "--max-num-batched-tokens=2048",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 1,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.076,
+    "input_throughput": 4.8,
+    "output_throughput": 30.0,
+    "mean_ttft_ms": 61.199999999999996,
+    "median_ttft_ms": 56.1,
+    "p95_ttft_ms": 102,
+    "p99_ttft_ms": 122.39999999999999,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 0.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=256 --max-num-batched-tokens=2048 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 4,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 256,
+     "max_num_batched_tokens": 2048,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=256",
+     "--max-num-batched-tokens=2048",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 4,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.304,
+    "input_throughput": 19.1,
+    "output_throughput": 120.0,
+    "mean_ttft_ms": 82.8,
+    "median_ttft_ms": 75.9,
+    "p95_ttft_ms": 138,
+    "p99_ttft_ms": 165.6,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 3.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=256 --max-num-batched-tokens=2048 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 256,
+     "max_num_batched_tokens": 2048,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=256",
+     "--max-num-batched-tokens=2048",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 8,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.608,
+    "input_throughput": 38.3,
+    "output_throughput": 240.0,
+    "mean_ttft_ms": 111.6,
+    "median_ttft_ms": 102.30000000000001,
+    "p95_ttft_ms": 186,
+    "p99_ttft_ms": 223.2,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 7.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=256 --max-num-batched-tokens=2048 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 1,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 256,
+     "max_num_batched_tokens": 8192,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=256",
+     "--max-num-batched-tokens=8192",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 1,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.078,
+    "input_throughput": 4.9,
+    "output_throughput": 30.9,
+    "mean_ttft_ms": 61.199999999999996,
+    "median_ttft_ms": 56.1,
+    "p95_ttft_ms": 102,
+    "p99_ttft_ms": 122.39999999999999,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 0.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=256 --max-num-batched-tokens=8192 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 4,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 256,
+     "max_num_batched_tokens": 8192,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=256",
+     "--max-num-batched-tokens=8192",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 4,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.313,
+    "input_throughput": 19.7,
+    "output_throughput": 123.6,
+    "mean_ttft_ms": 82.8,
+    "median_ttft_ms": 75.9,
+    "p95_ttft_ms": 138,
+    "p99_ttft_ms": 165.6,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 3.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=256 --max-num-batched-tokens=8192 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 256,
+     "max_num_batched_tokens": 8192,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=256",
+     "--max-num-batched-tokens=8192",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 8,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.626,
+    "input_throughput": 39.4,
+    "output_throughput": 247.2,
+    "mean_ttft_ms": 111.6,
+    "median_ttft_ms": 102.30000000000001,
+    "p95_ttft_ms": 186,
+    "p99_ttft_ms": 223.2,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 7.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=256 --max-num-batched-tokens=8192 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 1,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 256,
+     "max_num_batched_tokens": 16384,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=256",
+     "--max-num-batched-tokens=16384",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 1,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.076,
+    "input_throughput": 5.3,
+    "output_throughput": 33.0,
+    "mean_ttft_ms": 361.2,
+    "median_ttft_ms": 331.1,
+    "p95_ttft_ms": 602,
+    "p99_ttft_ms": 722.4,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 0.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=256 --max-num-batched-tokens=16384 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 4,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 256,
+     "max_num_batched_tokens": 16384,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=256",
+     "--max-num-batched-tokens=16384",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 4,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.304,
+    "input_throughput": 21.1,
+    "output_throughput": 132.0,
+    "mean_ttft_ms": 382.8,
+    "median_ttft_ms": 350.90000000000003,
+    "p95_ttft_ms": 638,
+    "p99_ttft_ms": 765.6,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 3.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=256 --max-num-batched-tokens=16384 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  },
+  {
+   "config": {
+    "client_args": {
+     "max_concurrency": 8,
+     "num_prompts": 256,
+     "dataset_name": "random",
+     "random_input_len": 63,
+     "random_output_len": 395,
+     "random_range_ratio": 1.0
+    },
+    "server_args": {
+     "max_num_seqs": 256,
+     "max_num_batched_tokens": 16384,
+     "max_model_len": 4096
+    },
+    "server_cmd_args": [
+     "--max-num-seqs=256",
+     "--max-num-batched-tokens=16384",
+     "--max-model-len=4096"
+    ]
+   },
+   "results": {
+    "backend": "vllm",
+    "dataset_name": "random",
+    "request_rate": null,
+    "max_concurrency": 8,
+    "random_input_len": 63,
+    "random_output_len": 395,
+    "random_range_ratio": 1.0,
+    "duration": 120.0,
+    "completed": 256,
+    "request_throughput": 0.608,
+    "input_throughput": 42.1,
+    "output_throughput": 264.0,
+    "mean_ttft_ms": 411.59999999999997,
+    "median_ttft_ms": 377.3,
+    "p95_ttft_ms": 686,
+    "p99_ttft_ms": 823.1999999999999,
+    "mean_itl_ms": 21.5,
+    "median_itl_ms": 21.5,
+    "p95_itl_ms": 32.25,
+    "mean_tpot_ms": 21.5,
+    "mean_e2e_latency_ms": 8600.0,
+    "concurrency": 7.9,
+    "accept_length": null
+   },
+   "cmd": "vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=256 --max-num-batched-tokens=16384 --max-model-len=4096",
+   "constraints": "ttft:p95<500ms;itl:mean<50ms",
+   "metadata": {}
+  }
+ ]
+}

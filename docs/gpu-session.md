@@ -118,3 +118,47 @@ list; a tar member outside its directory; a running phase; `verify` on a missing
 an empty destination; a damaged local copy; `--watch` through an ssh timeout and a locked file; a Windows-looking
 `--remote`; a path over 260 characters; the root's logs; a pull through a fake `ssh` client, with a space in the
 remote path).
+
+## Competitor rows
+
+`benchmarks/competitor_rows.py` turns two other tuners' picks into `rigtune compare --rows` entries, so each is
+launched and scored like every other row (same runner, held-out prompts, levels, limits and interleaved
+repeats); what the tool reported for itself goes into the row's source and is never scored.
+
+| Tool | What it is (read from its repository on 15 November 2026) | Its row |
+|---|---|---|
+| [BentoML llm-optimizer](https://github.com/bentoml/llm-optimizer) | Package 0.0.1, no release: `pip install -e .` from a clone. A grid runner: launches every point of `--server-args` (`vllm serve {model} --host {host} --port {port}`, or SGLang's `launch_server`, each argument appended as `--name=value`), drives it with its own client (adapted from SGLang's bench_serving), filters by `--constraints`, writes `--output-json` with `best_configurations`. | `best_output_throughput_constrained`, the highest output tok/s within the limits; not applicable when no run met them, or when it ran without constraints. |
+| [NVIDIA AIConfigurator](https://github.com/ai-dynamo/aiconfigurator) | `pip install aiconfigurator` (0.12.0, 18 September 2026; Linux x86-64 only; "maintenance-only" per its README). Predicts from timings collected per system and engine release; launches nothing. `cli default ... --save-dir D` writes a Dynamo launch script per configuration. | The engine flags on the worker line of `agg/top1/agg/node_0_run.sh` (`python3 -m dynamo.vllm --model ... <flags>`), launched under the engine's own server. Not applicable on a card with no AIConfigurator system (A40, RTX 4090, L4, H100 NVL or PCIe, H200 NVL, GH200...) or a pair its own `cli support` refuses. |
+
+**Fairness.** Both get the comparison's model, card, p95 TTFT and TPOT limits, and request lengths: the
+calibration's mean prompt and answer tokens (`benchmarks/vllm_auto_tune.py lengths`, as auto_tune gets them).
+llm-optimizer gets `--constraints "ttft:p95<T ms;itl:mean<P ms"` (it documents ttft, itl and e2e_latency; mean
+inter-token latency equals mean TPOT without speculation; a value equal to its limit fails, where rigtune's
+passes), random prompts of those fixed lengths (`random_range_ratio=1.0`), `max_concurrency` at the comparison's
+levels, and a 3 x 3 server grid over the batch cap and prefill budget with the context fixed at the comparison's.
+AIConfigurator gets `--total-gpus 1 --isl --osl --ttft --tpot` and the system named for the card; the context
+it sizes from `--isl` and `--osl` is replaced by the comparison's, as llm-optimizer's grid fixes it, so no row
+serves a shorter context than the others. Each row records the tool's version (llm-optimizer's clone commit;
+AIConfigurator's package version, read from the tool's own environment). Their workloads stay their own: random fixed-length prompts, or a model of
+the card, not the comparison's prompts; each row's source says so.
+
+**What is carried and what is not.** Settings the tool sets become the row's `Config` fields (batch cap,
+prefill budget, context, memory fraction, KV dtype, prefix cache, fp8) or extra flags passed through unchanged
+(`--schedule-conservativeness`, `--block-size`, `--page-size`, ...). A setting the tool left alone stays at the
+engine's default, except the context and batch cap that every rigtune launch passes: the comparison's context,
+and a batch cap of 256 (the value rigtune's stock rows take as the engine's default; vLLM's own is 1024 on cards
+with 70 GiB or more, except an A100), which the source states. Both tools set the batch cap in practice, so
+that value rarely matters. List-valued CUDA-graph sizes are left at the engine's own list, with a note. A pick needing more than
+one card, speculative settings, no tokenizer, or a quantization other than fp8 makes the row not applicable,
+with the reason, rather than measured as something else.
+
+**Not verified until the GPU session.** The adapters were tested only against files built by hand from each
+tool's source and templates (`tests/fixtures/competitors/*.SAMPLE.*`, each labelled as such), never against a
+real run's output; the GPU session must save the real files and replace the samples. Assumed, not yet seen
+working: that llm-optimizer (last code commit September 2025) runs against vLLM 0.29 / SGLang 0.5.19 at all,
+that `--server-cmd` with `--framework sglang` launches SGLang from its own environment, that
+`random_range_ratio=1.0` gives fixed lengths in its client, which systems AIConfigurator 0.12.0 really has data
+for (its README lists h100_sxm, h200_sxm, b200_sxm, gb200 and a100_sxm; this session's plan read l40s data at a
+later commit), and that its flags mean the same under `vllm serve` as under `dynamo.vllm`.
+
+Tests: `tests/test_competitor_rows.py`.
