@@ -12,7 +12,7 @@ import dataclasses
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from rigtune.calibrate.objectives import (
     CUSTOM,
@@ -21,6 +21,7 @@ from rigtune.calibrate.objectives import (
     Goal,
     Limit,
     format_goal,
+    parse_goal,
     resolve_goal,
     ttft_metric,
 )
@@ -140,7 +141,7 @@ def resolve(objective: Optional[str], optimise: Optional[str], limits: Sequence[
             tpot_ceiling: Optional[float], workload_ttft_ms: float, workload_tpot_ms: Optional[float],
             arrival_rate: Optional[float] = None, strict: bool = False, eval_set: Optional[str] = None,
             max_accuracy_loss: float = DEFAULT_MAX_LOSS, gpu_hourly_usd: Optional[float] = None,
-            kwh_usd: Optional[float] = None) -> Resolved:
+            kwh_usd: Optional[float] = None, start: Optional[Constraints] = None) -> Resolved:
     """The objective and constraints of a goal stated with --optimise or --limit.
 
     With --optimise, the older --ttft-ceiling, --tok-s-floor and --tpot-ceiling state limits of that goal, and a goal a
@@ -150,7 +151,8 @@ def resolve(objective: Optional[str], optimise: Optional[str], limits: Sequence[
     The workload's TPOT ceiling applies to every goal unless a limit or --tpot-ceiling replaces it. An accuracy_loss
     limit is the accuracy gate's tolerance, --max-accuracy-loss with --eval-set, and no part of the goal: a --limit
     that holds only it leaves the preset and the older flags exactly as without it. --gpu-hourly-usd (and
-    --kwh-usd) price cost_per_mtok, and only a goal that names it takes them."""
+    --kwh-usd) price cost_per_mtok, and only a goal that names it takes them. `start` stands in for the older flags
+    with a preset's constraints as a profile recorded them (rescore_goal)."""
     if optimise is not None and objective is not None:
         raise GoalError("--optimise states the goal; leave out --objective, which names a preset one")
     stated: Dict[str, Limit] = {}
@@ -185,7 +187,7 @@ def resolve(objective: Optional[str], optimise: Optional[str], limits: Sequence[
                 arrival_rate=arrival_rate, strict=strict)
     if optimise is None:
         return finish(_added(objective or "balanced", stated, base, ttft_ceiling, tok_s_floor, from_workload,
-                             prices))
+                             prices, start))
     if ttft_ceiling is not None:
         _same(stated, Limit(ttft_metric(ttft_percentile), "<=", ttft_ceiling), "--limit and --ttft-ceiling")
     if tok_s_floor is not None:
@@ -208,7 +210,8 @@ def resolve(objective: Optional[str], optimise: Optional[str], limits: Sequence[
 
 
 def _added(preset: str, stated: Dict[str, Limit], base: Dict[str, Any], ttft_ceiling: Optional[float],
-           tok_s_floor: Optional[float], from_workload: bool, prices: Dict[str, float]) -> Resolved:
+           tok_s_floor: Optional[float], from_workload: bool, prices: Dict[str, float],
+           start: Optional[Constraints] = None) -> Resolved:
     """--limit added to a preset (--objective, or balanced). The older flags mean what they always meant for it;
     each limit becomes the preset's own setting where it has one: a TTFT ceiling under balanced, and under
     efficiency at an arrival rate, which judges latency against it; a throughput floor under latency and efficiency;
@@ -219,6 +222,8 @@ def _added(preset: str, stated: Dict[str, Limit], base: Dict[str, Any], ttft_cei
     cons = Constraints(ttft_ceiling_ms=ttft_ceiling if ttft_ceiling is not None else base["ttft_ceiling_ms"],
                        tok_s_floor_abs=tok_s_floor, tpot_ceiling_ms=base["tpot_ceiling_ms"],
                        ttft_percentile=base["ttft_percentile"], arrival_rate=rate, strict=base["strict"])
+    if start is not None:
+        cons = dataclasses.replace(start, tpot_ceiling_ms=base["tpot_ceiling_ms"], goal=None)
     at_rate = preset == "efficiency" and rate is not None
     folded_ttft = False
     left: List[Limit] = []  # what the preset has no setting for
@@ -244,7 +249,7 @@ def _added(preset: str, stated: Dict[str, Limit], base: Dict[str, Any], ttft_cei
     if not left:
         said = f"the {preset} preset"
         return Resolved(preset, cons, cons.ttft_percentile, _line(goal, None, from_workload, preset, said))
-    texts = ", ".join(format_goal(Goal("tok_s", (lim,))).split("; ", 1)[1] for lim in left)
+    texts = ", ".join(limit_text(lim) for lim in left)
     if rate is not None:
         raise GoalError(f"--objective {preset} at --arrival-rate has no setting for {texts}: at a rate efficiency "
                         "scores joules per request within its TTFT and TPOT ceilings. Leave the limit out, or "
@@ -280,6 +285,11 @@ def _prices(metric: str, stated: Dict[str, Limit], gpu_hourly_usd: Optional[floa
     return given
 
 
+def limit_text(lim: Limit) -> str:
+    """One limit as goal text writes it: `ttft_p95_ms<=800`, `tok_s>=50%best`."""
+    return format_goal(Goal("tok_s", (lim,))).split("; ", 1)[1]
+
+
 def _line(goal: Goal, tpot_ms: Optional[float], from_workload: bool, preset: Optional[str], said: str) -> str:
     """What the run says before it starts: the goal, its TPOT ceiling, and whether a preset says the same."""
     if tpot_ms is not None and all(lim.metric != "tpot_ms" for lim in goal.limits):
@@ -291,6 +301,49 @@ def _line(goal: Goal, tpot_ms: Optional[float], from_workload: bool, preset: Opt
     if preset == "efficiency":
         said += " (without energy readings it orders by tok/s)"
     return f"goal: {text} = {said}"
+
+
+def rescore_goal(own_objective: str, own: Constraints, objective: Optional[str], optimise: Optional[str],
+                 limits: Sequence[str], gpu_hourly_usd: Optional[float] = None, kwh_usd: Optional[float] = None,
+                 ) -> Tuple[str, Constraints, Optional[Tuple[Optional[float], Optional[float]]], Optional[str]]:
+    """(objective, constraints, prices for a $/Mtok column, note) for `rigtune tradeoffs`: a profile's own goal, a
+    preset, or one stated as on any calibrating command, the profile's ceilings standing in for its workload's. A
+    --limit alone is added to the profile's own goal, replacing its limit on the same metric, as a --limit added to
+    --objective is. Prices for a goal that does not name cost only add the column. The note says when the goal is
+    not the one the search was steered by."""
+    stated = {lim.metric: text for lim, text in ((parse_limit(t), t) for t in limits)}
+    mine = parse_goal(own.goal) if own_objective == CUSTOM and own.goal else None
+    added_to_own = objective is None and optimise is None
+    if added_to_own and mine is not None:  # the profile's custom goal, with these limits in place of its own
+        stated = {**{lim.metric: limit_text(lim) for lim in mine.limits}, **stated}
+        optimise = mine.optimise
+        gpu_hourly_usd = gpu_hourly_usd if gpu_hourly_usd is not None else mine.gpu_hourly_usd
+        kwh_usd = kwh_usd if kwh_usd is not None else mine.kwh_usd
+    names_cost = optimise == "cost_per_mtok" or "cost_per_mtok" in stated
+    column = None
+    if not names_cost and (gpu_hourly_usd is not None or kwh_usd is not None):
+        if gpu_hourly_usd is None:
+            raise GoalError("--kwh-usd prices the energy on top of --gpu-hourly-usd, which is missing")
+        column = (gpu_hourly_usd, kwh_usd)
+    if added_to_own and not limits:
+        return own_objective, own, column, None
+    common: Dict[str, Any] = dict(ttft_ceiling=None, ttft_percentile=own.ttft_percentile, tok_s_floor=None,
+                                  tpot_ceiling=None, workload_ttft_ms=own.ttft_ceiling_ms,
+                                  workload_tpot_ms=own.tpot_ceiling_ms, arrival_rate=own.arrival_rate,
+                                  gpu_hourly_usd=gpu_hourly_usd if names_cost else None,
+                                  kwh_usd=kwh_usd if names_cost else None)
+    if optimise is None and not limits:
+        new_objective, cons = objective, dataclasses.replace(own, goal=None)
+    else:
+        start = own if added_to_own and mine is None else None
+        r = resolve(own_objective if start is not None else objective, optimise, list(stated.values()),
+                    start=start, **common)
+        new_objective, cons = r.objective, r.constraints
+    if (new_objective, cons) == (own_objective, own):
+        return new_objective, cons, column, None
+    steered = format_goal(resolve_goal(own_objective, own))
+    return new_objective, cons, column, (f"re-scored: a search for {steered} chose which configurations to measure, "
+                                         "so one this goal would have tried may be absent")
 
 
 def recorded_constraints(record: Dict[str, Any]) -> Constraints:

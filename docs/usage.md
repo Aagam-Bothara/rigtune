@@ -315,6 +315,34 @@ What a set of a given size can certify, computed from counts with the score inte
 To see whether quantized weights cost quality on your model, run `benchmarks/task_quality.py --quants bf16 fp8 awq gptq` (GSM8K accuracy) or `benchmarks/quality_check.py` (perplexity). Both load the same checkpoints rigtune would pick. All five options have now run on real hardware, an A40 and a pair of A40s; [Re-measured on an A40](benchmarks.md#re-measured-on-an-a40) has the numbers and what each strategy was worth.
 
 
+#### What the limits cost: the trade-off table
+
+After `bench` and `recalibrate`, and from any cached profile with `rigtune tradeoffs <model|profile.json>`, rigtune shows what the goal's limits cost, read from the trials the calibration recorded: nothing is launched, and nothing is added to the profile. Each row is one measured configuration at one number of users: the pick at the level it was scored at; the best point on each metric with the limits ignored, and the limits it breaks; up to 8 points that meet the limits and that no other such point beats on every goal metric at once (the rest are counted); and, for each limit, the best point that only that limit kept out (it misses that limit and meets the others), with how much better the optimised metric is, or a note that nothing recorded does better. Every run of the picked configuration is the pick, never offered as a trade. Rows within the noise tolerance (2%) of the pick's score say so. `rigtune tradeoffs` re-scores the same trials under another goal (`--objective`, `--optimise`, or `--limit` alone, which is added to the profile's own goal as it would be to `--objective`) and says when it does, since a search steered by one goal may never have tried what another would; `--gpu-hourly-usd` (and `--kwh-usd`) alone adds a $/Mtok column.
+
+Read it as a record, not a prediction. Only configurations the search tried are there, so every cost is a floor; a search-stage row is the run that picked the configuration out, the best of noisy runs, where a `confirm` row is a fresh re-measurement; and a level a trial stopped before is absent (`--all-levels` measures them). Under `--arrival-rate` the pick is an operating point composed from every level, so no table is shown. From the recorded L4 calibration on ShareGPT prompts (`rigtune tradeoffs benchmarks/strategies/results-l4/p95/profiles/balanced-sharegpt-ttft-p95.json`, scored at that workload's ceilings, which the profile predates recording), where the 16k prefill budget measured 694.9 tok/s at 32 users but counted at 219.5, because at 32 users its p95 TTFT was 1007 ms, over the 1000 ms ceiling:
+
+| why | configuration | users | stage | tok/s | p95 TTFT ms | TPOT ms | request ms | J/tok | W | peak MiB | misses |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| the pick | vllm/fp8/ctx8192/b64/gmu0.95/pb8192 | 32 | prefill | 700.4 | 991 | 40.4 | 19783 | 0.102 | 72 | 22445 | - |
+| best tok/s, limits ignored (within noise of the pick) | vllm/fp8/ctx8192/b64/gmu0.95/pb8192/kvfp8 | 32 | kv | 710.8 | 1033 | 39.3 | 19172 | 0.101 | 72 | 22389 | ttft_p95_ms<=1000 |
+| best p95 TTFT ms, limits ignored | vllm/fp8/ctx8192/b64/gmu0.95/pb16384 | 8 | prefill | 219.5 | 421 | 35.4 | 18020 | 0.326 | 72 | 21597 | - |
+| best TPOT ms, limits ignored | vllm/fp8/ctx8192/b64/gmu0.95/pb8192/kvfp8 | 8 | kv | 214.0 | 421 | 34.9 | 17173 | 0.335 | 72 | 22389 | - |
+| best request ms, limits ignored | vllm/fp8/ctx8192/b64/gmu0.95/pb8192/kvfp8 | 8 | kv | 214.0 | 421 | 34.9 | 17173 | 0.335 | 72 | 22389 | - |
+| best J/tok, limits ignored (within noise of the pick) | vllm/fp8/ctx8192/b64/gmu0.95/pb8192/kvfp8 | 32 | kv | 710.8 | 1033 | 39.3 | 19172 | 0.101 | 72 | 22389 | ttft_p95_ms<=1000 |
+| best W, limits ignored | vllm/fp8/ctx8192/b64/gmu0.95/pb2048 | 8 | prefill | 210.6 | 641 | 35.5 | 17421 | 0.341 | 72 | 22739 | - |
+| best peak MiB, limits ignored (within noise of the pick) | vllm/fp8/ctx8192/b64/gmu0.95/pb16384 | 32 | prefill | 694.9 | 1007 | 40.4 | 19595 | 0.103 | 72 | 21597 | ttft_p95_ms<=1000 |
+| meets the limits, unbeaten on tok_s, ttft_p95_ms, tpot_ms | vllm/fp8/ctx8192/b64/gmu0.95/pb8192 | 32 | prefill | 700.4 | 991 | 40.4 | 19783 | 0.102 | 72 | 22445 | - |
+| meets the limits, unbeaten on tok_s, ttft_p95_ms, tpot_ms | vllm/fp8/ctx8192/b64/gmu0.95/pb16384 | 8 | prefill | 219.5 | 421 | 35.4 | 18020 | 0.326 | 72 | 21597 | - |
+| meets the limits, unbeaten on tok_s, ttft_p95_ms, tpot_ms | vllm/fp8/ctx8192/b64/gmu0.95/pb8192/kvfp8 | 8 | kv | 214.0 | 421 | 34.9 | 17173 | 0.335 | 72 | 22389 | - |
+| without ttft_p95_ms<=1000: +1.5% more tok_s (within noise of the pick) | vllm/fp8/ctx8192/b64/gmu0.95/pb8192/kvfp8 | 32 | kv | 710.8 | 1033 | 39.3 | 19172 | 0.101 | 72 | 22389 | ttft_p95_ms<=1000 |
+
+- without tpot_ms<=100: no recorded configuration does better on tok_s
+- recorded points only: configurations the search never tried are absent, so each cost is a floor
+- search-stage rows are each configuration's run during the search (the best of noisy runs picked it out); confirm rows are fresh re-measurements
+- levels a trial stopped before (measured busiest first) are absent; --all-levels measures them
+
+Dropping the TTFT ceiling would have bought 1.5% more throughput on what was measured, inside the noise; the TPOT ceiling cost nothing.
+
 ## CLI
 
 ```
@@ -332,6 +360,7 @@ rigtune bench <model>         # run calibration and print the table, don't serve
 rigtune recalibrate <model>   # force a rerun and overwrite the cached profile
 rigtune profiles              # list cached profiles
 rigtune profiles --trace X    # redraw the search behind a profile (part of its model id, or a profile JSON path)
+rigtune tradeoffs X           # what a profile's limits cost, from its recorded trials (--optimise/--limit re-score it)
 rigtune compare <model>       # rigtune's pick vs stock defaults vs Ollama, one workload -> results JSON
                                 #   --repeats 3: every row measured 3x interleaved; median, spread, noise flags
                                 #   --eval-workload-file B: calibrate on --workload-file A, measure every row on B

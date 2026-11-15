@@ -162,20 +162,42 @@ def _search_view(objective: str, cons):
     return SearchView(err, objective=objective, constraints=cons, fallback=_progress_for(objective, cons))
 
 
-def _trace(which: str) -> None:
-    """Redraw a finished search: a path to a profile JSON, or part of a cached profile's model id."""
+def _find_profile(which: str) -> Profile:
+    """A path to a profile JSON, or part of a cached profile's model id."""
     from rigtune import cache as profile_cache
-    from rigtune.searchview import SearchView
 
     path = Path(which)
     if path.is_file():
-        p = Profile.model_validate_json(path.read_text(encoding="utf-8"))
-    else:
-        matches = [pr for _, pr in profile_cache.list_profiles() if which.lower() in pr.model_id.lower()]
-        if not matches:
-            err.print(f"[red]no cached profile matching {which}[/]")
-            raise typer.Exit(2)
-        p = matches[0]
+        return Profile.model_validate_json(path.read_text(encoding="utf-8"))
+    matches = [pr for _, pr in profile_cache.list_profiles() if which.lower() in pr.model_id.lower()]
+    if not matches:
+        err.print(f"[red]no cached profile matching {which}[/]")
+        raise typer.Exit(2)
+    return matches[0]
+
+
+def _print_tradeoffs(profile: Profile, objective: str, cons) -> None:
+    """After a calibration: what the goal's limits cost, from its own recorded trials (rigtune/tradeoff.py). It
+    only reads what was measured, so a failure here is said and never loses the calibration before it is saved."""
+    from rigtune.tradeoff import to_lines, tradeoffs as trade_offs
+
+    if not profile.calibration_table:
+        return
+    gate = [n for n in profile.notes if n.startswith("accuracy gate: refusing")]
+    try:
+        t = trade_offs(profile.calibration_table, objective, cons, accuracy=gate, winner=_winner_key(profile))
+        lines = to_lines(t)
+    except Exception as exc:  # the table is a reading; the profile is what matters
+        err.print(f"[yellow]trade-off table not shown: {exc}[/]", highlight=False)
+        return
+    console.print("\n".join(lines), markup=False, highlight=False, soft_wrap=True)
+
+
+def _trace(which: str) -> None:
+    """Redraw a finished search: a path to a profile JSON, or part of a cached profile's model id."""
+    from rigtune.searchview import SearchView
+
+    p = _find_profile(which)
     if not p.calibration_table:
         err.print("[yellow]that profile has no calibration table: it was served without a search[/]")
         raise typer.Exit(2)
@@ -851,8 +873,9 @@ def bench(
     view.stop()
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
-    if save:
+    if save:  # before the table: nothing printed after a calibration can lose it
         profile_cache.save(profile)
+    _print_tradeoffs(profile, objective, cons)
 
 
 @app.command()
@@ -924,6 +947,7 @@ def recalibrate(
     view.stop()
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
+    _print_tradeoffs(profile, objective, cons)
 
 
 @app.command()
@@ -1330,6 +1354,40 @@ def profiles(
                   p.config.key(), str(len(p.calibration_table)),
                   dt.datetime.fromtimestamp(p.created_at).strftime("%Y-%m-%d %H:%M"))
     console.print(t)
+
+
+@app.command()
+def tradeoffs(
+    which: str = typer.Argument(..., help="A profile JSON, or part of a cached profile's model id"),
+    objective: Optional[str] = typer.Option(None, "--objective", callback=_objective,
+                                            help="Re-score under this preset instead of the profile's own goal"),
+    optimise: Optional[str] = OPTIMISE_OPT,
+    limit: Optional[List[str]] = LIMIT_OPT,
+    gpu_hourly_usd: Optional[float] = GPU_PRICE_OPT,
+    kwh_usd: Optional[float] = ENERGY_PRICE_OPT,
+) -> None:
+    """Show what a profile's limits cost, from its recorded trials, under its own goal or another one stated
+    here (prices alone add a $/Mtok column). Launches nothing and changes no profile."""
+    from rigtune.goals import GoalError, rescore_goal
+    from rigtune.tradeoff import profile_constraints, to_lines, tradeoffs as trade_offs
+
+    p = _find_profile(which)
+    if not p.calibration_table:
+        err.print("[yellow]that profile has no calibration table: it was served without a search[/]")
+        raise typer.Exit(2)
+    own = profile_constraints(p)
+    try:
+        goal, cons, prices, note = rescore_goal(p.objective, own, objective, optimise, limit or [],
+                                                gpu_hourly_usd, kwh_usd)
+    except GoalError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--optimise/--limit") from None
+    gate = [n for n in p.notes if n.startswith("accuracy gate: refusing")]
+    same = (goal, cons) == (p.objective, own)
+    t = trade_offs(p.calibration_table, goal, cons, accuracy=gate, prices=prices,
+                   winner=_winner_key(p) if same else None)
+    if note:
+        t.notes.insert(0, note)
+    console.print("\n".join(to_lines(t)), markup=False, highlight=False, soft_wrap=True)
 
 
 def _is_loopback(host: str) -> bool:
