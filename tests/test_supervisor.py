@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import List
@@ -121,3 +122,209 @@ def test_process_group_is_used_on_posix():
         assert os.getpgid(proc.pid) == proc.pid
     finally:
         proc.stop()
+
+
+class FakeChild:
+    """A started engine as the supervisor sees it, with no process behind it."""
+    born = 0
+
+    def __init__(self, ready=True, rc=None, log=""):
+        FakeChild.born += 1
+        self.pid = 1000 + FakeChild.born
+        self._alive, self._ready, self.rc, self.log = True, ready, rc, log
+
+    def wait_ready(self, timeout=None, **kwargs):
+        return self._ready
+
+    def alive(self):
+        return self._alive
+
+    def stop(self):
+        self._alive = False
+
+    def returncode(self):
+        return self.rc
+
+    def tail_log(self, n=30):
+        return self.log
+
+
+def test_shutdown_interrupts_restart_backoff(monkeypatch):
+    """A stop during the third restart's eight-second backoff must not create a child."""
+    stopping = threading.Event()
+
+    class Dead:
+        def alive(self):
+            return False
+
+        def stop(self):
+            stopping.set()
+
+    sup = Supervisor(FakeBackend(), _cfg(), None, port=12345, health_interval=0.001)
+    sup.process = Dead()
+    sup.restarts = 2
+    launched = []
+    monkeypatch.setattr(sup, "_launch", lambda: launched.append(True))
+    sup._thread = threading.Thread(target=sup._watch, daemon=True)
+    sup._thread.start()
+    assert stopping.wait(2)
+    sup.stop()
+    assert not sup._thread.is_alive()
+    assert launched == []
+
+
+def test_shutdown_during_backoff_launches_nothing_through_the_real_launch_path(monkeypatch):
+    """The same, through start(), _watch() and _launch() as they are: only the backend's launch is faked."""
+    be = FakeBackend()
+    children = []
+    monkeypatch.setattr(be, "launch", lambda *a, **kw: children.append(FakeChild()) or children[-1])
+    sup = Supervisor(be, _cfg(), None, port=12345, health_interval=0.01, max_restarts=5)
+    sup.start()
+    assert len(children) == 1 and sup.status()["ready"]
+    sup.restarts = 2  # the next restart is the third: an eight-second backoff
+    children[0].stop()  # the engine dies
+    deadline = time.monotonic() + 5
+    while sup.restarts < 3 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert sup.restarts == 3 and not sup.status()["ready"]
+    began = time.monotonic()
+    sup.stop()
+    assert time.monotonic() - began < 2  # the backoff did not hold shutdown for eight seconds
+    assert not sup._thread.is_alive()  # joined, so nothing can launch from it any more
+    assert len(children) == 1
+
+
+def test_shutdown_during_startup_stops_the_created_child(monkeypatch):
+    waiting, release = threading.Event(), threading.Event()
+
+    class Starting:
+        pid = 123
+        stopped = False
+
+        def wait_ready(self, **kwargs):
+            waiting.set()
+            assert release.wait(10)
+            return True
+
+        def stop(self):
+            self.stopped = True
+            release.set()
+
+        def alive(self):
+            return not self.stopped
+
+    be = FakeBackend()
+    child = Starting()
+    monkeypatch.setattr(be, "launch", lambda *a, **kw: child)
+    sup = Supervisor(be, _cfg(), None, port=12345)
+    starter = threading.Thread(target=sup.start, daemon=True)
+    starter.start()
+    assert waiting.wait(2)
+    sup.stop()
+    starter.join(2)
+    assert not starter.is_alive()
+    assert child.stopped
+    assert sup._thread is None or not sup._thread.is_alive()
+
+
+def test_readiness_drops_only_after_as_many_missed_polls_as_a_restart_waits_for(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from rigtune.serve.proxy import create_app
+    from rigtune.serve.supervisor import MISSES_TOLERATED
+
+    be = FakeBackend()
+    monkeypatch.setattr(be, "launch", lambda *a, **kw: FakeChild())
+    sup = Supervisor(be, _cfg(), None, port=12345, health_interval=0.001, max_restarts=0)
+    polls = iter([True] + [False] * MISSES_TOLERATED)
+    seen = []
+
+    def healthy():
+        seen.append(sup.status()["ready"])  # what /health said after the previous poll
+        return next(polls)
+
+    monkeypatch.setattr(sup, "healthy", healthy)
+    app = create_app("http://127.0.0.1:9", status_fn=sup.status)
+    sup.start()
+    sup._thread.join(5)  # with no restarts allowed, the third miss ends the watch
+    assert seen == [True] * (1 + MISSES_TOLERATED)  # ready through the first misses...
+    with TestClient(app) as c:
+        assert c.get("/health").status_code == 503  # ...and not after the third
+    sup.stop()
+
+
+def test_health_endpoint_reports_an_alive_but_unready_backend():
+    from fastapi.testclient import TestClient
+
+    from rigtune.serve.proxy import create_app
+
+    with TestClient(create_app("http://127.0.0.1:9", status_fn=lambda: {"alive": True, "ready": False})) as c:
+        assert c.get("/health").status_code == 503
+    with TestClient(create_app("http://127.0.0.1:9", status_fn=lambda: {"alive": True})) as c:
+        assert c.get("/health").status_code == 200  # a status without readiness falls back to liveness
+
+
+def test_supervisor_does_not_mark_a_404_health_check_ready(monkeypatch):
+    from types import SimpleNamespace
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url):
+            return httpx.Response(404)
+
+    sup = Supervisor(FakeBackend(), _cfg(), None, port=12345)
+    sup.process = SimpleNamespace(alive=lambda: True)
+    monkeypatch.setattr(httpx, "Client", lambda **kw: Client())
+    assert not sup.healthy()
+
+    # Startup must use the same readiness definition, before the periodic watch begins.
+    from rigtune.backends.base import Process
+    process = Process(LaunchSpec(args=[]), 12345, "http://127.0.0.1:12345/health")
+    monkeypatch.setattr(process, "alive", lambda: True)
+    assert not process.wait_ready(timeout=0.01, poll=0)
+
+
+def test_disaggregated_shutdown_also_interrupts_restart_backoff(monkeypatch):
+    from rigtune.disagg import DisaggSupervisor
+    from tests.test_phases import _pd_spec
+    stopping = threading.Event()
+
+    class DeadPair:
+        def alive(self):
+            return False
+
+        def stop(self):
+            stopping.set()
+
+    sup = DisaggSupervisor(FakeBackend(), _pd_spec(), None, health_interval=0.001)
+    sup.pair = DeadPair()
+    sup.restarts = 2
+    launched = []
+    monkeypatch.setattr(sup, "_launch", lambda: launched.append(True))
+    sup._thread = threading.Thread(target=sup._watch, daemon=True)
+    sup._thread.start()
+    assert stopping.wait(2)
+    sup.stop()
+    assert not sup._thread.is_alive()
+    assert launched == []
+
+
+def test_a_disaggregated_pair_that_fails_to_start_reports_return_codes_and_its_log(monkeypatch):
+    import rigtune.disagg as D
+    from tests.test_phases import _pd_spec
+
+    def launch(*args, wait_ready=True, **kwargs):
+        assert not wait_ready  # the supervisor waits itself, so that stop() can reach a starting pair
+        return D.PDProcesses(FakeChild(ready=False, rc=1, log="CUDA out of memory"), FakeChild(ready=False)), None
+
+    monkeypatch.setattr(D, "launch_pair", launch)
+    sup = D.DisaggSupervisor(FakeBackend(), _pd_spec(), None)
+    with pytest.raises(RuntimeError) as failed:
+        sup.start()
+    assert "prefill rc=1, decode rc=None" in str(failed.value) and "CUDA out of memory" in str(failed.value)
+    assert not sup.pair.alive() and not sup.status()["ready"]

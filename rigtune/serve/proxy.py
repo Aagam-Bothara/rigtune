@@ -107,7 +107,7 @@ def create_app(
         body: Dict[str, Any] = {"status": "ok", "upstream": upstream_base_url}
         if status_fn is not None:
             body["backend"] = status_fn()
-            if not body["backend"].get("alive", True):
+            if not body["backend"].get("ready", body["backend"].get("alive", True)):
                 body["status"] = "degraded"
         return JSONResponse(body, status_code=200 if body["status"] == "ok" else 503)
 

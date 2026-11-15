@@ -47,6 +47,7 @@ from rigtune.calibrate.objectives import Constraints, pick
 from rigtune.calibrate.workload import Workload
 from rigtune.models import Config, DisaggSpec, GPUInfo, HardwareDescriptor, PreparedModel, Profile, TrialMetrics, TrialResult
 from rigtune.power import PowerSetting, setting_of, with_power
+from rigtune.serve.supervisor import MISSES_TOLERATED
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +207,7 @@ def create_pd_app(prefill_url: str, decode_url: str, profile: Optional[Profile] 
         body: Dict[str, Any] = {"status": "ok", "prefill": prefill_url, "decode": decode_url}
         if status_fn is not None:
             body["backend"] = status_fn()
-            if not body["backend"].get("alive", True):
+            if not body["backend"].get("ready", body["backend"].get("alive", True)):
                 body["status"] = "degraded"
         return JSONResponse(body, status_code=200 if body["status"] == "ok" else 503)
 
@@ -351,6 +352,9 @@ class PDProcesses:
     def alive(self) -> bool:
         return self.prefill.alive() and self.decode.alive()
 
+    def wait_ready(self, timeout: float) -> bool:
+        return self.prefill.wait_ready(timeout=timeout) and self.decode.wait_ready(timeout=timeout)
+
     def stop(self) -> None:
         for p in (self.decode, self.prefill):
             try:
@@ -359,9 +363,18 @@ class PDProcesses:
                 logger.error("stop failed: %s", exc)
 
 
+def _startup_error(pair: PDProcesses) -> str:
+    """Why a pair did not come up: both return codes and the first log tail that says anything."""
+    pre, dec = pair.prefill, pair.decode
+    return (f"engines failed to start (prefill rc={pre.returncode()}, decode rc={dec.returncode()})\n"
+            f"{pre.tail_log(10) or dec.tail_log(10)}")
+
+
 def launch_pair(backend: BaseBackend, spec: DisaggSpec, model: PreparedModel, log_dir: Optional[Path] = None,
-                startup_timeout: float = 900.0) -> Tuple[PDProcesses, Optional[str]]:
-    """Start both engines on their GPUs. Returns (processes, error message or None)."""
+                startup_timeout: float = 900.0, wait_ready: bool = True) -> Tuple[PDProcesses, Optional[str]]:
+    """Start both engines on their GPUs. Returns (processes, error message or None). With wait_ready=False it
+    returns once both are created, for a caller that waits for them itself (DisaggSupervisor, so it can stop
+    them while they start)."""
     p_port, d_port, p_side, d_side = _free_ports(4)
     p_ls = backend.disagg_launch_spec(_strip_power(spec.prefill), model, p_port, "prefill", spec.kv_transfer_config,
                                       spec.prefill_gpu, p_side)
@@ -371,11 +384,14 @@ def launch_pair(backend: BaseBackend, spec: DisaggSpec, model: PreparedModel, lo
     logs = (log_dir / f"{stamp}_pd_prefill.log", log_dir / f"{stamp}_pd_decode.log") if log_dir else (None, None)
     hp = backend.health_path
     pre = Process(p_ls, p_port, f"http://127.0.0.1:{p_port}{hp}", log_path=logs[0]).start()
-    dec = Process(d_ls, d_port, f"http://127.0.0.1:{d_port}{hp}", log_path=logs[1]).start()
+    try:
+        dec = Process(d_ls, d_port, f"http://127.0.0.1:{d_port}{hp}", log_path=logs[1]).start()
+    except BaseException:
+        pre.stop()  # no prefill engine left running without its decode partner
+        raise
     pair = PDProcesses(pre, dec)
-    if not (pre.wait_ready(timeout=startup_timeout) and dec.wait_ready(timeout=startup_timeout)):
-        err = (f"engines failed to start (prefill rc={pre.returncode()}, decode rc={dec.returncode()})\n"
-               f"{pre.tail_log(10) or dec.tail_log(10)}")
+    if wait_ready and not pair.wait_ready(startup_timeout):
+        err = _startup_error(pair)
         pair.stop()
         return pair, err
     return pair, None
@@ -491,6 +507,8 @@ class DisaggSupervisor:
         self.last_error: Optional[str] = None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()  # as Supervisor._lock: held to create or stop the pair, not while it starts
+        self._ready = False
 
     @property
     def prefill_url(self) -> str:
@@ -503,34 +521,55 @@ class DisaggSupervisor:
         return self.pair.decode_url
 
     def start(self) -> None:
-        self._launch()
-        s = setting_of(self.spec.decode)
-        if not s.is_default:
-            if self.power is None:
-                self.power_error = "profile caps the decode GPU but no power controller was provided"
-            else:
-                try:
-                    self.power.apply(s)
-                except Exception as exc:
-                    self.power_error = str(exc)
-                    logger.warning("serving without the calibrated decode power setting: %s", exc)
-        self._thread = threading.Thread(target=self._watch, name="rigtune-pd-supervisor", daemon=True)
-        self._thread.start()
+        if not self._launch():
+            return  # stopped while starting
+        with self._lock:
+            if self._stop.is_set():
+                return
+            s = setting_of(self.spec.decode)
+            if not s.is_default:
+                if self.power is None:
+                    self.power_error = "profile caps the decode GPU but no power controller was provided"
+                else:
+                    try:
+                        self.power.apply(s)
+                    except Exception as exc:
+                        self.power_error = str(exc)
+                        logger.warning("serving without the calibrated decode power setting: %s", exc)
+            self._thread = threading.Thread(target=self._watch, name="rigtune-pd-supervisor", daemon=True)
+            self._thread.start()
 
-    def _launch(self) -> None:
-        pair, err = launch_pair(self.backend, self.spec, self.model, self.log_dir, self.startup_timeout)
-        if err:
-            raise RuntimeError(err)
-        self.pair = pair
-        logger.info("prefill engine on GPU %d (%s), decode engine on GPU %d (%s)", self.spec.prefill_gpu,
-                    pair.prefill_url, self.spec.decode_gpu, pair.decode_url)
+    def _launch(self) -> bool:
+        """Start the pair and wait until both are ready. False when stop() came first: no engine is left running."""
+        with self._lock:
+            if self._stop.is_set():
+                return False
+            self._ready = False
+            pair, _ = launch_pair(self.backend, self.spec, self.model, self.log_dir, self.startup_timeout,
+                                  wait_ready=False)
+            self.pair = pair
+        ready = pair.wait_ready(self.startup_timeout)
+        with self._lock:
+            if self._stop.is_set():
+                pair.stop()
+                return False
+            if not ready:
+                err = _startup_error(pair)
+                pair.stop()
+                raise RuntimeError(err)
+            self._ready = True
+            self.last_error = None
+            logger.info("prefill engine on GPU %d (%s), decode engine on GPU %d (%s)", self.spec.prefill_gpu,
+                        pair.prefill_url, self.spec.decode_gpu, pair.decode_url)
+            return True
 
     def healthy(self) -> bool:
-        if self.pair is None or not self.pair.alive():
+        """One health poll: both engines alive and answering 2xx."""
+        if self._stop.is_set() or self.pair is None or not self.pair.alive():
             return False
         try:
             with httpx.Client(timeout=5.0) as c:
-                return all(c.get(u + self.backend.health_path).status_code < 500
+                return all(200 <= c.get(u + self.backend.health_path).status_code < 300
                            for u in (self.pair.prefill_url, self.pair.decode_url))
         except httpx.HTTPError:
             return False
@@ -540,9 +579,13 @@ class DisaggSupervisor:
         while not self._stop.wait(self.health_interval):
             if self.healthy():
                 misses = 0
+                self._ready = True
                 continue
             misses += 1
-            if misses < 3 and self.pair is not None and self.pair.alive():
+            alive = self.pair is not None and self.pair.alive()
+            if misses >= MISSES_TOLERATED or not alive:
+                self._ready = False
+            if misses < MISSES_TOLERATED and alive:
                 continue
             if self.restarts >= self.max_restarts:
                 self.last_error = f"engine died and restart budget ({self.max_restarts}) exhausted"
@@ -552,19 +595,23 @@ class DisaggSupervisor:
             logger.warning("prefill/decode pair unhealthy; restart %d/%d", self.restarts, self.max_restarts)
             if self.pair is not None:
                 self.pair.stop()
-            time.sleep(min(60.0, 2.0 ** self.restarts))
+            if self._stop.wait(min(60.0, 2.0 ** self.restarts)):  # a shutdown during the backoff launches nothing
+                return
             try:
-                self._launch()
+                if not self._launch():
+                    return
                 misses = 0
             except Exception as exc:
                 self.last_error = str(exc)
 
     def stop(self) -> None:
         self._stop.set()
+        with self._lock:
+            self._ready = False
+            if self.pair is not None:
+                self.pair.stop()
         if self._thread is not None:
             self._thread.join(timeout=5)
-        if self.pair is not None:
-            self.pair.stop()
         if self.power is not None and getattr(self.power, "applied", None) is not None:
             try:
                 self.power.restore()
@@ -577,6 +624,7 @@ class DisaggSupervisor:
             "phases": "disaggregated",
             "backend": self.backend.name,
             "alive": bool(pair and pair.alive()),
+            "ready": bool(self._ready and not self._stop.is_set() and pair and pair.alive()),
             "prefill": {"gpu": self.spec.prefill_gpu, "pid": pair.prefill.pid if pair else None,
                         "config": self.spec.prefill.key()},
             "decode": {"gpu": self.spec.decode_gpu, "pid": pair.decode.pid if pair else None,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from pathlib import Path
 from typing import Optional
 
@@ -14,6 +13,10 @@ from rigtune.backends.base import BaseBackend, Process, free_port
 from rigtune.models import Config, PreparedModel
 
 logger = logging.getLogger(__name__)
+
+# Failed health polls in a row before a live backend is restarted, and before /health reports it not ready: one
+# slow poll under load is not an outage, and readiness should not flap where the restart logic would wait.
+MISSES_TOLERATED = 3
 
 
 class Supervisor:
@@ -44,7 +47,9 @@ class Supervisor:
         self.last_error: Optional[str] = None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        # Held while a child is created or stopped, never while it starts up, so stop() can always reach it.
         self._lock = threading.Lock()
+        self._ready = False  # started, and not MISSES_TOLERATED health polls in a row failed since
         self.power = power  # rigtune.power.PowerController when the profile carries a power setting
         self.power_error: Optional[str] = None
         self.tier_warning: Optional[str] = None  # set when a KV-cache tier pick no longer fits this host
@@ -89,10 +94,14 @@ class Supervisor:
 
         kvtier.sweep()  # disk tiers a killed rigtune left behind
         self._check_tier()
-        self._launch()
-        self._apply_power()
-        self._thread = threading.Thread(target=self._watch, name="rigtune-supervisor", daemon=True)
-        self._thread.start()
+        if not self._launch():
+            return  # stopped while starting
+        with self._lock:
+            if self._stop.is_set():
+                return
+            self._apply_power()
+            self._thread = threading.Thread(target=self._watch, name="rigtune-supervisor", daemon=True)
+            self._thread.start()
 
     def _apply_power(self) -> None:
         """Serve at the calibrated power setting. Failure is not fatal: the server runs uncapped."""
@@ -110,8 +119,12 @@ class Supervisor:
             self.power_error = str(exc)
             logger.warning("serving without the calibrated power setting: %s", exc)
 
-    def _launch(self) -> None:
+    def _launch(self) -> bool:
+        """Start the backend and wait until it is ready. False when stop() came first: no child is left running."""
         with self._lock:
+            if self._stop.is_set():
+                return False
+            self._ready = False
             if self._tiered:
                 from rigtune import kvtier
 
@@ -123,18 +136,29 @@ class Supervisor:
                 self.process = Process(spec, self.port, self.health_url, log_path=self.log_path).start()
             else:
                 self.process = self.backend.launch(self.cfg, self.model, self.port, log_path=self.log_path)
-            if not self.process.wait_ready(timeout=self.startup_timeout):
-                tail = self.process.tail_log(30)
-                self.process.stop()
+            process = self.process
+        # Startup takes minutes; stop() must be able to end it, so the lock is not held while waiting.
+        ready = process.wait_ready(timeout=self.startup_timeout)
+        with self._lock:
+            if self._stop.is_set():
+                process.stop()
+                return False
+            if not ready:
+                tail = process.tail_log(30)
+                process.stop()
                 raise RuntimeError(f"{self.backend.name} failed to start on port {self.port}\n{tail}")
-            logger.info("%s ready on %s (pid %s)", self.backend.name, self.base_url, self.process.pid)
+            self._ready = True
+            self.last_error = None
+            logger.info("%s ready on %s (pid %s)", self.backend.name, self.base_url, process.pid)
+            return True
 
     def healthy(self) -> bool:
-        if self.process is None or not self.process.alive():
+        """One health poll: the process is alive and its health endpoint answers 2xx."""
+        if self._stop.is_set() or self.process is None or not self.process.alive():
             return False
         try:
             with httpx.Client(timeout=5.0) as c:
-                return c.get(self.health_url).status_code < 500
+                return 200 <= c.get(self.health_url).status_code < 300
         except httpx.HTTPError:
             return False
 
@@ -143,9 +167,13 @@ class Supervisor:
         while not self._stop.wait(self.health_interval):
             if self.healthy():
                 misses = 0
+                self._ready = True
                 continue
             misses += 1
-            if misses < 3 and self.process is not None and self.process.alive():
+            alive = self.process is not None and self.process.alive()
+            if misses >= MISSES_TOLERATED or not alive:
+                self._ready = False
+            if misses < MISSES_TOLERATED and alive:
                 continue  # transient; give it a couple of intervals
             if self.restarts >= self.max_restarts:
                 self.last_error = f"backend died and restart budget ({self.max_restarts}) exhausted"
@@ -156,9 +184,11 @@ class Supervisor:
             logger.warning("backend unhealthy; restart %d/%d in %.0fs", self.restarts, self.max_restarts, delay)
             if self.process is not None:
                 self.process.stop()
-            time.sleep(delay)
+            if self._stop.wait(delay):  # a shutdown during the backoff ends it, and launches nothing
+                return
             try:
-                self._launch()
+                if not self._launch():
+                    return
                 misses = 0
             except Exception as exc:
                 self.last_error = str(exc)
@@ -166,10 +196,12 @@ class Supervisor:
 
     def stop(self) -> None:
         self._stop.set()
+        with self._lock:  # a child created before this point is stopped here; _launch creates none after it
+            self._ready = False
+            if self.process is not None:
+                self.process.stop()
         if self._thread is not None:
             self._thread.join(timeout=5)
-        if self.process is not None:
-            self.process.stop()
         if self._tiered:
             from rigtune import kvtier
 
@@ -187,6 +219,8 @@ class Supervisor:
             "port": self.port,
             "pid": self.process.pid if self.process else None,
             "alive": bool(self.process and self.process.alive()),
+            # Liveness says the process exists; readiness that it has started and still answers its health checks.
+            "ready": bool(self._ready and not self._stop.is_set() and self.process and self.process.alive()),
             "restarts": self.restarts,
             "last_error": self.last_error,
             **({"kv_tier": {"tier": self.cfg.kv_tier, "warning": self.tier_warning}}

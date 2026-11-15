@@ -111,7 +111,7 @@ class Process:
                     return False
                 try:
                     r = client.get(self.health_url)
-                    if r.status_code < 500:
+                    if 200 <= r.status_code < 300:  # a 404 or 503 is an engine that is not serving yet
                         self.ready_at = time.monotonic()
                         return True
                 except httpx.HTTPError:

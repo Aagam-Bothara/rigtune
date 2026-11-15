@@ -91,7 +91,7 @@ def create_lb_app(upstreams: List[str], profile: Optional[Profile] = None,
         body: Dict[str, Any] = {"status": "ok", "replicas": upstreams}
         if status_fn is not None:
             body["backend"] = status_fn()
-            if not body["backend"].get("alive", True):
+            if not body["backend"].get("ready", body["backend"].get("alive", True)):
                 body["status"] = "degraded"
         return JSONResponse(body, status_code=200 if body["status"] == "ok" else 503)
 
@@ -258,7 +258,8 @@ class ReplicaSupervisor:
 
     def status(self) -> Dict[str, Any]:
         per = [s.status() for s in self.supervisors]
-        return {"layout": "replicas", "alive": all(p["alive"] for p in per), "replicas": per}
+        return {"layout": "replicas", "alive": all(p["alive"] for p in per),
+                "ready": all(p.get("ready", p["alive"]) for p in per), "replicas": per}
 
 
 # --------------------------------------------------------------------------- calibration
