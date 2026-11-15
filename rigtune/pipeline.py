@@ -14,7 +14,14 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from rigtune import __version__, engines, selfcheck
 from rigtune import cache as profile_cache
 from rigtune.backends import BaseBackend, registry as backend_registry
-from rigtune.calibrate.objectives import Constraints, capacity_level, close_call_level
+from rigtune.calibrate.objectives import (
+    CUSTOM,
+    Constraints,
+    capacity_level,
+    close_call_level,
+    parse_goal,
+    resolve_goal,
+)
 from rigtune.calibrate.search import ProgressFn, StagedSearch, SubprocessTrialRunner, TrialRunner
 from rigtune.calibrate.workload import Workload, get_workload, with_minimum_requests
 from rigtune.hardware import hardware_hash, llmtrace_version, probe
@@ -130,7 +137,10 @@ class SearchOptions:
 
         Constraints that differ from the ones a calibration of this workload uses by default (a --ttft-ceiling,
         --tpot-ceiling or --tok-s-floor) add a fingerprint of the differing fields, so a pick made for one target
-        is never served for another; the defaults add nothing, so their profiles keep their names."""
+        is never served for another; the defaults add nothing, so their profiles keep their names.
+
+        A custom goal (objective "custom") names what it optimises; its limits are in that fingerprint, which covers
+        the goal's text. The text itself never goes into a file name: `<` and `>` are not allowed there on Windows."""
         out: Dict[str, str] = {}
         if self.quants is not None:
             out["quant"] = "+".join(self.quants)
@@ -178,8 +188,12 @@ class SearchOptions:
                 out["ratecheck"] = "off"
         if objective == "balanced" and self.ttft_percentile != 50:
             out["ttft"] = f"p{self.ttft_percentile}"
-        changes = constraint_changes(effective_constraints(constraints, workload, self),
-                                     default_constraints(workload, self))
+        effective = effective_constraints(constraints, workload, self)
+        if objective == CUSTOM:
+            if effective.goal is None:
+                raise ValueError("the custom objective needs a goal (Constraints.goal)")
+            out["optimise"] = parse_goal(effective.goal).optimise
+        changes = constraint_changes(effective, default_constraints(workload, self))
         if changes:
             encoded = json.dumps(changes, sort_keys=True)
             out["limits"] = hashlib.sha256(encoded.encode()).hexdigest()[:16]
@@ -1033,9 +1047,13 @@ def calibrate(
     profile.options = opts.key(objective, constraints, workload)
     profile.calibration_constraints = dataclasses.asdict(constraints)
     profile.model_revision = resolve_revision(spec)
-    # Drift compares live latency with the ceilings the pick was scored against, which a caller may have set.
-    profile.workload_spec.update(ttft_ceiling_ms=constraints.ttft_ceiling_ms,
-                                 tpot_ceiling_ms=constraints.tpot_ceiling_ms)
+    # Drift compares live latency with the ceilings the pick was scored against, which a caller may have set. A
+    # custom goal was scored against its own TTFT limit, or none.
+    ttft = constraints.ttft_ceiling_ms
+    if objective == CUSTOM:
+        limit = resolve_goal(objective, constraints).ttft_limit
+        ttft = limit.bound if limit is not None else None
+    profile.workload_spec.update(ttft_ceiling_ms=ttft, tpot_ceiling_ms=constraints.tpot_ceiling_ms)
     if gate is not None:
         profile.accuracy = gate.records()
         profile.eval_set = gate.info

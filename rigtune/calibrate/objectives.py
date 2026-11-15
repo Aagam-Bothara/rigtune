@@ -23,7 +23,10 @@ measurement noise and a bigger context window is a real capability.
 
 from __future__ import annotations
 
+import dataclasses
+import functools
 import math
+import re
 import statistics
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -58,6 +61,10 @@ class Constraints:
     # least-violating configuration. Applied to the final choice only (meets); during the search the leader is
     # still the least-violating configuration, so the stages after it can find one that does meet them.
     strict: bool = False
+    # objective "custom" only: the goal in its canonical text, `min joules_per_token; tok_s>=200` (format_goal). A
+    # string, not a structure, because constraints are recorded in the profile as JSON and compared field by field;
+    # None for the four presets, so it changes no preset's fingerprint.
+    goal: Optional[str] = None
 
 
 @dataclass
@@ -127,9 +134,10 @@ class Metric:
     # improves lets a trial stop at the busiest level that meets the limits (enough_level).
     load: str
     read: Callable[[TrialMetrics], Optional[float]]  # None: not measured at that level
+    optimisable: bool = True  # False: a limit only
 
 
-# Every metric a goal names, in its own unit (ms). tok_s is read as recorded, never replaced by None, so a
+# Every metric a goal names, in its own unit (ms, W, MiB). tok_s is read as recorded, never replaced by None, so a
 # throughput floor judges a trial exactly as the presets always have.
 METRICS: Dict[str, Metric] = {m.name: m for m in (
     Metric("tok_s", "max", "improves", lambda m: m.tok_s),
@@ -140,6 +148,9 @@ METRICS: Dict[str, Metric] = {m.name: m for m in (
     # Energy per token can fall as load rises (the card's draw is shared by more tokens) or rise (a busier card
     # draws more than it adds tokens): no level order settles it.
     Metric("joules_per_token", "min", "unknown", lambda m: _finite(m.joules_per_token)),
+    # Limits only: the least power or memory is never worth having for itself, only as a bound on the rest.
+    Metric("power_w", "min", "unknown", lambda m: _finite(m.power_w), optimisable=False),
+    Metric("mem_mb", "min", "unknown", lambda m: _finite(m.peak_mem_mb), optimisable=False),
 )}
 
 
@@ -197,6 +208,10 @@ class Goal:
     # efficiency's own fallback: a level without energy readings is ordered by tok/s, so the preset still resolves
     # where NVML cannot read power.
     energy_fallback: bool = False
+    # A goal stated in its own terms (objective "custom"): a level that misses limits is ranked by how many it
+    # misses, then by how far past them it is relative to each bound, since milliseconds and watts do not add up.
+    # The presets keep summing each limit's excess in its own unit, so no preset pick moves.
+    custom: bool = False
 
     def score(self, m: TrialMetrics) -> float:
         """Lower is better; a level that did not measure the optimised metric scores worst."""
@@ -219,6 +234,16 @@ class Goal:
     def meets(self, m: TrialMetrics, bounds: Sequence[float]) -> bool:
         return all(lim.met(m, b) for lim, b in zip(self.limits, bounds))
 
+    def violation_key(self, m: TrialMetrics, bounds: Sequence[float]) -> Tuple[float, float]:
+        """(limits missed, the sum of each excess over its bound): how a custom goal orders levels that miss."""
+        missed, relative = 0, 0.0
+        for lim, bound in zip(self.limits, bounds):
+            excess = lim.excess(m, bound)
+            if excess > 0:
+                missed += 1
+                relative += excess / abs(bound) if bound else excess
+        return float(missed), relative
+
     @property
     def improves_with_load(self) -> bool:
         """Whether the optimised metric gets better as load rises, so the busiest level that meets the limits is
@@ -240,11 +265,83 @@ def _ttft_metric(percentile: int) -> str:
     return "ttft_p95_ms" if percentile >= 95 else "ttft_p50_ms"
 
 
+CUSTOM = "custom"  # the objective of a goal no preset expresses: Constraints.goal says what it is
+
+_LIMIT = re.compile(r"(?P<metric>[a-z0-9_]+)\s*(?P<op><=|>=)\s*"
+                    r"(?P<num>\d+(?:\.\d*)?(?:e[+-]?\d+)?|\.\d+(?:e[+-]?\d+)?)(?P<best>%best)?")
+
+
+def _number(x: float) -> str:
+    """A bound as goal text writes it: the shortest form that reads back as the same float."""
+    x = float(x)  # an int has is_integer() only from Python 3.12
+    return str(int(x)) if x.is_integer() and abs(x) < 1e15 else repr(x)
+
+
+def format_goal(goal: Goal) -> str:
+    """The canonical text of a custom goal: `min joules_per_token; tok_s>=50%best; ttft_p95_ms<=800`, the limits
+    in the order of their names, so one goal is always one string (and one profile fingerprint)."""
+    parts = [f"{METRICS[goal.optimise].sense} {goal.optimise}"]
+    for lim in goal.limits:
+        number = _number(round(lim.bound * 100, 10)) + "%best" if lim.of_best else _number(lim.bound)
+        parts.append(f"{lim.metric}{lim.op}{number}")
+    return "; ".join(parts)
+
+
+@functools.lru_cache(maxsize=64)  # rank runs on every progress line
+def parse_goal(text: str) -> Goal:
+    """A custom goal from its text (format_goal). Raises ValueError, naming what is wrong, for anything else."""
+    head, *rest = [part.strip() for part in text.split(";")]
+    words = head.split()
+    if len(words) != 2 or words[0] not in ("min", "max"):
+        raise ValueError(f"a goal starts with `min <metric>` or `max <metric>`, not {head!r}")
+    sense, optimise = words
+    metric = METRICS.get(optimise)
+    if metric is None or not metric.optimisable:
+        raise ValueError(f"cannot optimise {optimise!r}; choose from "
+                         f"{', '.join(m.name for m in METRICS.values() if m.optimisable)}")
+    if sense != metric.sense:
+        raise ValueError(f"{optimise} is better {'higher' if metric.sense == 'max' else 'lower'}: "
+                         f"`{metric.sense} {optimise}`")
+    limits: Dict[str, Limit] = {}
+    for part in rest:
+        match = _LIMIT.fullmatch(part)
+        if not match:
+            raise ValueError(f"not a limit: {part!r} (`metric<=number` or `metric>=number`)")
+        name, op = match["metric"], match["op"]
+        known = METRICS.get(name)
+        if known is None or name == "tpot_ms":
+            raise ValueError(f"unknown limit {name!r}" + (" (the TPOT ceiling is Constraints.tpot_ceiling_ms)"
+                                                         if name == "tpot_ms" else ""))
+        wanted = "<=" if known.sense == "min" else ">="
+        if op != wanted:
+            raise ValueError(f"{name} is better {'lower' if known.sense == 'min' else 'higher'}, so its limit is "
+                             f"{wanted}, not {op}")
+        if match["best"] and name != "tok_s":
+            raise ValueError(f"%best is a share of the best tok/s; {name} takes a number")
+        if name in limits:
+            raise ValueError(f"{name} is limited twice")
+        bound = float(match["num"])
+        if not math.isfinite(bound):  # a number too long for a float reads as infinity, which never writes back
+            raise ValueError(f"{name}'s bound is not a finite number")
+        if match["best"] and not 0 < bound <= 100:
+            raise ValueError(f"{name}>={match['num']}%best: a share of the best tok/s is above 0% and at most 100%")
+        limits[name] = Limit(name, op, bound / 100 if match["best"] else bound, of_best=bool(match["best"]))
+    return Goal(optimise, tuple(limits[k] for k in sorted(limits)), custom=True)
+
+
 def resolve_goal(objective: str, cons: Constraints) -> Goal:
-    """The goal an objective name stands for, built from the constraints' fields (the docstring table above).
+    """The goal an objective name stands for, built from the constraints' fields (the docstring table above), or
+    for `custom` read from Constraints.goal.
 
     The workload's TPOT ceiling, when set, is the last limit of every one, a missing TPOT counting as 0."""
     tpot = (Limit("tpot_ms", "<=", cons.tpot_ceiling_ms, missing="zero"),) if cons.tpot_ceiling_ms is not None else ()
+    if objective == CUSTOM:
+        if cons.goal is None:
+            raise ValueError("the custom objective needs a goal (Constraints.goal)")
+        stated = parse_goal(cons.goal)
+        return dataclasses.replace(stated, limits=stated.limits + tpot)
+    if cons.goal is not None:
+        raise ValueError(f"a goal is stated for the custom objective only, not {objective}")
     floor = (Limit("tok_s", ">=", cons.tok_s_floor_abs) if cons.tok_s_floor_abs is not None
              else Limit("tok_s", ">=", cons.tok_s_floor_frac, of_best=True))
     if objective == "throughput":
@@ -266,7 +363,7 @@ def enough_level(objective: str, cons: Optional[Constraints] = None) -> Optional
     speculation lost throughput as load rose, but only on configurations that lost anyway.) Any other metric
     (`latency`, `efficiency`) can prefer a lower level, so it needs every one measured: None.
     """
-    if objective not in OBJECTIVES:
+    if objective not in (*OBJECTIVES, CUSTOM):
         return None
     goal = resolve_goal(objective, cons or Constraints())
     if not goal.improves_with_load:
@@ -290,7 +387,7 @@ def close_call_level(objective: str, cons: Optional[Constraints] = None,
     samples exceeds the true p95 only 80.6% of the time. Demanding a true 95% upper bound would take 59 requests
     per level (72 for a two-sided interval), so a level that passes this screen has not been certified at 95%.
     """
-    if objective not in OBJECTIVES:
+    if objective not in (*OBJECTIVES, CUSTOM):
         return None
     ceiling = resolve_goal(objective, cons or Constraints()).ttft_limit
     if ceiling is None:
@@ -499,6 +596,11 @@ def rank(results: Sequence[TrialResult], objective: str, cons: Optional[Constrai
         # Score the trial at its best concurrency level for this objective.
         per_level = []
         for m in _levels(r):
+            if goal.custom:
+                key = goal.violation_key(m, bounds)
+                per_level.append(Ranked(result=r, metrics=m, score=goal.score(m), feasible=key[0] == 0.0,
+                                        violation=key[1], violation_key=key))
+                continue
             violation = goal.violation(m, bounds)
             per_level.append(Ranked(result=r, metrics=m, score=goal.score(m), feasible=violation == 0.0,
                                     violation=violation))
@@ -539,6 +641,10 @@ def strict_refusal(winner: Optional[TrialResult], results: Sequence[TrialResult]
     mine = [x for x in rank(results, objective, cons) if x.result is winner]
     if mine and mine[0].feasible:
         return None
+    if objective == CUSTOM:
+        by = f" (the closest {_missed(mine[0])})" if mine else ""
+        return (f"strict constraints: no measured {what} met every limit of the goal {cons.goal}{by}; refusing to "
+                "serve the one that missed the least")
     by = f" (the closest missed by {mine[0].violation:.1f})" if mine else ""
     return (f"strict constraints: no measured {what} met the {objective} constraints{by}; refusing to serve the "
             "least-violating one")
@@ -553,7 +659,10 @@ def pick(
         return None, ["no successful trials"]
     top = ranked[0]
     notes: List[str] = []
-    if not top.feasible:
+    if not top.feasible and objective == CUSTOM:
+        notes.append(f"no config met every limit of the goal {(cons or Constraints()).goal}; picked the one that "
+                     f"missed the least ({_missed(top)})")
+    elif not top.feasible:
         notes.append(
             f"no config satisfied the {objective} constraint; picked the least-violating one "
             f"(violation {top.violation:.1f})"
@@ -574,6 +683,12 @@ def pick(
             if extra:
                 notes.append(extra)
     return top.result, notes
+
+
+def _missed(x: Ranked) -> str:
+    """How a custom goal's least-missing level missed: how many limits, and how far past them in all."""
+    missed = int(x.violation_key[0]) if x.violation_key else 0
+    return f"missed {missed} limit{'s' if missed != 1 else ''}, {x.violation:.0%} past {'them' if missed != 1 else 'it'}"
 
 
 def _own_length_note(top: Ranked, cons: Optional[Constraints]) -> str:
