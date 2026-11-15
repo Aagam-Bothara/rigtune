@@ -1054,6 +1054,13 @@ def compare(
         objective, optimise, limit, ttft_ceiling, ttft_percentile, tok_s_floor, tpot_ceiling, wl, arrival_rate,
         strict_constraints, eval_set, max_accuracy_loss, gpu_hourly_usd, kwh_usd)
     _check_rate(objective, arrival_rate)
+    if verdict and cons.goal is not None:  # a verdict counts tok/s: it cannot judge a goal that optimises another
+        from rigtune.calibrate.objectives import parse_goal
+
+        metric = parse_goal(cons.goal).optimise
+        if metric != "tok_s":
+            raise typer.BadParameter(f"a verdict weighs tok/s, and this goal optimises {metric}: leave out "
+                                     "--verdict, or optimise tok_s", param_hint="--verdict")
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)
     # Held-out prompts are read before calibrating, so a bad file fails in seconds rather than after the search.
@@ -1128,7 +1135,7 @@ def compare(
         named = ModelSpec(hf_id=name_only(spec.hf_id))  # a local model folder by its name, not its path
         measured = with_levels(eval_wl, users)[0].name if users else eval_wl.name
         target = free_results_path(results_path(hardware_hash(hw), named, measured,
-                                                profile.objective, out))
+                                                profile.objective, out, goal=cons.goal))
         runs = runs_path_for(target)
         requests, probe = target.with_name(target.name.removesuffix(".json") + ".requests"), gpu_state
         prompts = {"calibration_prompts": workload_file, "measured_prompts": eval_workload_file}
@@ -1140,7 +1147,7 @@ def compare(
                    "check_answers": name_only(check_answers) if check_answers else None,
                    "check_items": check_items if check_answers else None,
                    "max_accuracy_loss_points": max_accuracy_loss if check_answers else None,
-                   "verdict_thresholds": vars(Thresholds())}
+                   "verdict_thresholds": vars(Thresholds()), **({"goal": cons.goal} if cons.goal else {})}
         origin = provenance(hw, prompts, model=spec, workload=eval_wl, options=options, command=sys.argv,
                             rows=list(rows or []), expert=expert, inputs=copy_inputs(target, prompts),
                             logs=f"{named.safe_id if named.hf_id == spec.hf_id else '<the model>'}"

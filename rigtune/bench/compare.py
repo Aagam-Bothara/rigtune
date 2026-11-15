@@ -24,7 +24,7 @@ from rigtune import __version__, paths
 from rigtune.backends.base import BaseBackend
 from rigtune.bench.references import OllamaReference, ollama_tag_for, reference_configs
 from rigtune.bench.rows import ExtraRow
-from rigtune.calibrate.objectives import Constraints
+from rigtune.calibrate.objectives import CUSTOM, Constraints, parse_goal, resolve_goal
 from rigtune.calibrate.search import SubprocessTrialRunner, TrialRunner
 from rigtune.calibrate.workload import Workload, get_workload
 from rigtune.hardware import hardware_hash
@@ -115,6 +115,9 @@ class ComparisonRow(BaseModel):
     scored_ttft_p95_ms: Optional[float] = None
     scored_tpot_ms: Optional[float] = None
     scored_joules_per_token: Optional[float] = None
+    # A custom goal's optimised metric at the scored level (objectives.Goal.reader); unset under a preset, and then
+    # left out of the file, so a preset comparison is written exactly as before goals.
+    scored_objective: Optional[float] = None
     meets_slo: Optional[bool] = None
     calibration_seconds: float = 0.0
     calibration_trials: int = 0
@@ -133,7 +136,8 @@ class ComparisonRow(BaseModel):
 
     @model_serializer(mode="wrap")
     def _omit_unset_provenance(self, handler) -> Dict[str, Any]:
-        return _drop(handler(self), ("kind", "source", "run_records", "answer_check", "launch_env"))
+        return _drop(handler(self), ("kind", "source", "run_records", "answer_check", "launch_env",
+                                     "scored_objective"))
 
 
 class SkippedRow(BaseModel):
@@ -175,10 +179,11 @@ class ComparisonResult(BaseModel):
     incomplete: Optional[str] = None
     # What the comparison ran on (provenance()), under --verdict only.
     provenance: Optional[Dict[str, Any]] = None
+    goal: Optional[str] = None  # objective "custom": the goal's text (Constraints.goal); else left out of the file
 
     @model_serializer(mode="wrap")
     def _omit_empty_skipped(self, handler) -> Dict[str, Any]:
-        return _drop(handler(self), ("skipped", "incomplete", "provenance"))
+        return _drop(handler(self), ("skipped", "incomplete", "provenance", "goal"))
 
     @property
     def rigtune_row(self) -> Optional[ComparisonRow]:
@@ -196,7 +201,12 @@ def results_dir() -> Path:
     return Path(paths.env("RESULTS") or "benchmarks/results")
 
 
-def results_path(hw_hash: str, spec: ModelSpec, workload: str, objective: str, out: Optional[Path] = None) -> Path:
+def results_path(hw_hash: str, spec: ModelSpec, workload: str, objective: str, out: Optional[Path] = None,
+                 goal: Optional[str] = None) -> Path:
+    """Where a comparison is written. A custom goal is named by what it optimises and a hash of its text,
+    `custom-joules_per_token-1a2b3c4d`, so two goals never share a file and no `<` or `>` reaches a file name."""
+    if objective == CUSTOM and goal is not None:
+        objective = f"{CUSTOM}-{parse_goal(goal).optimise}-{hashlib.sha256(goal.encode()).hexdigest()[:8]}"
     return (out or results_dir()) / f"{hw_hash}__{spec.safe_id}__{workload}__{objective}.json"
 
 
@@ -218,6 +228,9 @@ def _score_row(row: ComparisonRow, objective: str, cons: Constraints) -> None:
     row.scored_ttft_p95_ms = m.ttft_p95_ms
     row.scored_tpot_ms = m.tpot_ms
     row.scored_joules_per_token = m.joules_per_token
+    if objective == CUSTOM:
+        goal = resolve_goal(objective, cons)
+        row.scored_objective = goal.reader(goal.optimise)(m)
     row.meets_slo = ranked[0].feasible
 
 
@@ -862,6 +875,7 @@ def compare(
         tpot_ceiling_ms=cons.tpot_ceiling_ms,
         skipped=skipped,
         provenance=origin,
+        goal=cons.goal,
     )
     if origin is not None:  # with provenance a prompt file is named, not located: a path can carry a user
         source = str(result.workload_spec.get("source", ""))
@@ -1025,7 +1039,7 @@ def compare(
 def save(result: ComparisonResult, out: Optional[Path] = None, path: Optional[Path] = None) -> Path:
     """Write the results to `path`, or to results_path() in `out`, replacing what is there as always."""
     path = path or results_path(result.hardware_hash, ModelSpec(hf_id=result.model_id), result.workload,
-                                result.objective, out)
+                                result.objective, out, goal=result.goal)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     return path
@@ -1036,10 +1050,14 @@ def _f(x: Optional[float], nd: int = 0) -> str:
 
 
 def to_markdown(result: ComparisonResult) -> str:
+    limits = (f"(TTFT ≤ {result.ttft_ceiling_ms:.0f} ms"
+              f"{f', TPOT ≤ {result.tpot_ceiling_ms:.0f} ms' if result.tpot_ceiling_ms else ''})")
+    if result.goal is not None:  # a custom goal names its own limits; the TTFT field is only the workload's
+        limits = f"`{result.goal}`" + (f" (TPOT ≤ {result.tpot_ceiling_ms:.0f} ms)" if result.tpot_ceiling_ms
+                                       else "")
     lines = [
         f"**{result.gpu or result.cpu}** · {result.model_id} · workload `{result.workload}` · objective "
-        f"`{result.objective}` (TTFT ≤ {result.ttft_ceiling_ms:.0f} ms"
-        f"{f', TPOT ≤ {result.tpot_ceiling_ms:.0f} ms' if result.tpot_ceiling_ms else ''})",
+        f"`{result.objective}` {limits}",
         "",
         "| runtime / config | tok/s | TTFT p50 | TTFT p95 | TPOT | peak mem | W | J/tok | SLO | calib |",
         "|---|---|---|---|---|---|---|---|---|---|",

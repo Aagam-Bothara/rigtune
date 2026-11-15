@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from rigtune.bench.compare import ComparisonResult, ComparisonRow, read_runs
+from rigtune.calibrate.objectives import parse_goal
 
 WIN, TIE, BEHIND, LOSS, PROVISIONAL, NA = ("win", "tie", "behind, within noise", "loss", "provisional",
                                            "not applicable")
@@ -450,6 +451,9 @@ def answers_unchecked(result: ComparisonResult, row: RowVerdict) -> Optional[str
 
 
 def score(result: ComparisonResult, thresholds: Optional[Thresholds] = None, results: str = "") -> Verdict:
+    metric = parse_goal(result.goal).optimise if result.goal is not None else "tok_s"
+    if metric != "tok_s":  # every win, tie and loss below counts scored tok/s
+        raise ValueError(f"a verdict weighs tok/s, and this comparison's goal optimises {metric} ({result.goal})")
     t = thresholds or Thresholds()
     rig = result.rigtune_row
     if rig is None:
