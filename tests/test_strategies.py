@@ -577,6 +577,46 @@ def test_layout_auto_keeps_the_best_arrangement(single_gpu_winner):
     assert any("serving on one GPU" in n for n in neither.notes)
 
 
+def test_strict_layout_auto_retains_a_feasible_single_gpu_result(single_gpu_winner):
+    from rigtune.layout import calibrate_layout
+    hw, reg, base = single_gpu_winner
+    base.calibration_table = [TrialResult(config=base.config, stage="confirm", metrics=TrialMetrics(
+        tok_s=100, ttft_ms=10, tpot_ms=1, requests=72, output_tokens=1000))]
+    cons = Constraints(ttft_ceiling_ms=20, strict=True)
+    result = calibrate_layout(hw, "balanced", base, reg, "auto", constraints=cons,
+                              replica_runner=FakeReplicaRunner(200), tp_runner=FakeTPRunner(300))
+    assert result.config == base.config and result.replicas == 1
+    assert len(result.calibration_table) > 1  # the rejected trials stay in the table for inspection
+    with pytest.raises(RuntimeError, match="strict constraints: no measured layout met"):
+        calibrate_layout(hw, "balanced", base, reg, "replicas", constraints=cons,
+                         replica_runner=FakeReplicaRunner(200))  # a requested layout is not swapped for one GPU
+
+
+def test_layout_minimum_samples_reach_the_actual_distributed_driver(single_gpu_winner, monkeypatch):
+    import rigtune.layout as layout
+    from rigtune.calibrate.workload import get_workload
+    hw, reg, base = single_gpu_winner
+    base.options["samples"] = "72"
+    observed = []
+
+    class Runner(FakeReplicaRunner):
+        def __init__(self, backend, model, hw, workload, **kwargs):
+            super().__init__(200)
+            observed.append(workload)
+
+    monkeypatch.setattr(layout, "LayoutTrialRunner", Runner)
+    layout.calibrate_layout(hw, "throughput", base, reg, "replicas", workload=get_workload("default"))
+    assert observed[0].level_requests(1) >= 72
+
+
+def test_layout_does_not_claim_confirmation_rounds_it_has_not_run(single_gpu_winner):
+    from rigtune.layout import calibrate_layout
+    hw, reg, base = single_gpu_winner
+    base.options["rounds"] = "3"
+    with pytest.raises(RuntimeError, match="confirmation rounds"):
+        calibrate_layout(hw, "throughput", base, reg, "replicas", replica_runner=FakeReplicaRunner(200))
+
+
 @pytest.mark.usefixtures("no_network")
 def test_layout_refuses_or_falls_back_on_one_gpu(hw_a100, spec):
     from rigtune.layout import calibrate_layout

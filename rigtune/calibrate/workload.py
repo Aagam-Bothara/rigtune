@@ -581,3 +581,32 @@ def _session_workload(p: Path, sessions: List[Session], t: Workload, session_poo
 
 def workload_table() -> List[Dict[str, object]]:
     return [_PRESETS[n].spec() for n in WORKLOAD_NAMES]
+
+
+def with_minimum_requests(workload: Workload, minimum: Optional[int]) -> Workload:
+    """--min-requests: at least `minimum` requests at every measured concurrency, for every measurement of the
+    calibration (the single-engine search and the multi-GPU layouts alike). None leaves the workload as it is.
+
+    The per-slot cap is lifted, so every level sends all its prompts. At p95, 32 requests leave the second-slowest
+    deciding; 72 are the fewest for which the order statistics give a two-sided 95% interval of the percentile."""
+    if minimum is None:
+        return workload
+    if minimum < 1 or workload.sessions:
+        raise ValueError("--min-requests must be positive and applies to flat workloads only")
+    count = max(workload.n_prompts, minimum)
+    if workload.source != "synthetic":
+        from rigtune.calibrate.datasets import pool
+
+        # sample() wraps a small pool. A level enlarged past it would resend prompts an engine's prefix cache has
+        # already served, at another level or in a close call's repeat, and measure the cache instead.
+        needed = 2 * max(1, len(workload.concurrencies)) * count
+        available = len(pool(workload.source))
+        if available < needed:
+            raise ValueError(f"--min-requests needs a pool of {needed} prompt entries for fresh concurrency "
+                             f"levels and a possible repeat; the source has {available}")
+    adjusted = replace(workload, n_prompts=count, requests_per_slot=0, prompts=[], token_counts=[], fitted=False)
+    adjusted.ensure_prompts()
+    if len(adjusted.prompts) < minimum:
+        raise ValueError(f"--min-requests needs {minimum} distinct prompts; the workload supplied "
+                         f"{len(adjusted.prompts)}")
+    return adjusted

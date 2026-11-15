@@ -54,6 +54,10 @@ class Constraints:
     # wind-down included (calibrate/rate.py), in place of J/token above a throughput floor. None = J/token.
     arrival_rate: Optional[float] = None
     max_utilisation: float = 0.8  # the arrival rate may use at most this share of the busiest level's rate
+    # --strict-constraints: refuse to serve when the final pick misses the constraints, instead of serving the
+    # least-violating configuration. Applied to the final choice only (meets); during the search the leader is
+    # still the least-violating configuration, so the stages after it can find one that does meet them.
+    strict: bool = False
 
     def tok_s_floor(self, results: Sequence[TrialResult]) -> float:
         if self.tok_s_floor_abs is not None:
@@ -393,6 +397,21 @@ def rank(results: Sequence[TrialResult], objective: str, cons: Optional[Constrai
         ranked.append(per_level[0])
     ranked.sort(key=_sort_key)
     return _break_ties(ranked, cons)
+
+
+def strict_refusal(winner: Optional[TrialResult], results: Sequence[TrialResult], objective: str,
+                   cons: Optional[Constraints], what: str = "configuration") -> Optional[str]:
+    """Why `winner`, picked from `results`, may not be served under --strict-constraints: it misses them. None when
+    it meets them, or strict mode is off. Judged among the same results it was picked from, since a throughput floor
+    relative to the best depends on them."""
+    if cons is None or not cons.strict or winner is None:
+        return None
+    mine = [x for x in rank(results, objective, cons) if x.result is winner]
+    if mine and mine[0].feasible:
+        return None
+    by = f" (the closest missed by {mine[0].violation:.1f})" if mine else ""
+    return (f"strict constraints: no measured {what} met the {objective} constraints{by}; refusing to serve the "
+            "least-violating one")
 
 
 def pick(

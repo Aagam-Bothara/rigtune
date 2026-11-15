@@ -43,8 +43,8 @@ from starlette.background import BackgroundTask
 
 from rigtune.backends.base import BaseBackend, Process
 from rigtune.calibrate.measure import run_trial
-from rigtune.calibrate.objectives import Constraints, pick
-from rigtune.calibrate.workload import Workload
+from rigtune.calibrate.objectives import Constraints, pick, strict_refusal
+from rigtune.calibrate.workload import Workload, with_minimum_requests
 from rigtune.models import Config, DisaggSpec, GPUInfo, HardwareDescriptor, PreparedModel, Profile, TrialMetrics, TrialResult
 from rigtune.power import PowerSetting, setting_of, with_power
 from rigtune.serve.streaming import ClosingStreamingResponse, ManagedResponse
@@ -685,7 +685,9 @@ def calibrate_disaggregated(
 
     if phases not in ("disaggregated", "auto"):
         raise ValueError("calibrate_disaggregated needs phases 'disaggregated' or 'auto'")
-    workload = workload or get_workload(base.workload)
+    # The unified search's --min-requests holds for the pairs' measurements too.
+    workload = with_minimum_requests(workload or get_workload(base.workload),
+                                     int(base.options["samples"]) if "samples" in base.options else None)
     constraints = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                              tpot_ceiling_ms=workload.tpot_ceiling_ms)
     reason = check_support(hw, base.backend, connector, kv_override)
@@ -698,6 +700,10 @@ def calibrate_disaggregated(
     pairs = candidate_pairs(hw, backend, model, base.config, connector, kv_override)
     if not pairs:
         return _fallback(base, phases, "no prefill/decode pair fits in the two GPUs' memory")
+    # Refused only now, when pairs will really be measured: each fallback above serves the unified profile, which
+    # carried out what was asked. resolve_profile refuses it before calibrating where it can tell.
+    if int(base.options.get("rounds", "1")) != 1:
+        raise RuntimeError("repeated confirmation rounds are supported for --phases unified only")
 
     if runner is None:
         from rigtune.power import controller_for
@@ -737,11 +743,15 @@ def calibrate_disaggregated(
             notes.append(f"decode-GPU power setting: {setting_of(best.config).label()}")
 
     ref = _unified_reference(base)
-    chosen = best
+    chosen, pool = best, results
     if ref is not None:
         winner, _ = pick([ref] + results, objective, constraints)
         if phases == "auto":
-            chosen = winner
+            chosen, pool = winner, [ref] + results
+    refusal = strict_refusal(chosen, pool, objective, constraints, "prefill/decode layout")
+    if refusal:  # under auto a unified engine that meets them is served instead
+        raise RuntimeError(refusal)
+    if ref is not None:
         d, u = best.metrics, ref.metrics
         gain = (d.tok_s - u.tok_s) / u.tok_s * 100 if u.tok_s else 0.0
         verdict = "disaggregated wins" if winner.disagg is not None else "unified wins"

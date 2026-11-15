@@ -36,7 +36,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tupl
 from rigtune import kvtier
 from rigtune.backends.base import BaseBackend, free_port
 from rigtune.calibrate.measure import MIN_OPEN_LOOP_RATE, run_trial
-from rigtune.calibrate.objectives import Constraints, pick, rank
+from rigtune.calibrate.objectives import Constraints, pick, rank, strict_refusal
 from rigtune.calibrate.rate import compose
 from rigtune.calibrate.workload import Workload
 from rigtune.memlog import device_used_mb, merge, parse_log
@@ -1335,6 +1335,10 @@ class StagedSearch:
                 if pool is not self.results:
                     pool = list(pool) + self.results[before:]
         winner, notes = pick(pool, self.objective, self.constraints)
+        refusal = strict_refusal(winner, pool, self.objective, self.constraints)
+        if refusal:  # only here: every stage before chose its leader leniently, so none was left untried
+            self.notes.append(refusal)
+            winner, notes = None, []
         if winner is not None and self.power_points:
             pn = self._power_note(winner, pool)
             if pn:

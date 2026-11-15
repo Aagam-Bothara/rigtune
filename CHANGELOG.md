@@ -18,3 +18,5 @@
   and the Hub commit of the model it measured, and is checked against both, and against the GPU driver, CUDA and
   engine library versions, when reused. Profiles written by earlier releases carry no constraints, so each one is
   recalibrated once, on first use; the log names the reason whenever a cached profile is not reused.
+- New opt-in calibration controls: `--strict-constraints`, `--confirm-rounds N` and `--min-requests N`
+  ([safeguards](docs/runtime-hardening.md)). Without them calibration runs as before.

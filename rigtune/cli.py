@@ -138,12 +138,17 @@ def _calibrating(view, fn, *args, **kwargs):
     """Run a calibration, and turn an eval-set problem found during it (an item too long for every feasible
     context, which needs the plan to see) into a one-line error instead of a traceback under the live view."""
     from rigtune.evalset import EvalSetError
+    from rigtune.pipeline import OptionRefused
 
     try:
         return fn(*args, **kwargs)
     except EvalSetError as exc:
         view.stop()
         err.print(f"[red]--eval-set: {exc}[/]")
+        raise typer.Exit(2)
+    except OptionRefused as exc:  # found once the hardware is probed, before anything is downloaded or measured
+        view.stop()
+        err.print(f"[red]{exc}[/]")
         raise typer.Exit(2)
 
 
@@ -201,13 +206,13 @@ def _workload(name: str, file: Optional[Path] = None, sessions: bool = False, se
 
 def _constraints(ttft_ceiling: Optional[float], tok_s_floor: Optional[float], workload=None,
                  tpot_ceiling: Optional[float] = None, ttft_percentile: int = 95,
-                 arrival_rate: Optional[float] = None):
+                 arrival_rate: Optional[float] = None, strict: bool = False):
     from rigtune.calibrate.objectives import Constraints
 
     ceiling = ttft_ceiling if ttft_ceiling is not None else (workload.ttft_ceiling_ms if workload else 500.0)
     tpot = tpot_ceiling if tpot_ceiling is not None else (workload.tpot_ceiling_ms if workload else None)
     return Constraints(ttft_ceiling_ms=ceiling, tok_s_floor_abs=tok_s_floor, tpot_ceiling_ms=tpot,
-                       ttft_percentile=ttft_percentile, arrival_rate=arrival_rate)
+                       ttft_percentile=ttft_percentile, arrival_rate=arrival_rate, strict=strict)
 
 
 def _power_mode(value: str) -> str:
@@ -355,12 +360,23 @@ def _check_kv_tier(kv_tier: str, wl) -> None:
                                  "the working set session replay measures", param_hint="--kv-tier")
 
 
+def _check_min_requests(min_requests: Optional[int], wl) -> None:
+    """--min-requests on a session file, or more than its prompts can give fresh, fails now, not after the download."""
+    from rigtune.calibrate.workload import with_minimum_requests
+
+    try:
+        with_minimum_requests(wl, min_requests)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--min-requests") from None
+
+
 def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combine: str = "on",
           budget: Optional[float] = None, ttft_percentile: int = 95, confirm: str = "on", all_levels: bool = False,
           explore: str = "off", quality_probe: str = "off", eval_set: Optional[str] = None,
           max_accuracy_loss: float = 3.0, eval_items: int = 300, report_reuse: bool = False,
           kv_tier: str = "off",
-          arrival_rate: Optional[float] = None, rate_check: str = "on"):
+          arrival_rate: Optional[float] = None, rate_check: str = "on",
+          confirm_rounds: int = 1, min_requests: Optional[int] = None):
     from rigtune.pipeline import SearchOptions
 
     if eval_set:
@@ -378,6 +394,7 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
         eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items, report_reuse=report_reuse,
         kv_tier=kv_tier,
         arrival_rate=arrival_rate, rate_check=rate_check == "on",
+        confirm_rounds=confirm_rounds, min_requests=min_requests,
     )
 
 
@@ -445,6 +462,15 @@ COMBINE_OPT = typer.Option("on", "--combine", callback=_on_off,
 CONFIRM_OPT = typer.Option("on", "--confirm", callback=_on_off,
                            help="Re-measure the best three configurations at the end and choose on those "
                                 "runs (on|off)")
+CONFIRM_ROUNDS_OPT = typer.Option(1, "--confirm-rounds", min=1,
+                                  help="Fresh runs of each configuration --confirm re-measures; each is judged on "
+                                       "its median run (one engine on one GPU only)")
+MIN_REQUESTS_OPT = typer.Option(None, "--min-requests", min=1,
+                                help="Send at least this many requests at every measured concurrency (flat "
+                                     "workloads; 72 is the fewest that bound a p95 at 95% confidence)")
+STRICT_OPT = typer.Option(False, "--strict-constraints",
+                          help="Fail the calibration when no measured configuration meets the TTFT/TPOT ceilings "
+                               "and throughput floor, instead of serving the least-violating one")
 EXPLORE_OPT = typer.Option("off", "--explore", callback=_on_off,
                            help="After the other stages, spend about 30% more trials on random configurations of "
                                 "the leading engine and precision, for settings that only pay together (on|off; off "
@@ -680,6 +706,9 @@ def bench(
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
     confirm: str = CONFIRM_OPT,
+    confirm_rounds: int = CONFIRM_ROUNDS_OPT,
+    min_requests: Optional[int] = MIN_REQUESTS_OPT,
+    strict_constraints: bool = STRICT_OPT,
     all_levels: bool = ALL_LEVELS_OPT,
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
@@ -695,11 +724,12 @@ def bench(
     """Run calibration and print the table; do not serve."""
     from rigtune import cache as profile_cache
     from rigtune.hardware import probe as _probe
-    from rigtune.pipeline import calibrate, prepare_and_plan, select
+    from rigtune.pipeline import calibrate, check_distributed_options, prepare_and_plan, select
 
     _check_rate(objective, arrival_rate)
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     _check_kv_tier(kv_tier, wl)
+    _check_min_requests(min_requests, wl)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     candidates, reg = select(hw, spec, force=backend, workload=wl, report_reuse=report_reuse)
@@ -708,7 +738,12 @@ def bench(
         raise typer.Exit(2)
     opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check)
+                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
+                 confirm_rounds=confirm_rounds, min_requests=min_requests)
+    try:  # as resolve_profile does: refused before the weights download and the search runs
+        check_distributed_options(opts, hw, layout, phases)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
     if layout != "single" and opts.kv_tier != "off":  # as pipeline._resolve_layout does
         err.print(f"[yellow]--kv-tier {opts.kv_tier} is not tried under --layout {layout}: a KV-cache tier's "
                   "host RAM is budgeted for one engine on one GPU[/]")
@@ -717,7 +752,8 @@ def bench(
                               speculative_all=opts.speculative_all)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate)
+    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate,
+                        strict=strict_constraints)
     view = _search_view(objective, cons)
     profile = _calibrating(view, calibrate, hw, spec, objective, result, reg, workload=wl, constraints=cons,
                            progress=view.progress, power_mode=power, options=opts)
@@ -765,6 +801,9 @@ def recalibrate(
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
     confirm: str = CONFIRM_OPT,
+    confirm_rounds: int = CONFIRM_ROUNDS_OPT,
+    min_requests: Optional[int] = MIN_REQUESTS_OPT,
+    strict_constraints: bool = STRICT_OPT,
     all_levels: bool = ALL_LEVELS_OPT,
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
@@ -783,7 +822,9 @@ def recalibrate(
     _check_rate(objective, arrival_rate)
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     _check_kv_tier(kv_tier, wl)
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate)
+    _check_min_requests(min_requests, wl)
+    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate,
+                        strict=strict_constraints)
     view = _search_view(objective, cons)
     profile = _calibrating(view, resolve_profile, ModelSpec(hf_id=model), objective, force_backend=backend, recalibrate=True,
                               workload=wl, constraints=cons,
@@ -791,7 +832,8 @@ def recalibrate(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check), layout=layout)
+                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
+                 confirm_rounds=confirm_rounds, min_requests=min_requests), layout=layout)
     view.stop()
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
@@ -833,6 +875,9 @@ def compare(
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
     confirm: str = CONFIRM_OPT,
+    confirm_rounds: int = CONFIRM_ROUNDS_OPT,
+    min_requests: Optional[int] = MIN_REQUESTS_OPT,
+    strict_constraints: bool = STRICT_OPT,
     all_levels: bool = ALL_LEVELS_OPT,
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
@@ -854,9 +899,11 @@ def compare(
     _check_rate(objective, arrival_rate)
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     _check_kv_tier(kv_tier, wl)
+    _check_min_requests(min_requests, wl)
     # Held-out prompts are read before calibrating, so a bad file fails in seconds rather than after the search.
     eval_wl = _workload(workload, eval_workload_file, sessions, session_pool, session_turns, history, session_system) if eval_workload_file else wl
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate)
+    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate,
+                        strict=strict_constraints)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     view = _search_view(objective, cons)
@@ -865,7 +912,8 @@ def compare(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check), layout=layout)
+                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
+                 confirm_rounds=confirm_rounds, min_requests=min_requests), layout=layout)
     view.stop()
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend, workload=eval_wl, report_reuse=report_reuse)
@@ -1094,6 +1142,9 @@ def serve(
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
     confirm: str = CONFIRM_OPT,
+    confirm_rounds: int = CONFIRM_ROUNDS_OPT,
+    min_requests: Optional[int] = MIN_REQUESTS_OPT,
+    strict_constraints: bool = STRICT_OPT,
     all_levels: bool = ALL_LEVELS_OPT,
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
@@ -1117,8 +1168,10 @@ def serve(
     _check_rate(objective, arrival_rate)
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     _check_kv_tier(kv_tier, wl)
+    _check_min_requests(min_requests, wl)
     spec = ModelSpec(hf_id=model)
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate)
+    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate,
+                        strict=strict_constraints)
     view = _search_view(objective, cons)
     profile = _calibrating(view, resolve_profile, spec, objective, force_backend=backend,
                            skip_calibration=skip_calibration,
@@ -1127,7 +1180,8 @@ def serve(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check), layout=layout)
+                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
+                 confirm_rounds=confirm_rounds, min_requests=min_requests), layout=layout)
     view.stop()
     _print_profile(profile)
     if profile.prepared is None:

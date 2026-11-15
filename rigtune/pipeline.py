@@ -16,7 +16,7 @@ from rigtune import cache as profile_cache
 from rigtune.backends import BaseBackend, registry as backend_registry
 from rigtune.calibrate.objectives import Constraints, close_call_level
 from rigtune.calibrate.search import ProgressFn, StagedSearch, SubprocessTrialRunner, TrialRunner
-from rigtune.calibrate.workload import Workload, get_workload
+from rigtune.calibrate.workload import Workload, get_workload, with_minimum_requests
 from rigtune.hardware import hardware_hash, llmtrace_version, probe
 from rigtune.hfconfig import resolve_revision
 from rigtune.memory import plan as memory_plan
@@ -91,6 +91,8 @@ class SearchOptions:
     budget_s: Optional[float] = None  # --budget: seconds of calibration, after which later trials are skipped
     ttft_percentile: int = 95  # --ttft-percentile: which time to first token the ceiling applies to
     confirm: bool = True  # --confirm: re-measure the best three configurations and choose on those runs
+    confirm_rounds: int = 1  # --confirm-rounds: fresh runs of each of those, choosing on each one's median run
+    min_requests: Optional[int] = None  # --min-requests: requests at every measured level (workload.with_minimum_requests)
     all_levels: bool = False  # --all-levels: measure every concurrency level of every trial (no early stop)
     explore: bool = False  # --explore: random draws around the leader after the stages (off: see search.py)
     # --quality-probe: measure how far each precision's answers drift from the most faithful precision that
@@ -144,6 +146,10 @@ class SearchOptions:
             out["combine"] = "off"
         if not self.confirm:
             out["confirm"] = "off"
+        if self.confirm_rounds != 1:
+            out["rounds"] = str(self.confirm_rounds)
+        if self.min_requests is not None:
+            out["samples"] = str(self.min_requests)
         if self.all_levels:
             out["levels"] = "all"
         if self.explore:
@@ -876,6 +882,9 @@ def calibrate(
 ) -> Profile:
     opts = options or SearchOptions()
     workload = workload or get_workload("default")
+    if opts.confirm_rounds < 1:
+        raise ValueError("--confirm-rounds must be at least 1")
+    workload = with_minimum_requests(workload, opts.min_requests)
     constraints = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                              tpot_ceiling_ms=workload.tpot_ceiling_ms,
                                              ttft_percentile=opts.ttft_percentile)
@@ -950,6 +959,7 @@ def calibrate(
                           predictor=Predictor(hw), models=plan.prepared, workload=workload,
                           power_points=points, variant_stages=stages, combine=opts.combine,
                           budget_s=opts.budget_s, confirm_top=3 if opts.confirm else 0,
+                          confirm_rounds=opts.confirm_rounds,
                           feasible_fn=combination_fits(hw, reg, plan), quality=probe, gate=gate,
                           explore_space=search_space(hw, plan, reg, workload, opts) if opts.explore else [],
                           spec_first=True, spec_beam=3 if opts.speculative_all else 2, rate_check=opts.rate_check,
@@ -1019,6 +1029,30 @@ def setup_power(hw: HardwareDescriptor, mode: str, controller: Optional[object] 
     return ctl, points, notes
 
 
+def distributed_arrangement(hw: HardwareDescriptor, layout: str = "single", phases: str = "unified") -> Optional[str]:
+    """The multi-GPU arrangement a request will calibrate (`--layout tp`, ...), or None for one engine on one GPU.
+    --layout auto and --phases auto serve one engine where fewer than two NVIDIA GPUs are visible."""
+    two = sum(1 for g in hw.gpus if g.vendor == "nvidia") >= 2
+    if layout != "single" and (layout != "auto" or two):
+        return f"--layout {layout}"
+    if phases != "unified" and (phases != "auto" or two):
+        return f"--phases {phases}"
+    return None
+
+
+class OptionRefused(ValueError):
+    """Options a calibration could not carry out, refused before it starts."""
+
+
+def check_distributed_options(opts: SearchOptions, hw: HardwareDescriptor, layout: str = "single",
+                              phases: str = "unified") -> None:
+    """Refuse, before any calibration, options the multi-GPU searches do not carry out."""
+    where = distributed_arrangement(hw, layout, phases)
+    if where is not None and opts.confirm_rounds != 1:
+        raise OptionRefused(f"--confirm-rounds applies to one engine on one GPU; {where} measures each arrangement "
+                         "once, so it would not run the rounds asked for")
+
+
 def resolve_profile(
     spec: ModelSpec,
     objective: str = "balanced",
@@ -1048,6 +1082,8 @@ def resolve_profile(
     opts = options or SearchOptions()
     if phases != "unified" and layout != "single":
         raise RuntimeError("choose either --phases (disaggregated prefill/decode) or --layout (replicas, tp), not both")
+    if not skip_calibration:
+        check_distributed_options(opts, hw, layout, phases)
     if phases != "unified" and not skip_calibration:
         return _resolve_phased(spec, objective, force_backend, recalibrate, workload, constraints, progress, hw,
                                on_stage, power_mode, phases, kv_connector, opts)

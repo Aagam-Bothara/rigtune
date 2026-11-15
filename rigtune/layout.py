@@ -33,8 +33,8 @@ from starlette.background import BackgroundTask
 
 from rigtune.backends.base import BaseBackend, Process
 from rigtune.calibrate.measure import run_trial
-from rigtune.calibrate.objectives import Constraints, pick
-from rigtune.calibrate.workload import Workload
+from rigtune.calibrate.objectives import Constraints, pick, strict_refusal
+from rigtune.calibrate.workload import Workload, with_minimum_requests
 from rigtune.disagg import ProcessServer, _free_ports, nvidia_gpus
 from rigtune.models import Config, HardwareDescriptor, PreparedModel, Profile, TrialMetrics, TrialResult
 from rigtune.serve.proxy import HOP_BY_HOP, media_refusal
@@ -321,7 +321,9 @@ def calibrate_layout(
 
     if layout not in ("replicas", "tp", "auto"):
         raise ValueError("calibrate_layout needs layout 'replicas', 'tp' or 'auto'")
-    workload = workload or get_workload(base.workload)
+    # The single-GPU search's --min-requests holds for the layouts' measurements too.
+    workload = with_minimum_requests(workload or get_workload(base.workload),
+                                     int(base.options["samples"]) if "samples" in base.options else None)
     constraints = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                              tpot_ceiling_ms=workload.tpot_ceiling_ms)
     gpus = [g.index for g in nvidia_gpus(hw)]
@@ -333,6 +335,10 @@ def calibrate_layout(
         return _fallback(base, layout, "the single-GPU profile has no prepared model")
     if layout == "tp" and not backend.supports_tp:
         return _fallback(base, layout, f"{backend.name} has no tensor parallelism")
+    # Refused only now, when a multi-GPU arrangement will really be measured: each fallback above serves the single-GPU
+    # profile, which carried out what was asked. resolve_profile refuses it before calibrating where it can tell.
+    if int(base.options.get("rounds", "1")) != 1:
+        raise RuntimeError("repeated confirmation rounds are supported for --layout single only")
 
     results: List[TrialResult] = []
     t0 = time.monotonic()
@@ -370,10 +376,15 @@ def calibrate_layout(
     ref = _single_reference(base)
     chosen = best
     notes: List[str] = []
+    pool = ok
     if ref is not None:
         winner, _ = pick([ref] + ok, objective, constraints)
         if layout == "auto":
-            chosen = winner
+            chosen, pool = winner, [ref] + ok
+    refusal = strict_refusal(chosen, pool, objective, constraints, "layout")
+    if refusal:  # under auto a single GPU that meets them is served instead; a requested layout is not swapped
+        raise RuntimeError(refusal)
+    if ref is not None:
         gain = (best.metrics.tok_s - ref.metrics.tok_s) / ref.metrics.tok_s * 100 if ref.metrics.tok_s else 0.0
         shape = f"{best.replicas} replicas" if best.replicas > 1 else f"tp={best.config.tp}"
         verdict = "one GPU wins" if winner is ref else f"{shape} wins"
