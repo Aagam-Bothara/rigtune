@@ -23,3 +23,6 @@
 - With `--eval-set`, the configuration served is certified, KV cache and speculation included, or a certified
   fallback is served (`--eval-attempts`, default 3), or calibration fails. Gated profiles cached by earlier releases
   are recalibrated. `--eval-set` with a multi-GPU `--layout` or `--phases` is refused before calibrating.
+- `rigtune serve` has an optional bearer API key and opt-in limits: `--max-in-flight N|measured` with a bounded
+  queue, `--idle-timeout`, `--max-body-mb` and `--body-timeout`. All are off by default, so serving is unchanged.
+- `starlette` and `anyio` are declared as direct dependencies (fastapi already installed them).

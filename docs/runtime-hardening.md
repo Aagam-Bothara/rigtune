@@ -2,6 +2,28 @@
 
 Controls added after an outside review. Every one is opt-in or changes nothing that worked before; none has run on a GPU yet, only against fake engines in the test suite.
 
+## Serving
+
+```bash
+export RIGTUNE_API_KEY='replace-with-a-random-secret'
+rigtune serve Qwen/Qwen2.5-3B-Instruct --require-api-key \
+  --max-in-flight measured --idle-timeout 60 --max-body-mb 64 --body-timeout 30
+curl localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer $RIGTUNE_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen/Qwen2.5-3B-Instruct","messages":[{"role":"user","content":"hi"}]}'
+```
+
+Without any of these options `rigtune serve` installs no limit at all and serves exactly as before: no request is refused, queued, timed out or capped by rigtune.
+
+- **API key.** Read from `RIGTUNE_API_KEY`, or the variable `--api-key-env` names. When set, every route but `/health` requires `Authorization: Bearer <key>` (the scheme in any case), and `/health` answers only `status`, `alive` and `ready`. The key is not passed on to the engines, which rigtune launches without one. `--require-api-key` refuses to start without it.
+- **Admission.** `--max-in-flight N` serves at most N inference requests at once. `measured` derives N from the profile: the busiest concurrency at which the pick met its constraints in calibration, capped by each engine's batch times the number of engines. Up to `--queue` more (default 2 × N) wait up to `--queue-timeout` seconds (default 30); beyond that, 429 with `Retry-After: 1`. A limit protects the engine; it does not promise the calibrated latency under real traffic.
+- **Idle streams.** `--idle-timeout S` closes a stream that has sent nothing for S seconds since its last chunk, with a final SSE event carrying an `idle_timeout` error. The clock starts at the stream's first chunk of body, not its headers: engines send headers at once and the first token after queueing and prefill, so the time to first token is never counted as idle. A chunk counts once it has been sent, so a client that reads slowly does not trip it. There is no whole-request deadline: a long answer is not a stalled one.
+- **Bodies.** `--max-body-mb M` refuses larger bodies with 413, chunked uploads included; `--body-timeout S` refuses with 408 a body that has not arrived in S seconds.
+
+These are process-wide bounds, not per-client quotas: put TLS termination and per-client rate limits in a proxy in front. 
+
+Two things change whatever options are given. `/health` reports liveness and readiness apart: it answers 503 while the engine is alive but not ready, that is while it restarts and once it has missed three health checks in a row (the number the supervisor waits for before restarting it), where it answered 200 for any live process before; a load balancer that probes `/health` takes such an engine out of rotation. And the single-engine proxy answers an upstream timeout with 504 instead of 502, which only a caller of `create_app` that sets `request_timeout` can see.
+
 ## Calibration
 
 ```bash

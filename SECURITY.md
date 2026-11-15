@@ -1,6 +1,6 @@
 # Security
 
-rigtune is alpha software (0.1.x), maintained by one person. This page says how to report a vulnerability and, more usefully, what rigtune does and does not protect, so you can decide how to deploy it.
+rigtune is alpha software, maintained by one person. This page says how to report a vulnerability and, more usefully, what rigtune does and does not protect, so you can decide how to deploy it.
 
 ## Reporting a vulnerability
 
@@ -10,9 +10,11 @@ There is no guaranteed response time; reports are read and answered as soon as p
 
 ## What rigtune protects, and what it does not
 
-**There is no authentication.** Nothing checks who is calling: not the OpenAI-compatible `/v1/*` routes, not `/rigtune/profile`, `/rigtune/drift` or `/health`. There are no rate limits and no request-size limits either.
+**Authentication is off unless you set a key.** With `RIGTUNE_API_KEY` (or the variable `--api-key-env` names) set, `rigtune serve` requires `Authorization: Bearer <key>` on every route but `/health`, `/rigtune/profile` and `/rigtune/drift` included, and `/health` then says only whether the backend is alive and ready, without its process id, upstream address or error text. `--require-api-key` refuses to start when the variable is empty. Without a key nothing checks who is calling. The key is compared in constant time and is not passed on to the engines, which rigtune launches without one; it is sent in clear unless TLS terminates in front of rigtune.
 
-**It listens on this machine only, unless told otherwise.** `rigtune serve` binds `127.0.0.1`. `--host 0.0.0.0`, or `RIGTUNE_HOST`, exposes it to every network the machine can reach, and it warns when it starts that way. Before doing that, put a reverse proxy in front of it that authenticates and rate-limits. The Docker image sets `RIGTUNE_HOST=0.0.0.0`, because inside a container that is the only address `-p` can reach; publish with `-p 127.0.0.1:8000:8000` to keep a container local as well.
+**Limits are off unless you ask for them.** By default rigtune refuses, delays and cuts short nothing: an upgrade changes nothing that worked before. `--max-in-flight N` (or `measured`) bounds the inference requests served at once, with a bounded queue (`--queue`, `--queue-timeout`) and 429 beyond it; `--idle-timeout` closes a stream that has sent nothing for that long with an SSE error event; `--max-body-mb` refuses larger bodies with 413, chunked uploads included; `--body-timeout` refuses slow uploads with 408. These are process-wide bounds, not per-client rate quotas. See [safeguards](docs/runtime-hardening.md#serving).
+
+**It listens on this machine only, unless told otherwise.** `rigtune serve` binds `127.0.0.1`. `--host 0.0.0.0`, or `RIGTUNE_HOST`, exposes it to every network the machine can reach, and it warns when it starts that way without a key. Before doing that, set a key and put a TLS-terminating reverse proxy in front of it with the per-client rate limits your deployment needs. The Docker image sets `RIGTUNE_HOST=0.0.0.0`, because inside a container that is the only address `-p` can reach; publish with `-p 127.0.0.1:8000:8000` to keep a container local as well.
 
 **`/rigtune/profile` describes the machine.** It returns the hardware (GPU and CPU models, memory, driver versions), the model, the engine's launch arguments, which can include local file paths, and the calibration results. It does not return secrets from the environment: the launch environment it stores holds only the variables rigtune sets itself, such as `CUDA_VISIBLE_DEVICES` and `NCCL_P2P_DISABLE`, never the process environment, so tokens such as `HF_TOKEN` stay out of it.
 

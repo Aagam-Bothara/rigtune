@@ -527,6 +527,10 @@ class Profile(BaseModel):
     # Every field of the Constraints the calibration was scored with. Empty in profiles written before they were
     # recorded: those cannot show they answer today's request, so they are recalibrated once (pipeline._usable).
     calibration_constraints: Dict[str, Any] = Field(default_factory=dict)
+    # The busiest measured concurrency at which the pick met its constraints (objectives.capacity_level), else the
+    # level it was scored at. `rigtune serve --max-in-flight measured` derives its limit from it. None in older
+    # profiles.
+    served_concurrency: Optional[int] = None
     objective: str
     workload: str = "default"
     workload_spec: Dict[str, Any] = Field(default_factory=dict)

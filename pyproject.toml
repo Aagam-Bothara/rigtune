@@ -27,6 +27,10 @@ dependencies = [
     "rich>=13.0",
     "httpx>=0.27",
     "fastapi>=0.110",
+    # Imported directly by rigtune.serve (streaming, limits); fastapi brings both, but its bounds are its own.
+    # The lower bounds are the starlette fastapi 0.110 required and the anyio that starlette required.
+    "starlette>=0.36.3",
+    "anyio>=3.6.2,<5",
     "uvicorn>=0.29",
     "psutil>=5.9",
     "huggingface_hub>=0.23",

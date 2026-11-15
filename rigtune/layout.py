@@ -33,7 +33,7 @@ from starlette.background import BackgroundTask
 
 from rigtune.backends.base import BaseBackend, Process
 from rigtune.calibrate.measure import run_trial
-from rigtune.calibrate.objectives import Constraints, pick, strict_refusal
+from rigtune.calibrate.objectives import Constraints, capacity_level, pick, ranked_level, strict_refusal
 from rigtune.calibrate.workload import Workload, with_minimum_requests
 from rigtune.disagg import ProcessServer, _free_ports, nvidia_gpus
 from rigtune.models import Config, HardwareDescriptor, PreparedModel, Profile, TrialMetrics, TrialResult
@@ -403,6 +403,9 @@ def calibrate_layout(
         out.config = chosen.config
         out.replicas = chosen.replicas
         out.launch_args = backend.launch_spec(chosen.config, model, 0).args
+        # Measured through the balancer, for every engine of the layout together.
+        out.served_concurrency = capacity_level(chosen, objective, constraints) or ranked_level(chosen, pool,
+                                                                                               objective, constraints)
     else:
         notes.append("auto: serving on one GPU, which measured better")
     if chosen is not ref and chosen is not None and constraints is not None and constraints.arrival_rate is not None:

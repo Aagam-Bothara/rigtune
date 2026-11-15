@@ -360,6 +360,18 @@ def _check_kv_tier(kv_tier: str, wl) -> None:
                                  "the working set session replay measures", param_hint="--kv-tier")
 
 
+def _in_flight(value: Optional[str]) -> Optional[str]:
+    """--max-in-flight: a positive whole number, or `measured`."""
+    if value is None or value == "measured":
+        return value
+    try:
+        if int(value) >= 1:
+            return value
+    except ValueError:
+        pass
+    raise typer.BadParameter(f"{value!r} is neither a positive whole number nor 'measured'")
+
+
 def _check_min_requests(min_requests: Optional[int], wl) -> None:
     """--min-requests on a session file, or more than its prompts can give fresh, fails now, not after the download."""
     from rigtune.calibrate.workload import with_minimum_requests
@@ -1168,15 +1180,56 @@ def serve(
     eval_attempts: int = EVAL_ATTEMPTS_OPT,
     arrival_rate: Optional[str] = RATE_OPT,
     rate_check: str = RATE_CHECK_OPT,
+    max_in_flight: Optional[str] = typer.Option(
+        None, "--max-in-flight", callback=_in_flight,
+        help="Serve at most N inference requests at once, or `measured`: the busiest level the pick met its "
+             "constraints at, capped by the engines' batch. Off by default"),
+    queue: Optional[int] = typer.Option(None, "--queue", min=0,
+                                        help="With --max-in-flight: requests that may wait for a slot before "
+                                             "429 (default twice the limit)"),
+    queue_timeout: float = typer.Option(30.0, "--queue-timeout",
+                                        help="With --max-in-flight: seconds a queued request waits before 429"),
+    idle_timeout: Optional[float] = typer.Option(None, "--idle-timeout",
+                                                 help="Close a stream that sends nothing for this many seconds, "
+                                                      "with an SSE error event. Off by default"),
+    max_body_mb: Optional[float] = typer.Option(None, "--max-body-mb",
+                                                help="Refuse request bodies over this many MiB with 413. Off by "
+                                                     "default"),
+    body_timeout: Optional[float] = typer.Option(None, "--body-timeout",
+                                                 help="Refuse with 408 a request body that takes longer than this "
+                                                      "many seconds to arrive. Off by default"),
+    api_key_env: str = typer.Option("RIGTUNE_API_KEY", "--api-key-env",
+                                    help="Environment variable holding a bearer API key; when it is set, every "
+                                         "route but /health requires it"),
+    require_api_key: bool = typer.Option(False, "--require-api-key",
+                                         help="Refuse to start unless the API key variable is set"),
 ) -> None:
     """Discover hardware, calibrate once (cached), then serve an OpenAI-compatible API."""
+    import dataclasses
+    import os
+
     import uvicorn
 
     from rigtune import cache as profile_cache
     from rigtune.backends import get_backend
     from rigtune.pipeline import resolve_profile
     from rigtune.serve import Supervisor, create_app
+    from rigtune.serve.limits import ServingLimits, ServingMiddleware, measured_in_flight
 
+    api_key = os.environ.get(api_key_env) or None
+    if require_api_key and not api_key:
+        raise typer.BadParameter(f"environment variable {api_key_env} is empty or unset", param_hint="--api-key-env")
+    if max_body_mb is not None and not (math.isfinite(max_body_mb) and max_body_mb > 0):
+        raise typer.BadParameter(f"{max_body_mb} is not a size above 0 MiB; leave it out for no cap",
+                                 param_hint="--max-body-mb")
+    try:  # checked before an hour of calibration, not after
+        limits = ServingLimits(
+            max_in_flight=1 if max_in_flight == "measured" else (int(max_in_flight) if max_in_flight else None),
+            queue=queue, queue_timeout=queue_timeout, idle_timeout=idle_timeout,
+            max_body_bytes=int(max_body_mb * 2**20) if max_body_mb is not None else None,
+            body_timeout=body_timeout, api_key=api_key)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
     _check_rate(objective, arrival_rate)
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     _check_kv_tier(kv_tier, wl)
@@ -1235,16 +1288,22 @@ def serve(
                           watch=TrafficWatch(profile.workload_spec))
         upstream = sup.base_url
 
+    if max_in_flight == "measured":
+        limits = dataclasses.replace(limits, max_in_flight=measured_in_flight(profile))
+    if limits.active:  # none asked for: the app is served exactly as it was before these limits existed
+        app_.add_middleware(ServingMiddleware, limits=limits)
+        err.print("[dim]serving limits: " + "; ".join(limits.describe()) + "[/]")
+
     def _shutdown(*_: object) -> None:
         sup.stop()
 
     signal.signal(signal.SIGTERM, lambda *_: (_shutdown(), sys.exit(0)))
     console.print(f"[bold green]rigtune listening on http://{host}:{port}/v1[/]  "
                   f"(backend {profile.backend} on {upstream})")
-    if not _is_loopback(host):
-        err.print(f"[yellow]{host} is reachable from other machines, and rigtune has no authentication: anyone "
-                  f"who can reach port {port} can use the model and read /rigtune/profile. Put an "
-                  f"authenticating proxy in front of it, or pass --host 127.0.0.1.[/]")
+    if not _is_loopback(host) and not api_key:
+        err.print(f"[yellow]{host} is reachable from other machines, and no API key is set: anyone "
+                  f"who can reach port {port} can use the model and read /rigtune/profile. Set "
+                  f"{api_key_env}, put an authenticating proxy in front of it, or pass --host 127.0.0.1.[/]")
     try:
         uvicorn.run(app_, host=host, port=port, log_level="warning")
     finally:

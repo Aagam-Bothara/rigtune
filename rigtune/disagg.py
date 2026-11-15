@@ -43,7 +43,7 @@ from starlette.background import BackgroundTask
 
 from rigtune.backends.base import BaseBackend, Process
 from rigtune.calibrate.measure import run_trial
-from rigtune.calibrate.objectives import Constraints, pick, strict_refusal
+from rigtune.calibrate.objectives import Constraints, capacity_level, pick, ranked_level, strict_refusal
 from rigtune.calibrate.workload import Workload, with_minimum_requests
 from rigtune.models import Config, DisaggSpec, GPUInfo, HardwareDescriptor, PreparedModel, Profile, TrialMetrics, TrialResult
 from rigtune.power import PowerSetting, setting_of, with_power
@@ -773,6 +773,8 @@ def calibrate_disaggregated(
         out.config = chosen.disagg.decode
         out.launch_args = backend.disagg_launch_spec(chosen.disagg.decode, model, 0, "decode",
                                                      chosen.disagg.kv_transfer_config, chosen.disagg.decode_gpu, 0).args
+        out.served_concurrency = capacity_level(chosen, objective, constraints) or ranked_level(chosen, pool,
+                                                                                               objective, constraints)
     else:
         notes.append("auto: serving unified, which measured better")
     if chosen.disagg is not None and constraints is not None and constraints.arrival_rate is not None:

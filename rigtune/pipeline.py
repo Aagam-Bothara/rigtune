@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from rigtune import __version__, engines, selfcheck
 from rigtune import cache as profile_cache
 from rigtune.backends import BaseBackend, registry as backend_registry
-from rigtune.calibrate.objectives import Constraints, close_call_level
+from rigtune.calibrate.objectives import Constraints, capacity_level, close_call_level
 from rigtune.calibrate.search import ProgressFn, StagedSearch, SubprocessTrialRunner, TrialRunner
 from rigtune.calibrate.workload import Workload, get_workload, with_minimum_requests
 from rigtune.hardware import hardware_hash, llmtrace_version, probe
@@ -993,9 +993,10 @@ def calibrate(
     notes.append(f"workload: {workload.describe()}")
     backend = reg[winner.config.backend]
     prepared = plan.prepared[winner.config.backend]
+    served = scored_level(winner, search.results, objective, constraints)
     profile = _profile_for(hw, spec, objective, backend, winner.config, prepared, table=search.results,
-                           notes=notes, workload=workload, prepared_all=plan.prepared,
-                           served=scored_level(winner, search.results, objective, constraints))
+                           notes=notes, workload=workload, prepared_all=plan.prepared, served=served)
+    profile.served_concurrency = capacity_level(winner, objective, constraints) or getattr(served, "concurrency", None)
     profile.calibration_seconds = elapsed
     profile.calibration_trials = trials
     profile.power_mode = power_mode

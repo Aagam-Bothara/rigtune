@@ -399,6 +399,27 @@ def rank(results: Sequence[TrialResult], objective: str, cons: Optional[Constrai
     return _break_ties(ranked, cons)
 
 
+def capacity_level(result: Optional[TrialResult], objective: str, cons: Optional[Constraints]) -> Optional[int]:
+    """The busiest concurrency level measured for `result` at which it met the constraints, each level judged on
+    its own; None when no measured level met them."""
+    if result is None or not result.ok:
+        return None
+    best: Optional[int] = None
+    for m in _levels(result):
+        alone = result.model_copy(update={"metrics": m.model_copy(update={"by_concurrency": {}})})
+        ranked = rank([alone], objective, cons)
+        if ranked and ranked[0].feasible and m.concurrency:
+            best = max(best or 0, m.concurrency)
+    return best
+
+
+def ranked_level(result: TrialResult, results: Sequence[TrialResult], objective: str,
+                 cons: Optional[Constraints]) -> Optional[int]:
+    """The concurrency level `result` was scored at, ranked among `results`."""
+    mine = [x for x in rank(results, objective, cons) if x.result is result]
+    return mine[0].metrics.concurrency if mine else None
+
+
 def strict_refusal(winner: Optional[TrialResult], results: Sequence[TrialResult], objective: str,
                    cons: Optional[Constraints], what: str = "configuration") -> Optional[str]:
     """Why `winner`, picked from `results`, may not be served under --strict-constraints: it misses them. None when
