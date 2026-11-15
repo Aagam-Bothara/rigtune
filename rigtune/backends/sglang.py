@@ -243,6 +243,16 @@ def _sglang_package_dir(python: str) -> Optional[Path]:
     return Path(found) if found else None
 
 
+@functools.lru_cache(maxsize=1)
+def _engine_facts():
+    """What the SGLang that would be launched says it offers (rigtune.backends.facts), asked in its own Python
+    ($SGLANG_PYTHON, or this one) once per install; None when probing is off or SGLang cannot be found."""
+    from rigtune.backends import facts
+
+    python = sglang_python()
+    return facts.cached_facts("sglang", python, _sglang_package_dir(python) if python else None)
+
+
 def _server_args_source(pkg: Path) -> str:
     """srt/server_args.py, plus srt/arg_groups/*.py where a release has split its arguments out."""
     files = [pkg / "srt" / "server_args.py"] + sorted((pkg / "srt" / "arg_groups").glob("*.py"))
@@ -400,6 +410,15 @@ def sglang_tier_launch(cfg: Config, port: int) -> Tuple[List[str], dict]:
 class SglangBackend(BaseBackend):
     name = "sglang"
     runtime_workspace_bytes = int(2.0 * GiB)  # CUDA graphs for many batch sizes + radix cache metadata
+
+    def facts(self, refresh: bool = False):
+        if refresh:
+            from rigtune.backends import facts
+
+            python = sglang_python()
+            facts.forget("sglang", python, _sglang_package_dir(python) if python else None)
+            _engine_facts.cache_clear()
+        return _engine_facts()
 
     def supports(self, hw: HardwareDescriptor, model: ModelSpec) -> bool:
         if hw.gpu is None or hw.gpu.vendor != "nvidia" or hw.gpu.cc < (7, 5):

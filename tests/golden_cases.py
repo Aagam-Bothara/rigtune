@@ -107,7 +107,10 @@ def release(engine: str, version: str, tmp: Path) -> Iterator[None]:
     import rigtune.backends.vllm as vl
 
     with contextlib.ExitStack() as stack:
-        stack.enter_context(mock.patch.dict(os.environ, {"RIGTUNE_HOME": str(tmp / "home")}))
+        # No engine is asked what it offers: the trees stand in for the engines' source (the facts suites give
+        # the probe's answers themselves).
+        stack.enter_context(mock.patch.dict(os.environ, {"RIGTUNE_HOME": str(tmp / "home"),
+                                                         "RIGTUNE_ENGINE_PROBE": "off"}))
         os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
         stack.enter_context(engine_trees.installed(engine, version, tmp / "trees" / f"{engine}-{version}"))
         # The engines' own registries are never imported, so an installed engine changes nothing.

@@ -328,7 +328,16 @@ def _vllm_python() -> Optional[str]:
 
 
 @functools.lru_cache(maxsize=1)
-def _arctic_report() -> Tuple[Optional[str], Optional[dict], Optional[str]]:
+def _engine_facts():
+    """What the vLLM the launch command will run says it offers (rigtune.backends.facts), asked in its own Python once
+    per install; None when probing is off or that vLLM cannot be found."""
+    from rigtune.backends import facts
+
+    return facts.cached_facts("vllm", _vllm_python(), _vllm_package())
+
+
+@functools.lru_cache(maxsize=1)
+def _arctic_report() ->Tuple[Optional[str], Optional[dict], Optional[str]]:
     """(the Python vLLM runs from, speculative.SUFFIX_PROBE's report there or None, why there is none), asked once per
     process, so once per calibration. Where that Python is this one and has no `arctic_inference` at all, nothing is
     spawned."""
@@ -551,6 +560,14 @@ class VllmBackend(BaseBackend):
     runtime_workspace_bytes = int(1.5 * GiB)  # CUDA context + CUDA graphs + activation workspace
 
     # ---- capability
+
+    def facts(self, refresh: bool = False):
+        if refresh:
+            from rigtune.backends import facts
+
+            facts.forget("vllm", _vllm_python(), _vllm_package())
+            _engine_facts.cache_clear()
+        return _engine_facts()
 
     def supports(self, hw: HardwareDescriptor, model: ModelSpec) -> bool:
         if hw.gpu is None or hw.gpu.vendor != "nvidia" or hw.gpu.cc < (7, 5):

@@ -251,6 +251,11 @@ class BaseBackend:
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
         raise NotImplementedError
 
+    def facts(self, refresh: bool = False):
+        """What the installed engine says it offers (rigtune.backends.facts.EngineFacts), asked once per install, or
+        None: no probe for this backend, probing off, or the engine not found. `refresh` asks again."""
+        return None
+
     def calibrated_memory(self, hw: HardwareDescriptor, kv_tokens_fn, device: str,
                           hybrid_fn=None, full_kv_fn=None, extra_weights_fn=None) -> MemoryModel:
         """MemoryModel using this machine's fitted workspace/margin when `rigtune memory-report --apply` ran.

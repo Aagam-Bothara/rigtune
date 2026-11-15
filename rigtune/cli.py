@@ -661,15 +661,23 @@ def selfcheck(
 
 
 @app.command()
-def probe(as_json: bool = typer.Option(False, "--json", help="Machine-readable output")) -> None:
+def probe(
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+    engines: bool = typer.Option(False, "--engines", help="Also ask vLLM and SGLang, in their own Python, what they "
+                                 "offer (once per install; kept under rigtune's home)"),
+    reprobe: bool = typer.Option(False, "--reprobe", help="With --engines: ask again instead of reading what was kept"),
+) -> None:
     """Print the HardwareDescriptor."""
     from rigtune.hardware import hardware_hash, probe as _probe
     from rigtune.selector import explain
 
     hw = _probe()
+    facts = _engine_facts(reprobe) if engines or reprobe else {}
     if as_json:
         data = hw.model_dump(mode="json")
         data["hardware_hash"] = hardware_hash(hw)
+        if engines or reprobe:
+            data["engine_facts"] = {name: f.model_dump(mode="json") if f else None for name, f in facts.items()}
         console.print_json(json.dumps(data))
         return
     console.print(f"[bold]hardware hash[/]: {hardware_hash(hw)}   [dim]{hw.os}, python {hw.python}[/]")
@@ -688,6 +696,34 @@ def probe(as_json: bool = typer.Option(False, "--json", help="Machine-readable o
     for line in explain(hw):
         console.print(f"  {line}")
     _print_checked_engines(hw)
+    if engines or reprobe:
+        _print_engine_facts(facts)
+
+
+def _engine_facts(refresh: bool) -> dict:
+    """vLLM's and SGLang's answers to the engine probe (rigtune.backends.facts), None for one not found or with
+    probing off."""
+    from rigtune.backends import registry
+
+    reg = registry()
+    return {name: reg[name].facts(refresh=refresh) for name in ("vllm", "sglang")}
+
+
+def _print_engine_facts(facts: dict) -> None:
+    t = Table(title="What each engine says it offers (asked in its own Python)", title_justify="left")
+    for col in ("engine", "version", "flags", "architectures", "speculative methods", "asked", "not answered"):
+        t.add_column(col)
+    for name, f in facts.items():
+        if f is None:
+            t.add_row(name, "-", "-", "-", "-", "-", "not asked: not found, or RIGTUNE_ENGINE_PROBE=off")
+            continue
+        missing = f.unanswered()
+        t.add_row(name, f.version or "?", str(len(f.flags)) if f.flags is not None else "-",
+                  str(len(f.archs)) if f.archs is not None else "-",
+                  ", ".join(f.spec_methods) if f.spec_methods is not None else "-",
+                  f"{f.probed_at or '?'} ({f.seconds if f.seconds is not None else '?'} s)",
+                  "; ".join(f"{k}: {f.errors.get(k, '')}" for k in missing) or "none")
+    console.print(t)
 
 
 def _print_checked_engines(hw) -> None:

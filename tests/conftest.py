@@ -208,6 +208,13 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 @pytest.fixture(autouse=True)
+def _no_engine_probe(monkeypatch):
+    """Never ask an installed engine what it offers (rigtune.backends.facts): tests see the engine through fakes. A
+    test of the probe, or of what its answers change, turns it on itself."""
+    monkeypatch.setenv("RIGTUNE_ENGINE_PROBE", "off")
+
+
+@pytest.fixture(autouse=True)
 def _no_model_revision(monkeypatch):
     """A profile's model commit comes from this machine's Hugging Face cache, or the Hub: neither in tests. A test of
     the revision check sets these itself; tests/test_cache_hardening.py tests the readers on a cache of its own."""
