@@ -261,7 +261,7 @@ class Goal:
         return next((lim for lim in self.limits if lim.metric in ("ttft_p95_ms", "ttft_p50_ms")), None)
 
 
-def _ttft_metric(percentile: int) -> str:
+def ttft_metric(percentile: int) -> str:
     return "ttft_p95_ms" if percentile >= 95 else "ttft_p50_ms"
 
 
@@ -349,7 +349,7 @@ def resolve_goal(objective: str, cons: Constraints) -> Goal:
     if objective == "latency":
         return Goal("request_latency_ms", (floor, *tpot))
     if objective == "balanced":
-        return Goal("tok_s", (Limit(_ttft_metric(cons.ttft_percentile), "<=", cons.ttft_ceiling_ms), *tpot))
+        return Goal("tok_s", (Limit(ttft_metric(cons.ttft_percentile), "<=", cons.ttft_ceiling_ms), *tpot))
     if objective == "efficiency":
         return Goal("joules_per_token", (floor, *tpot), energy_fallback=True)
     raise ValueError(f"unknown objective {objective!r}; choose from {OBJECTIVES}")

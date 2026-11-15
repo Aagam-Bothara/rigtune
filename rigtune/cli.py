@@ -41,8 +41,8 @@ def _setup_logging(verbose: bool) -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def _objective(value: str) -> str:
-    if value not in OBJECTIVES:
+def _objective(value: Optional[str]) -> Optional[str]:
+    if value is not None and value not in OBJECTIVES:
         raise typer.BadParameter(f"objective must be one of {', '.join(OBJECTIVES)}")
     return value
 
@@ -76,6 +76,8 @@ def _trial_key(r: TrialResult) -> str:
 
 def _print_profile(p: Profile) -> None:
     console.print(f"[bold]objective[/]: {p.objective}   [bold]workload[/]: {p.workload}")
+    if p.calibration_constraints.get("goal"):  # a custom goal: what it optimised, within which limits
+        console.print(f"[bold]goal[/]:      {p.calibration_constraints['goal']}")
     found = p.hardware.backends.get(p.backend)
     libs = ", ".join(f"{k} {v}" for k, v in sorted(found.libs.items())) if found is not None else ""
     console.print(f"[bold]backend[/]: {p.backend} {p.backend_version or ''}" + (f"  [dim]({libs})[/]" if libs else ""))
@@ -177,8 +179,11 @@ def _trace(which: str) -> None:
     if not p.calibration_table:
         err.print("[yellow]that profile has no calibration table: it was served without a search[/]")
         raise typer.Exit(2)
+    from rigtune.goals import recorded_constraints
+
+    cons = recorded_constraints(p.calibration_constraints) if p.calibration_constraints.get("goal") else None
     view = SearchView.from_trials(p.calibration_table, console, winner=_winner_key(p), objective=p.objective,
-                                  notes=p.notes)
+                                  constraints=cons, notes=p.notes)
     console.print(view.render())
 
 
@@ -213,6 +218,27 @@ def _constraints(ttft_ceiling: Optional[float], tok_s_floor: Optional[float], wo
     tpot = tpot_ceiling if tpot_ceiling is not None else (workload.tpot_ceiling_ms if workload else None)
     return Constraints(ttft_ceiling_ms=ceiling, tok_s_floor_abs=tok_s_floor, tpot_ceiling_ms=tpot,
                        ttft_percentile=ttft_percentile, arrival_rate=arrival_rate, strict=strict)
+
+
+def _goal(objective: Optional[str], optimise: Optional[str], limits: Optional[List[str]],
+          ttft_ceiling: Optional[float], ttft_percentile: int, tok_s_floor: Optional[float],
+          tpot_ceiling: Optional[float], wl, arrival_rate: Optional[float], strict: bool):
+    """(objective, constraints, TTFT percentile for the search options): a preset named by --objective (balanced
+    when none is), or a goal stated with --optimise and --limit, which is a preset when one says the same thing
+    (rigtune/goals.py). Refused before anything is probed; a stated goal is said once before calibration."""
+    if optimise is None and not limits:
+        return (objective or "balanced", _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile,
+                                                      arrival_rate, strict=strict), ttft_percentile)
+    from rigtune.goals import GoalError, resolve
+
+    try:
+        r = resolve(objective, optimise, limits or [], ttft_ceiling=ttft_ceiling, ttft_percentile=ttft_percentile,
+                    tok_s_floor=tok_s_floor, tpot_ceiling=tpot_ceiling, workload_ttft_ms=wl.ttft_ceiling_ms,
+                    workload_tpot_ms=wl.tpot_ceiling_ms, arrival_rate=arrival_rate, strict=strict)
+    except GoalError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--optimise/--limit") from None
+    err.print(r.line, style="dim", markup=False, highlight=False)
+    return r.objective, r.constraints, r.ttft_percentile
 
 
 def _power_mode(value: str) -> str:
@@ -507,6 +533,18 @@ RATE_CHECK_OPT = typer.Option("on", "--rate-check", callback=_on_off,
                               help="With --arrival-rate: launch the pick once more and send it up to 24 requests at "
                                    "Poisson arrival times at that rate (at most 5 minutes), and record the measured "
                                    "J/request beside the predicted one (on|off)")
+OBJECTIVE_HELP = ("A preset goal: balanced (default; most tok/s within the TTFT ceiling), throughput, latency or "
+                  "efficiency. Leave it out with --optimise")
+OPTIMISE_OPT = typer.Option(
+    None, "--optimise", "--optimize",
+    help="State the goal instead of naming a preset: the one metric to optimise (tok_s, ttft_p95_ms, ttft_p50_ms, "
+         "tpot_ms, request_latency_ms, joules_per_token), within every --limit. A goal a preset expresses is that "
+         "preset, with its cached profile; the workload's TPOT ceiling still applies")
+LIMIT_OPT = typer.Option(
+    None, "--limit",
+    help="A limit on the goal, quoted: \"ttft_p95_ms<=800\", \"tok_s>=200\", \"tok_s>=50%best\", \"power_w<=250\", "
+         "\"mem_mb<=20GiB\" (<= or >=; units ms, s, W, MiB, GiB). Repeatable; added to --objective's own goal when "
+         "given with it")
 TTFT_OPT = typer.Option(None, "--ttft-ceiling", help="balanced: TTFT ceiling in ms (default: the workload's)")
 TTFT_PCT_OPT = typer.Option(95, "--ttft-percentile", callback=_percentile,
                             help="balanced: which time to first token the ceiling applies to: 95 (default; at "
@@ -698,7 +736,9 @@ def plan(
 @app.command()
 def bench(
     model: str,
-    objective: str = typer.Option("balanced", "--objective", callback=_objective),
+    objective: Optional[str] = typer.Option(None, "--objective", callback=_objective, help=OBJECTIVE_HELP),
+    optimise: Optional[str] = OPTIMISE_OPT,
+    limit: Optional[List[str]] = LIMIT_OPT,
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     sessions: bool = SESSIONS_OPT,
@@ -743,8 +783,10 @@ def bench(
     from rigtune.hardware import probe as _probe
     from rigtune.pipeline import calibrate, check_distributed_options, prepare_and_plan, select
 
-    _check_rate(objective, arrival_rate)
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
+    objective, cons, ttft_percentile = _goal(objective, optimise, limit, ttft_ceiling, ttft_percentile,
+                                             tok_s_floor, tpot_ceiling, wl, arrival_rate, strict_constraints)
+    _check_rate(objective, arrival_rate)
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)
     hw = _probe()
@@ -770,8 +812,6 @@ def bench(
                               speculative_all=opts.speculative_all)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate,
-                        strict=strict_constraints)
     view = _search_view(objective, cons)
     profile = _calibrating(view, calibrate, hw, spec, objective, result, reg, workload=wl, constraints=cons,
                            progress=view.progress, power_mode=power, options=opts)
@@ -796,7 +836,9 @@ def bench(
 @app.command()
 def recalibrate(
     model: str,
-    objective: str = typer.Option("balanced", "--objective", callback=_objective),
+    objective: Optional[str] = typer.Option(None, "--objective", callback=_objective, help=OBJECTIVE_HELP),
+    optimise: Optional[str] = OPTIMISE_OPT,
+    limit: Optional[List[str]] = LIMIT_OPT,
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     sessions: bool = SESSIONS_OPT,
@@ -838,12 +880,12 @@ def recalibrate(
     """Force a calibration rerun and overwrite the cached profile."""
     from rigtune.pipeline import resolve_profile
 
-    _check_rate(objective, arrival_rate)
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
+    objective, cons, ttft_percentile = _goal(objective, optimise, limit, ttft_ceiling, ttft_percentile,
+                                             tok_s_floor, tpot_ceiling, wl, arrival_rate, strict_constraints)
+    _check_rate(objective, arrival_rate)
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate,
-                        strict=strict_constraints)
     view = _search_view(objective, cons)
     profile = _calibrating(view, resolve_profile, ModelSpec(hf_id=model), objective, force_backend=backend, recalibrate=True,
                               workload=wl, constraints=cons,
@@ -862,7 +904,9 @@ def recalibrate(
 @app.command()
 def compare(
     model: str,
-    objective: str = typer.Option("balanced", "--objective", callback=_objective),
+    objective: Optional[str] = typer.Option(None, "--objective", callback=_objective, help=OBJECTIVE_HELP),
+    optimise: Optional[str] = OPTIMISE_OPT,
+    limit: Optional[List[str]] = LIMIT_OPT,
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     sessions: bool = SESSIONS_OPT,
@@ -954,8 +998,10 @@ def compare(
     from rigtune.hardware import probe as _probe
     from rigtune.pipeline import prepare_and_plan, resolve_profile, select
 
-    _check_rate(objective, arrival_rate)
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
+    objective, cons, ttft_percentile = _goal(objective, optimise, limit, ttft_ceiling, ttft_percentile,
+                                             tok_s_floor, tpot_ceiling, wl, arrival_rate, strict_constraints)
+    _check_rate(objective, arrival_rate)
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)
     # Held-out prompts are read before calibrating, so a bad file fails in seconds rather than after the search.
@@ -987,8 +1033,6 @@ def compare(
         except ValueError:
             raise typer.BadParameter(f"{levels!r}: numbers of users of at least 1, comma-separated",
                                      param_hint="--levels")
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate,
-                        strict=strict_constraints)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     view = _search_view(objective, cons)
@@ -1275,7 +1319,9 @@ def _is_loopback(host: str) -> bool:
 @app.command()
 def serve(
     model: str,
-    objective: str = typer.Option("balanced", "--objective", callback=_objective),
+    objective: Optional[str] = typer.Option(None, "--objective", callback=_objective, help=OBJECTIVE_HELP),
+    optimise: Optional[str] = OPTIMISE_OPT,
+    limit: Optional[List[str]] = LIMIT_OPT,
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     sessions: bool = SESSIONS_OPT,
@@ -1368,13 +1414,13 @@ def serve(
             body_timeout=body_timeout, api_key=api_key)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from None
-    _check_rate(objective, arrival_rate)
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
+    objective, cons, ttft_percentile = _goal(objective, optimise, limit, ttft_ceiling, ttft_percentile,
+                                             tok_s_floor, tpot_ceiling, wl, arrival_rate, strict_constraints)
+    _check_rate(objective, arrival_rate)
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)
     spec = ModelSpec(hf_id=model)
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile, arrival_rate,
-                        strict=strict_constraints)
     view = _search_view(objective, cons)
     profile = _calibrating(view, resolve_profile, spec, objective, force_backend=backend,
                            skip_calibration=skip_calibration,

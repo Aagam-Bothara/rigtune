@@ -179,6 +179,30 @@ Scores within 2% of each other count as a tie. A tie goes to the configuration t
 
 The minimum throughput defaults to 50% of the best observed tokens per second. Set `--tok-s-floor` to use an absolute value instead. If no configuration meets the constraint, rigtune chooses the one that comes closest and records that in the profile.
 
+#### Stating your own goal
+
+The four objectives are goals: one metric to optimise within limits. `--optimise` names the metric and each `--limit` adds a limit, so you can ask for what no preset says:
+
+```
+rigtune bench <model> --optimise joules_per_token --limit "tok_s>=200" --limit "ttft_p95_ms<=800"
+rigtune serve <model> --optimise tok_s --limit "power_w<=250"
+rigtune bench <model> --objective balanced --limit "mem_mb<=20GiB"     # balanced's own goal, plus a limit
+```
+
+| metric | is | `--optimise` | units in `--limit` |
+|---|---|---|---|
+| `tok_s` | tokens per second (more is better) | yes | none, or `%best`: a share of the best trial's tok/s |
+| `ttft_p95_ms`, `ttft_p50_ms` | 95th-percentile and median time to first token | yes | `ms` (default), `s` |
+| `tpot_ms` | time per output token | yes | `ms`, `s` |
+| `request_latency_ms` | median request latency, TTFT + TPOT × output tokens (the `latency` objective's) | yes | `ms`, `s` |
+| `joules_per_token` | energy per output token | yes | none |
+| `power_w` | mean board power | limit only | `W` |
+| `mem_mb` | peak GPU memory | limit only | `MiB` (default), `GiB` |
+
+A limit is `<=` for a metric that is better lower and `>=` for one better higher, and includes its bound. Quote each limit: unquoted, the shell takes `>` and `<` as redirects (PowerShell and bash alike), and rigtune then sees `tok_s` with no bound and says so. Every refusal (an unknown metric, a limit-only metric to `--optimise`, a limit the wrong way round, `<` or `>`, `%best` on anything but `tok_s`, one metric limited twice differently) comes before anything is probed or downloaded. With `--optimise`, `--ttft-ceiling` (with `--ttft-percentile`), `--tok-s-floor` and `--tpot-ceiling` state limits of that goal; the workload's TPOT ceiling applies to every goal unless a limit or `--tpot-ceiling` replaces it, and `--optimise` with `--objective` is refused. `--limit` with `--objective` (or with neither, which is `balanced`) leaves the older flags meaning what they always meant for that preset, and a limit the preset has a setting for becomes that setting: a TTFT ceiling under `balanced`, and under `efficiency` at an `--arrival-rate`, which judges latency against it; a throughput floor under `latency` and `efficiency`; the TPOT ceiling under all four. So `--objective balanced --limit "ttft_p95_ms<=300"` is `--objective balanced --ttft-ceiling 300`. A named preset never turns into another: a limit it has no setting for makes the goal custom (the preset's own goal plus that limit, with a line saying so), unless that goal is another preset's, which is refused (`--objective throughput --limit "ttft_p95_ms<=300"`: ask for `--objective balanced`), or an arrival rate is given, which is refused too, since at a rate `efficiency` scores joules per request. `--ttft-percentile 50` with a `ttft_p95_ms` limit is refused rather than one of them dropped.
+
+A goal a preset says is that preset: `--optimise tok_s --limit "ttft_p95_ms<=300"` is `--objective balanced --ttft-ceiling 300`, and `--optimise joules_per_token --limit "tok_s>=50%best"` is `--objective efficiency`, with the same cached profile. Before calibrating, one line says the goal and whether it is a preset. Any other goal is the `custom` objective: its text is recorded in the profile (and shown as `goal:`), and its profile is cached as `custom-limits-<fingerprint>-optimise-<metric>.json`, so two goals never share one. A custom goal scores a level that did not measure a metric as missing that limit (and as worst when it is the optimised one); it never falls back to tok/s as `efficiency` does. When nothing meets every limit it picks the configuration that missed the fewest, then the one least far past them relative to each bound. Only a goal optimising `tok_s` stops a trial at its busiest level that meets the limits; any other custom goal measures every level, which never misses the winner and takes about half as long again. A custom goal has no idle tail. **Custom goals are exercised by tests on simulated trials and recorded calibration tables only; none has run on hardware.**
+
 #### Energy at your arrival rate
 
 Calibration measures every level closed-loop: the load generator keeps c requests in flight, so the GPU never idles, and joules per token contains neither the card's idle draw between requests nor its wind-down after a burst. A server that receives a request every few seconds pays both, and at a low rate the idle draw can be most of each request's energy. `--arrival-rate 0.5` (or `12/min`, `720/h`) tells `efficiency` the rate you expect, and every configuration is then scored by joules per request at that rate:
@@ -292,7 +316,7 @@ To see whether quantized weights cost quality on your model, run `benchmarks/tas
 ## CLI
 
 ```
-rigtune serve <model> [--objective X] [--workload W] [--workload-file F] [--phases MODE] [--power MODE] [--ttft-ceiling MS] [--ttft-percentile 95|50] [--tpot-ceiling MS] [--arrival-rate R] [--rate-check on|off] [--port N] [--host ADDR] [--backend NAME] [--skip-calibration]
+rigtune serve <model> [--objective X | --optimise METRIC] [--limit "METRIC<=N"]... [--workload W] [--workload-file F] [--phases MODE] [--power MODE] [--ttft-ceiling MS] [--ttft-percentile 95|50] [--tpot-ceiling MS] [--arrival-rate R] [--rate-check on|off] [--port N] [--host ADDR] [--backend NAME] [--skip-calibration]
                 [--quant auto|LIST] [--kv-quant on|off] [--prefix-cache on|off] [--speculative on|off|all] [--layout MODE] [--combine on|off] [--confirm on|off] [--all-levels] [--budget 10m]
                 [--confirm-rounds N] [--min-requests N] [--strict-constraints]
                 [--max-in-flight N|measured] [--queue N] [--queue-timeout S] [--idle-timeout S] [--max-body-mb M]
