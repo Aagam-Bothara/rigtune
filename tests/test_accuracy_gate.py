@@ -429,8 +429,8 @@ def test_records_carry_per_item_outcomes_for_a_later_decision():
     gate = _gate(300, script)
     _search(gate, GradingRunner(gate)).run(_feasible(("vllm", "bf16"), ("vllm", "gptq")))
 
-    by = {r.quant: r for r in gate.records()}
-    assert [r.quant for r in gate.records()] == ["bf16", "gptq"]  # reference first
+    by = {r.quant: r for r in gate.records() if r.config is None}
+    assert [r.quant for r in gate.records() if r.config is None] == ["bf16", "gptq"]  # reference first
     assert by["bf16"].outcomes == ref and by["gptq"].outcomes == _flip(cand, [7], "-")
     assert (by["gptq"].answered, by["gptq"].correct) == (299, 288)
     assert (by["gptq"].paired, by["gptq"].lost, by["gptq"].gained) == (299, 2, 1)
@@ -477,8 +477,9 @@ def test_a_gated_calibration_puts_the_grades_in_the_profile(hw_a100, spec, tmp_p
     assert [(r.quant, r.reference, r.admitted) for r in precisions] == [("bf16", True, None), ("fp8", False, False)]
     assert len(precisions[1].outcomes) == 300
     final = p.accuracy[-1]  # the pick's own configuration, graded during confirm
-    assert final.config == p.config.key() and (final.lost, final.gained) == (0, 0)
-    assert "recorded, not gated" in final.reason
+    assert final.config == p.config.key() and final.admitted is True
+    assert final.reason == "reference configuration" or (final.lost, final.gained) == (0, 0)
+    assert p.options["gate"] == "full-v1"
     assert Profile.model_validate_json(p.model_dump_json()).accuracy == p.accuracy
 
 
@@ -616,29 +617,31 @@ def _kv_search(script: Script, confirm_top: int):
     return gate, winner, notes
 
 
-def test_the_pick_is_graded_once_on_its_own_configuration_during_confirm():
-    """Stage 1 grades the weights; the fp8 cache the KV stage adopted afterwards is graded only here, and a loss it
-    cannot certify is reported, not acted on."""
+def test_confirm_grades_the_leader_s_own_configuration_and_a_lossy_one_falls_back_to_a_certified_one():
+    """Stage 1 grades the weights; the fp8 cache the KV stage adopted afterwards is graded on the confirm run, and
+    a loss it cannot certify is refused: the reference's own configuration is served, its speed re-measured."""
     ref = "1" * 280 + "0" * 20
     script = FinalScript({("vllm", "bf16"): ref}, final=_flip(ref, range(12), "0"))
     gate, winner, notes = _kv_search(script, confirm_top=3)
 
-    assert winner.config.kv_dtype == "fp8" and gate.final_target == winner.config.key()
-    assert script.passes.count(("vllm", "bf16")) == 3  # twice in stage 1, once on the pick during confirm
-    final = gate.records()[-1]
-    assert final.config == winner.config.key() and (final.lost, final.gained, final.paired) == (12, 0, 300)
-    assert final.against == "vllm/bf16" and final.admitted is None
-    assert "not certified within 3.0 points" in final.reason
+    assert winner.config.kv_dtype == "auto" and winner.stage == "confirm"  # re-measured, not a search-stage best
+    assert script.passes.count(("vllm", "bf16")) == 3  # twice in stage 1, once on the leader during confirm
+    refused = [r for r in gate.records() if r.config and r.admitted is False]
+    assert refused and (refused[0].lost, refused[0].gained, refused[0].paired) == (12, 0, 300)
+    assert refused[0].against == "vllm/bf16" and "not above -3.0" in refused[0].reason
+    assert gate.final_record.admitted is True and gate.final_record.config == winner.config.key()
+    assert gate.records()[-1] is gate.final_record
+    assert any("final configuration" in n and "refused" in n for n in notes)
     note = next(n for n in notes if n.startswith("accuracy gate: the pick's final configuration"))
-    assert "12 lost, 0 gained" in note and "its loss is not certified within 3.0 points" in note
-    assert "--kv-quant off" in note
+    assert "It is a fallback" in note
 
 
-def test_without_confirm_the_pick_s_configuration_is_not_graded_and_the_notes_say_so():
+def test_without_confirm_a_changed_final_configuration_is_still_graded():
     ref = "1" * 300
     script = FinalScript({("vllm", "bf16"): ref}, final=ref)
     gate, winner, notes = _kv_search(script, confirm_top=0)
 
-    assert script.passes.count(("vllm", "bf16")) == 2 and gate.final_record is None
-    assert any("the pick's final configuration was not graded, since that happens during --confirm" in n
-               for n in notes)
+    assert winner.config.kv_dtype == "fp8"
+    assert script.passes.count(("vllm", "bf16")) == 3  # the fp8 cache is graded on a run of its own
+    assert gate.final_record.admitted is True
+    assert any("final configuration" in n and "is certified" in n for n in notes)

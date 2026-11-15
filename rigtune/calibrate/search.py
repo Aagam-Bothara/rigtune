@@ -31,7 +31,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Set, Tuple
 
 from rigtune import kvtier
 from rigtune.backends.base import BaseBackend, free_port
@@ -449,6 +449,10 @@ class StagedSearch:
     # --eval-set: a rigtune.accuracy_gate.AccuracyGate. Stage 1 grades each precision on labelled items and refuses,
     # through `refused`, every gated one whose loss against its reference is not certified within a tolerance.
     gate: Optional[object] = None
+    # With a gate, configurations the final-quality stage may grade beyond those already graded: each costs one
+    # trial and one grading pass (660 s at 300 items). Already-graded configurations, such as the reference's own
+    # stage-1 configuration, cost no attempt, so a certified fallback is always within reach.
+    final_attempts: int = 3
     # Stage 5: re-measure the leader and up to confirm_top - 1 others within confirm_band of it,
     # confirm_rounds times each in turn, and choose on those runs alone (0 = off).
     confirm_top: int = 0
@@ -1172,7 +1176,7 @@ class StagedSearch:
             if all(c.key() != x.result.config.key() for c in shortlist):
                 shortlist.append(x.result.config)
         if self.gate is not None and shortlist:
-            self.gate.final_target = shortlist[0].key()  # grade the likely pick's own configuration on its run
+            self.gate.final_target = shortlist[0].base_key()  # grade the likely pick's own configuration on its run
         runs: Dict[str, List[TrialResult]] = {c.key(): [] for c in shortlist}
         for _ in range(max(1, self.confirm_rounds)):
             for cfg in shortlist:
@@ -1199,6 +1203,98 @@ class StagedSearch:
             note += f": the pick measured {then:.0f} tok/s in the search and {now:.0f} re-measured"
         self.notes.append(note)
         return reps
+
+    def stage_final_quality(self, pool: Sequence[TrialResult]) -> List[TrialResult]:
+        """With an eval set, serve only a configuration whose own grades certify it (AccuracyGate.certified).
+
+        Candidates are taken best first: `pool` (the confirm stage's fresh runs, or every eligible trial), then, if
+        none of those can be served, the other eligible trials, each configuration by its best-ranked run. An
+        ungraded candidate is re-measured once with grading on (final_attempts of them at most), and the ranking is
+        redone on the fresh run. After a refusal, candidates with the refused configuration's quantized KV cache or
+        speculation method are skipped, since they most likely lose the same answers. A fallback whose run is a
+        search-stage best is re-measured, so the speed the profile reports is a fresh one. Returns the one
+        configuration to serve, or nothing."""
+        gate = self.gate
+        if gate is None:
+            return list(pool)
+
+        def best_per_key(results: Sequence[TrialResult], skip: Set[str]) -> Dict[str, TrialResult]:
+            out: Dict[str, TrialResult] = {}
+            for x in rank(results, self.objective, self.constraints):  # best first: keep the first per key
+                out.setdefault(x.result.config.key(), x.result)
+            return {k: v for k, v in out.items() if k not in skip}
+
+        pending = best_per_key(pool, set())
+        dropped: Set[str] = set()
+        fresh: Set[str] = {k for k, r in pending.items() if r.stage == "confirm"}
+        refused_kv: Set[str] = set()
+        refused_spec: Set[str] = set()
+        skipped: List[str] = []
+        attempts, expanded, first = 0, False, None
+        while True:
+            ordered = rank(list(pending.values()), self.objective, self.constraints)
+            if not expanded and (not ordered or not ordered[0].feasible):
+                expanded = True
+                for k, r in best_per_key(self._eligible(self.results), dropped | set(pending)).items():
+                    pending[k] = r
+                continue
+            if not ordered:
+                break
+            top = ordered[0].result
+            cfg, key = top.config, top.config.key()
+            first = first or key
+
+            def drop(why: Optional[str] = None) -> None:
+                pending.pop(key)
+                dropped.add(key)
+                gate.fallback_from.append(key)  # ranked above whatever is served, and not certified
+                if why:
+                    skipped.append(f"{key} ({why})")
+
+            spec = (cfg.spec_decode or "").split(":")[0]
+            if not gate.graded(cfg):
+                if (cfg.kv_dtype != "auto" and cfg.kv_dtype in refused_kv) or (spec and spec in refused_spec):
+                    drop("shares a refused KV cache or speculation method")
+                    continue
+                if attempts >= self.final_attempts:
+                    drop(f"over the {self.final_attempts} final grading attempts")
+                    continue
+                attempts += 1
+                gate.final_target = cfg.base_key()
+                measured = self._remeasure(cfg)
+                gate.final_target = None
+                if measured is None:
+                    drop("the calibration budget was spent")
+                    continue
+                if measured.ok and gate.graded(cfg):
+                    pending[key] = measured
+                    fresh.add(key)
+                    continue  # the fresh run may change which candidate leads
+                drop("its re-measurement failed" if not measured.ok else "it could not be graded")
+                continue
+            if not gate.certified(cfg):
+                if cfg.kv_dtype != "auto":
+                    refused_kv.add(cfg.kv_dtype)
+                if spec:
+                    refused_spec.add(spec)
+                self.notes.append(f"accuracy gate: final configuration {key} refused: "
+                                  f"{gate.config_records[key].reason}")
+                drop()
+                continue
+            if key != first and key not in fresh:  # a fallback: never serve a search-stage best-of-noisy number
+                measured = self._remeasure(cfg)
+                fresh.add(key)
+                if measured is not None and measured.ok:
+                    pending[key] = measured
+                    continue  # ranked again on the fresh run; it is certified, so it is taken unless overtaken
+                self.notes.append(f"accuracy gate: the fallback {key} could not be re-measured, so the profile "
+                                  "reports its speed from the search")
+            if skipped:
+                self.notes.append("accuracy gate: not graded for the final choice: " + "; ".join(skipped))
+            return [pending[key]]
+        if skipped:
+            self.notes.append("accuracy gate: not graded for the final choice: " + "; ".join(skipped))
+        return []
 
     def stage_power(self, base: Config) -> None:
         """Measure the leading config under each power setting and let the objective choose."""
@@ -1334,13 +1430,24 @@ class StagedSearch:
                 self.stage_power(leader.config.model_copy(update={"power_limit_w": None, "sm_clock_mhz": None}))
                 if pool is not self.results:
                     pool = list(pool) + self.results[before:]
+        compared = pool  # what the power note compares the pick with, before the gate narrows the choice
+        if self.gate is not None:
+            if self.gate.decided:  # type: ignore[attr-defined]
+                pool = self.stage_final_quality(pool)
+            else:
+                pool = []
+                self.notes.append("accuracy gate: stage 1 never finished, so no configuration could be certified")
         winner, notes = pick(pool, self.objective, self.constraints)
-        refusal = strict_refusal(winner, pool, self.objective, self.constraints)
+        # Judged among the measured pool, as without the gate: the gate narrows the choice to one configuration, and
+        # a throughput floor relative to the best measured would always pass against that one alone.
+        judged = list(compared) + ([winner] if winner is not None and all(r is not winner for r in compared)
+                                   else [])
+        refusal = strict_refusal(winner, judged, self.objective, self.constraints)
         if refusal:  # only here: every stage before chose its leader leniently, so none was left untried
             self.notes.append(refusal)
             winner, notes = None, []
         if winner is not None and self.power_points:
-            pn = self._power_note(winner, pool)
+            pn = self._power_note(winner, compared)
             if pn:
                 notes.append(pn)
         if winner is not None:

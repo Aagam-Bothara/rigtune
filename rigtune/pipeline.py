@@ -104,6 +104,8 @@ class SearchOptions:
     eval_set: Optional[str] = None
     max_accuracy_loss: float = 3.0  # --max-accuracy-loss, points
     eval_items: int = 300  # --eval-items: the first N items (0 = all)
+    # --eval-attempts: configurations the final-quality stage may grade beyond those already graded (search.py)
+    eval_attempts: int = 3
     # --report-reuse: launch engines with their per-request cached-token reports for a flat workload too (a session
     # file always has them), so a flattened control records the reuse it got. It adds a launch flag, so a profile
     # calibrated with it is cached under its own name.
@@ -161,6 +163,11 @@ class SearchOptions:
         if self.eval_set:  # a gated profile answers a different question; ungated cache paths are untouched
             out["eval"] = f"{Path(self.eval_set).stem}-{self.eval_items or 'all'}"
             out["maxloss"] = f"{self.max_accuracy_loss:g}"
+            # The served configuration itself is certified (search.stage_final_quality), not only its weights:
+            # gated profiles from before that were checked to a weaker contract and are not served for this one.
+            out["gate"] = "full-v1"
+            if self.eval_attempts != 3:
+                out["evaltries"] = str(self.eval_attempts)
         if self.report_reuse:
             out["reuse"] = "on"
         if self.kv_tier != "off":
@@ -959,7 +966,7 @@ def calibrate(
                           predictor=Predictor(hw), models=plan.prepared, workload=workload,
                           power_points=points, variant_stages=stages, combine=opts.combine,
                           budget_s=opts.budget_s, confirm_top=3 if opts.confirm else 0,
-                          confirm_rounds=opts.confirm_rounds,
+                          confirm_rounds=opts.confirm_rounds, final_attempts=opts.eval_attempts,
                           feasible_fn=combination_fits(hw, reg, plan), quality=probe, gate=gate,
                           explore_space=search_space(hw, plan, reg, workload, opts) if opts.explore else [],
                           spec_first=True, spec_beam=3 if opts.speculative_all else 2, rate_check=opts.rate_check,
@@ -1048,6 +1055,10 @@ def check_distributed_options(opts: SearchOptions, hw: HardwareDescriptor, layou
                               phases: str = "unified") -> None:
     """Refuse, before any calibration, options the multi-GPU searches do not carry out."""
     where = distributed_arrangement(hw, layout, phases)
+    if where is not None and opts.eval_set:
+        raise OptionRefused(f"--eval-set certifies the exact configuration served by one engine on one GPU; {where} "
+                            "would serve another arrangement, which is never graded. Use --layout single and "
+                            "--phases unified with --eval-set")
     if where is not None and opts.confirm_rounds != 1:
         raise OptionRefused(f"--confirm-rounds applies to one engine on one GPU; {where} measures each arrangement "
                          "once, so it would not run the rounds asked for")

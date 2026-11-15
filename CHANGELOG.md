@@ -20,3 +20,6 @@
   recalibrated once, on first use; the log names the reason whenever a cached profile is not reused.
 - New opt-in calibration controls: `--strict-constraints`, `--confirm-rounds N` and `--min-requests N`
   ([safeguards](docs/runtime-hardening.md)). Without them calibration runs as before.
+- With `--eval-set`, the configuration served is certified, KV cache and speculation included, or a certified
+  fallback is served (`--eval-attempts`, default 3), or calibration fails. Gated profiles cached by earlier releases
+  are recalibrated. `--eval-set` with a multi-GPU `--layout` or `--phases` is refused before calibrating.

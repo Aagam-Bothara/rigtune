@@ -174,12 +174,17 @@ class AccuracyGate:
     unrun: Set[Key] = field(default_factory=set)  # never ran in stage 1: not graded, and blocked like a refusal
     _records: Dict[Key, PrecisionAccuracy] = field(default_factory=dict)
     _against: Dict[Key, Key] = field(default_factory=dict)  # what each graded precision was compared with
-    # The configuration the confirm stage expects to pick (its leader), graded once on its re-measurement, and
-    # what it scored. Recorded, not gated: by then there is nothing to fall back to without another search.
+    # Grades of exact configurations (Config.key()): every stage-1 grading, and each configuration graded after the
+    # decision. A precision's grade cannot certify a configuration whose KV cache, speculation or other launch
+    # settings the later stages changed: those are graded again (certified), and the pick must pass.
+    config_outcomes: Dict[str, str] = field(default_factory=dict)
+    reference_configs: Set[str] = field(default_factory=set)  # stage-1 configurations of faithful formats
+    config_records: Dict[str, PrecisionAccuracy] = field(default_factory=dict)
+    config_seconds: Dict[str, float] = field(default_factory=dict)  # each final grading pass, in its record
+    fallback_from: List[str] = field(default_factory=list)  # faster configurations refused before the pick
+    # The configuration being re-measured for its final grade (StagedSearch sets it), graded once on that run.
     final_target: Optional[str] = None
-    final_outcomes: Optional[str] = None
     final_record: Optional[PrecisionAccuracy] = None
-    final_seconds: float = 0.0
 
     @property
     def tolerance(self) -> float:
@@ -230,16 +235,18 @@ class AccuracyGate:
         nor floods one. A pass that answered nothing is not recorded, so a later trial of the same precision in
         stage 1 can try again; one that never answers is refused at the decision.
 
-        After the decision, only the confirm stage's leader is graded, once, on its own configuration: the KV
-        cache and speculation the later stages chose are part of what it serves, and stage 1 graded neither."""
-        if self.decided and self.final_target is not None and cfg.key() == self.final_target:
-            if self.final_outcomes is None and self.items:
+        After the decision, only `final_target` is graded, once, on its own configuration: the KV cache and
+        speculation the later stages chose are part of what it serves, and stage 1 graded neither. A pass that
+        answers nothing is kept as such, and certifies nothing."""
+        if self.decided:
+            if self.final_target is not None and cfg.base_key() == self.final_target and self.items \
+                    and cfg.base_key() not in self.config_outcomes:
                 t0 = self.clock()
                 outcomes = self._pass(base_url, model, min(MAX_CONCURRENCY, max(MIN_CONCURRENCY, cfg.batch)))
-                self.final_seconds = self.clock() - t0
-                self.seconds_total += self.final_seconds
-                if outcomes.strip("-"):
-                    self.final_outcomes = outcomes
+                elapsed = self.clock() - t0
+                self.config_seconds[cfg.base_key()] = elapsed
+                self.seconds_total += elapsed
+                self.config_outcomes[cfg.base_key()] = outcomes
             return
         key = (cfg.backend, cfg.quant)
         if not self.wanted(*key):
@@ -260,6 +267,9 @@ class AccuracyGate:
             logger.warning("accuracy gate: %s answered none of %d items; not recorded", _label(key), len(self.items))
             return
         self.outcomes[key] = first
+        self.config_outcomes[cfg.base_key()] = first
+        if faithful(key[1]):  # it may become its engine's reference at the decision
+            self.reference_configs.add(cfg.base_key())
         if again is not None and again.strip("-"):
             self.repeats[key] = again
 
@@ -279,9 +289,11 @@ class AccuracyGate:
                 rec.self_lost, rec.self_gained, _ = _counts(outcomes, rec.outcomes_repeat)
         return rec
 
-    def _compare(self, rec: PrecisionAccuracy, against: Key) -> None:
-        """Fill in the paired comparison of `rec`'s outcomes with `against`'s first pass."""
-        lost, gained, n = _counts(self.outcomes[against], rec.outcomes)
+    def _compare(self, rec: PrecisionAccuracy, against: Key, unanswered_lost: bool = False) -> None:
+        """Fill in the paired comparison of `rec`'s outcomes with `against`'s first pass. With `unanswered_lost`,
+        an item `rec` left unanswered is paired as a wrong answer instead of dropping out (certified)."""
+        outcomes = rec.outcomes.replace("-", "0") if unanswered_lost else rec.outcomes
+        lost, gained, n = _counts(self.outcomes[against], outcomes)
         lo_d, hi_d = score_bounds(lost, gained, n)
         rec.against, rec.cross_engine = _label(against), against[0] != rec.backend
         rec.paired, rec.lost, rec.gained = n, lost, gained
@@ -420,11 +432,51 @@ class AccuracyGate:
 
     # ---- after the search
 
+    def graded(self, cfg: Config) -> bool:
+        return cfg.base_key() in self.config_outcomes
+
+    def certified(self, cfg: Config) -> bool:
+        """Whether this exact configuration may be served: its own grades certify a loss within the tolerance
+        against its engine's reference, or it is that reference's own stage-1 configuration.
+
+        Compared over the items the reference answered, as the decision compares, but an item this configuration
+        left unanswered counts as lost where the reference was right: a missing answer must never make a check
+        easier. So one unanswered item costs one item's worth of evidence, not the certificate, and an item the
+        reference itself missed drops out rather than blocking every configuration."""
+        outcomes = self.config_outcomes.get(cfg.base_key())
+        if outcomes is None or not self.decided:
+            return False
+        key = (cfg.backend, cfg.quant)
+        if cfg.base_key() in self.reference_configs and key in self.references.values():
+            rec = self._record(key, outcomes)
+            rec.config, rec.admitted, rec.reason = cfg.key(), True, "reference configuration"
+            self.config_records[cfg.base_key()] = rec
+            return True
+        # A reference is compared with its own first pass; anything else with what stage 1 compared it with.
+        against = key if key in self.references.values() else self._against.get(key)
+        rec = self._record(key, outcomes)
+        rec.config = cfg.key()
+        if cfg.base_key() in self.config_seconds:  # graded after the decision: that pass's time, not stage 1's
+            rec.seconds = round(self.config_seconds[cfg.base_key()], 1)
+        if against is None or against not in self.outcomes:
+            rec.admitted, rec.reason = False, "final configuration: no reference to compare it with"
+            self.config_records[cfg.base_key()] = rec
+            return False
+        self._compare(rec, against, unanswered_lost=True)
+        rec.admitted = certifies(rec.lost or 0, rec.gained or 0, rec.paired or 0, self.tolerance)
+        lo = (rec.delta_ci95 or (-100.0, 100.0))[0]
+        rec.reason = (f"final configuration: lower bound {lo:.1f} points is "
+                      + ("above" if rec.admitted else "not above") + f" -{self.max_loss:.1f}")
+        self.config_records[cfg.base_key()] = rec
+        return rec.admitted
+
     def records(self) -> List[PrecisionAccuracy]:
-        """One record per graded precision, references first, then the pick's final configuration if graded."""
+        """One record per graded precision, references first, then each configuration graded for the final
+        choice, the pick's own last."""
         ordered = sorted(self._records.values(), key=lambda r: (not r.reference, -precision_rank(r.quant),
                                                                 r.backend, r.quant))
-        return ordered + ([self.final_record] if self.final_record is not None else [])
+        checked = [r for r in self.config_records.values() if r is not self.final_record]
+        return ordered + checked + ([self.final_record] if self.final_record is not None else [])
 
     def summary(self) -> str:
         if not self.decided:
@@ -487,43 +539,32 @@ class AccuracyGate:
         return notes
 
     def final_note(self, winner: Optional[object]) -> Optional[str]:
-        """What the pick's own configuration scored, graded during confirm; recorded in the profile, not gated.
-
-        It is compared with what its precision was compared with in stage 1, or, for a reference, with that
-        reference's own first pass, so a quantized KV cache shows up as lost answers."""
-        if winner is None or not self.decided:
+        """What certified the pick's own configuration (StagedSearch.stage_final_quality serves nothing else), and
+        whether it was a fallback from faster configurations that were refused."""
+        if not self.decided:
             return None
+        if winner is None:
+            return ("accuracy gate: no configuration could be served: none whose own grades certify it was "
+                    "available within the attempts and budget allowed")
         cfg: Config = winner.config  # type: ignore[attr-defined]
-        if self.final_target is None:
-            return ("accuracy gate: the pick's final configuration was not graded, since that happens during "
-                    "--confirm; its KV cache and speculation were chosen on speed alone")
-        if cfg.key() != self.final_target:
-            return (f"accuracy gate: the confirm stage graded {self.final_target}, but {cfg.key()} won on "
-                    "re-measurement, so the pick's final configuration was not graded")
-        if self.final_outcomes is None:
-            return f"accuracy gate: the pick's final configuration {cfg.key()} answered none of the items when graded"
-        key = (cfg.backend, cfg.quant)
-        against = self._against.get(key, key if key in self.references.values() else None)
-        rec = self._record(key, self.final_outcomes)
-        rec.config, rec.seconds = cfg.key(), round(self.final_seconds, 1)
-        self.final_record = rec
-        if against is None or against not in self.outcomes:
-            rec.reason = "final configuration: graded, with nothing to compare it with"
-            return (f"accuracy gate: the pick's final configuration {cfg.key()} scored {self._accuracy_text(rec)}; "
-                    "there is nothing to compare it with")
-        self._compare(rec, against)
-        lo, hi = rec.delta_ci95 or (-100.0, 100.0)
-        within = certifies(rec.lost or 0, rec.gained or 0, rec.paired or 0, self.tolerance)
-        rec.reason = ("final configuration: recorded, not gated; "
-                      + ("within" if within else "not certified within") + f" {self.max_loss:.1f} points")
-        text = (f"accuracy gate: the pick's final configuration {cfg.key()} scored {self._accuracy_text(rec)} "
-                f"against {_label(against)} ({rec.lost} lost, {rec.gained} gained; "
-                f"{_pts((rec.delta_points or 0) / 100)} points, 95% CI {lo:.1f} to {hi:.1f})")
-        if within:
-            return text + f", within the {self.max_loss:.1f}-point tolerance"
-        return (text + f": its loss is not certified within {self.max_loss:.1f} points. Only its weight precision "
-                "was gated; the KV cache and speculation chosen after it were not, and --kv-quant off rules the "
-                "cache out")
+        if not self.certified(cfg):  # not reached through StagedSearch; kept so a caller cannot misread a pick
+            return f"accuracy gate: the pick's final configuration {cfg.key()} is not certified"
+        rec = self.final_record = self.config_records[cfg.base_key()]
+        self.final_target = cfg.base_key()
+        if rec.reason == "reference configuration":
+            text = (f"accuracy gate: the pick's final configuration {cfg.key()} is its engine's reference, graded in "
+                    f"stage 1: {self._accuracy_text(rec)}")
+        else:
+            lo, hi = rec.delta_ci95 or (-100.0, 100.0)
+            text = (f"accuracy gate: the pick's final configuration {cfg.key()} is certified: it scored "
+                    f"{self._accuracy_text(rec)} against {rec.against} ({rec.lost} lost, unanswered counted as "
+                    f"lost, {rec.gained} gained; {_pts((rec.delta_points or 0) / 100)} points, 95% CI {lo:.1f} to "
+                    f"{hi:.1f}), within the {self.max_loss:.1f}-point tolerance")
+        if self.fallback_from:
+            rec.reason += "; a fallback"
+            text += (f". It is a fallback: {', '.join(self.fallback_from)} ranked higher but could not be "
+                     "certified")
+        return text
 
     def final_notes(self, winner: Optional[object], results: Sequence[object], objective: str,
                     constraints: object) -> List[str]:

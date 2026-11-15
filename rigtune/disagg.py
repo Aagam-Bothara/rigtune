@@ -702,6 +702,9 @@ def calibrate_disaggregated(
         return _fallback(base, phases, "no prefill/decode pair fits in the two GPUs' memory")
     # Refused only now, when pairs will really be measured: each fallback above serves the unified profile, which
     # carried out what was asked. resolve_profile refuses it before calibrating where it can tell.
+    if base.eval_set is not None:
+        raise RuntimeError("final accuracy certification is not supported for disaggregated layouts; "
+                           "use --phases unified")
     if int(base.options.get("rounds", "1")) != 1:
         raise RuntimeError("repeated confirmation rounds are supported for --phases unified only")
 

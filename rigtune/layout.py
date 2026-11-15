@@ -337,6 +337,8 @@ def calibrate_layout(
         return _fallback(base, layout, f"{backend.name} has no tensor parallelism")
     # Refused only now, when a multi-GPU arrangement will really be measured: each fallback above serves the single-GPU
     # profile, which carried out what was asked. resolve_profile refuses it before calibrating where it can tell.
+    if base.eval_set is not None:
+        raise RuntimeError("final accuracy certification is not supported for multi-GPU layouts; use --layout single")
     if int(base.options.get("rounds", "1")) != 1:
         raise RuntimeError("repeated confirmation rounds are supported for --layout single only")
 

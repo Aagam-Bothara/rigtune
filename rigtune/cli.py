@@ -376,7 +376,7 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
           max_accuracy_loss: float = 3.0, eval_items: int = 300, report_reuse: bool = False,
           kv_tier: str = "off",
           arrival_rate: Optional[float] = None, rate_check: str = "on",
-          confirm_rounds: int = 1, min_requests: Optional[int] = None):
+          confirm_rounds: int = 1, min_requests: Optional[int] = None, eval_attempts: int = 3):
     from rigtune.pipeline import SearchOptions
 
     if eval_set:
@@ -394,7 +394,7 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
         eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items, report_reuse=report_reuse,
         kv_tier=kv_tier,
         arrival_rate=arrival_rate, rate_check=rate_check == "on",
-        confirm_rounds=confirm_rounds, min_requests=min_requests,
+        confirm_rounds=confirm_rounds, min_requests=min_requests, eval_attempts=eval_attempts,
     )
 
 
@@ -452,6 +452,10 @@ MAX_LOSS_OPT = typer.Option(3.0, "--max-accuracy-loss", callback=_max_loss,
 EVAL_ITEMS_OPT = typer.Option(300, "--eval-items", min=0,
                               help="With --eval-set: grade the first N items (0 = all). 300 items certify at best "
                                    "about 1.3 points, when no answer changes.")
+EVAL_ATTEMPTS_OPT = typer.Option(3, "--eval-attempts", min=0,
+                                 help="With --eval-set: configurations the final check may grade, faster ones first, "
+                                      "before falling back to one already certified (each costs a trial and a "
+                                      "grading pass)")
 LAYOUT_OPT = typer.Option("single", "--layout", callback=_layout,
                           help="Multi-GPU layout: single (default), replicas (one engine per GPU behind a load "
                                "balancer), tp (tensor parallel), auto (measure both, keep the better)")
@@ -718,6 +722,7 @@ def bench(
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
+    eval_attempts: int = EVAL_ATTEMPTS_OPT,
     arrival_rate: Optional[str] = RATE_OPT,
     rate_check: str = RATE_CHECK_OPT,
 ) -> None:
@@ -738,6 +743,7 @@ def bench(
         raise typer.Exit(2)
     opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
+                 eval_attempts=eval_attempts,
                  report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
                  confirm_rounds=confirm_rounds, min_requests=min_requests)
     try:  # as resolve_profile does: refused before the weights download and the search runs
@@ -813,6 +819,7 @@ def recalibrate(
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
+    eval_attempts: int = EVAL_ATTEMPTS_OPT,
     arrival_rate: Optional[str] = RATE_OPT,
     rate_check: str = RATE_CHECK_OPT,
 ) -> None:
@@ -832,6 +839,7 @@ def recalibrate(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
+                 eval_attempts=eval_attempts,
                  report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
                  confirm_rounds=confirm_rounds, min_requests=min_requests), layout=layout)
     view.stop()
@@ -887,6 +895,7 @@ def compare(
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
+    eval_attempts: int = EVAL_ATTEMPTS_OPT,
     arrival_rate: Optional[str] = RATE_OPT,
     rate_check: str = RATE_CHECK_OPT,
 ) -> None:
@@ -912,6 +921,7 @@ def compare(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
+                 eval_attempts=eval_attempts,
                  report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
                  confirm_rounds=confirm_rounds, min_requests=min_requests), layout=layout)
     view.stop()
@@ -920,6 +930,7 @@ def compare(
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
                                quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
+                 eval_attempts=eval_attempts,
                  report_reuse=report_reuse, arrival_rate=arrival_rate, rate_check=rate_check).search_quants())
 
     def _row_progress(label: str, row) -> None:
@@ -1154,6 +1165,7 @@ def serve(
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
+    eval_attempts: int = EVAL_ATTEMPTS_OPT,
     arrival_rate: Optional[str] = RATE_OPT,
     rate_check: str = RATE_CHECK_OPT,
 ) -> None:
@@ -1180,6 +1192,7 @@ def serve(
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
+                 eval_attempts=eval_attempts,
                  report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
                  confirm_rounds=confirm_rounds, min_requests=min_requests), layout=layout)
     view.stop()

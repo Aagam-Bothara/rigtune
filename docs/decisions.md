@@ -239,11 +239,18 @@ slower engines in stage 1; and refusals go to the same `refused` set as the drif
 later stage and the final pick respect. The withdrawn drift gate taught that last one: dropping a precision from
 stage 1's kept list only stopped it being tuned, and the argmax over every trial served it anyway.
 
-What it does not gate: the KV-cache quantization and speculative decoding the later stages choose. Speculative
-decoding is designed not to change greedy answers, but an fp8 or int8 KV cache can. With `--confirm on`, the
-confirm stage's leader answers the items once more on its own configuration, and when it is the pick its grades
-are compared with its reference's and reported; they are not gated, because by then refusing would leave
-nothing tuned to fall back to.
+The configuration served is gated as well, its KV cache and speculation included. Speculative decoding is designed
+not to change greedy answers, but an fp8 or int8 KV cache can, so stage 1's grade of the weights cannot vouch for
+what the later stages built on them. Until 14 November 2026 the pick's own grades were only reported, on the
+argument that refusing it would leave nothing tuned to fall back to. That argument was wrong: the reference's
+stage-1 configuration is always certified and already measured, and the next-best configurations can be graded
+on a run of their own. So the final stage grades the best configuration that has no grade of its own, serves it
+only if the same bound certifies it, and otherwise falls back, best first, to the next, re-measuring a fallback's
+speed. The fallback search is capped (`--eval-attempts`, default 3 graded configurations) and skips
+configurations that share a refused one's quantized cache or speculation method, because each grading pass may take
+up to its wall cap, 660 s at 300 items, on top of a trial. In that check an unanswered item counts as lost where the reference was right: a
+missing answer must not make a configuration easier to pass, and one missing answer should cost one item of
+evidence, not the certificate.
 
 ## Why does the agent trace generator write a file?
 
