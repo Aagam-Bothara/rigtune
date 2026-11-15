@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from rigtune import __version__, engines, selfcheck
 from rigtune import cache as profile_cache
@@ -16,6 +18,7 @@ from rigtune.calibrate.objectives import Constraints, close_call_level
 from rigtune.calibrate.search import ProgressFn, StagedSearch, SubprocessTrialRunner, TrialRunner
 from rigtune.calibrate.workload import Workload, get_workload
 from rigtune.hardware import hardware_hash, llmtrace_version, probe
+from rigtune.hfconfig import resolve_revision
 from rigtune.memory import plan as memory_plan
 from rigtune.models import (
     Config,
@@ -114,11 +117,16 @@ class SearchOptions:
     # --rate-check: with an arrival rate, re-measure the pick once with Poisson arrivals at it (search.py).
     rate_check: bool = True
 
-    def key(self, objective: Optional[str] = None) -> Dict[str, str]:
+    def key(self, objective: Optional[str] = None, constraints: Optional[Constraints] = None,
+            workload: Optional[Workload] = None) -> Dict[str, str]:
         """Options that change the pick, recorded in the profile and in its cache path: the non-default
         ones, and for `balanced` (the objective with a TTFT ceiling) the percentile unless it is the
         median. Balanced profiles from before the percentile existed were picked by the median and
-        carry no key for it, so they are served only where the median is asked for."""
+        carry no key for it, so they are served only where the median is asked for.
+
+        Constraints that differ from the ones a calibration of this workload uses by default (a --ttft-ceiling,
+        --tpot-ceiling or --tok-s-floor) add a fingerprint of the differing fields, so a pick made for one target
+        is never served for another; the defaults add nothing, so their profiles keep their names."""
         out: Dict[str, str] = {}
         if self.quants is not None:
             out["quant"] = "+".join(self.quants)
@@ -157,6 +165,11 @@ class SearchOptions:
                 out["ratecheck"] = "off"
         if objective == "balanced" and self.ttft_percentile != 50:
             out["ttft"] = f"p{self.ttft_percentile}"
+        changes = constraint_changes(effective_constraints(constraints, workload, self),
+                                     default_constraints(workload, self))
+        if changes:
+            encoded = json.dumps(changes, sort_keys=True)
+            out["limits"] = hashlib.sha256(encoded.encode()).hexdigest()[:16]
         return out
 
     def search_quants(self) -> Optional[List[str]]:
@@ -173,11 +186,63 @@ class SearchOptions:
         return quant in (allowed_quants([quant], self.search_quants()) or [])
 
 
-def _usable(cached: Optional[Profile], opts: SearchOptions, force_backend: Optional[str]) -> bool:
+def default_constraints(workload: Optional[Workload], opts: SearchOptions) -> Constraints:
+    """The constraints calibrate() scores with when the caller gives none."""
+    w = workload or get_workload("default")
+    out = Constraints(ttft_ceiling_ms=w.ttft_ceiling_ms, tpot_ceiling_ms=w.tpot_ceiling_ms,
+                      ttft_percentile=opts.ttft_percentile)
+    return dataclasses.replace(out, arrival_rate=opts.arrival_rate) if opts.arrival_rate is not None else out
+
+
+def effective_constraints(constraints: Optional[Constraints], workload: Optional[Workload],
+                          opts: SearchOptions) -> Constraints:
+    """The constraints a calibration with these arguments scores with (calibrate() applies the arrival rate)."""
+    out = constraints or default_constraints(workload, opts)
+    return dataclasses.replace(out, arrival_rate=opts.arrival_rate) if opts.arrival_rate is not None else out
+
+
+def _canonical(value: Any) -> Any:
+    """One form per value, so 50 and 50.0 compare and fingerprint alike."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return value
+
+
+def constraint_changes(constraints: Union[Constraints, Dict[str, Any]], baseline: Constraints) -> Dict[str, Any]:
+    """The fields of `constraints` (an object, or one recorded as a dict) that differ from `baseline`, canonical.
+    A field missing from a record, or added to Constraints later, counts as its default, so a new field left at
+    its default changes no fingerprint and invalidates no cached profile."""
+    record = constraints if isinstance(constraints, dict) else dataclasses.asdict(constraints)
+    out: Dict[str, Any] = {}
+    for f in dataclasses.fields(baseline if isinstance(constraints, dict) else constraints):
+        default = f.default if f.default is not dataclasses.MISSING else None
+        value = _canonical(record.get(f.name, default))
+        if value != _canonical(getattr(baseline, f.name, default)):
+            out[f.name] = value
+    return out
+
+
+def _usable(cached: Optional[Profile], opts: SearchOptions, force_backend: Optional[str],
+            constraints: Optional[Constraints] = None, workload: Optional[Workload] = None) -> bool:
     """Serve a cached profile only if it matches the forced backend and the current --quant: a
     profile calibrated when `auto` still picked 4-bit checkpoints must not outlive that default. A gated
-    profile must also have been graded on the same eval set: its name is in the cache path, its contents are not."""
+    profile must also have been graded on the same eval set: its name is in the cache path, its contents are not.
+    It must also have been scored with today's constraints: the cache path carries a fingerprint of the non-default
+    ones, and this checks the record itself, so a workload whose default ceiling has changed is not served from a
+    pick made for the old one. A profile that recorded no constraints (written before they were) is recalibrated."""
     if cached is None or (force_backend is not None and cached.backend != force_backend):
+        return False
+    if not cached.calibration_constraints:
+        logger.info("cached profile for %s records no calibration constraints (written by an earlier rigtune); "
+                    "recalibrating once", cached.model_id)
+        return False
+    wanted = effective_constraints(constraints, workload, opts)
+    differ = constraint_changes(cached.calibration_constraints, wanted)
+    if differ:
+        was = ", ".join(f"{k} {cached.calibration_constraints.get(k)} -> {getattr(wanted, k, None)}"
+                        for k in sorted(differ))
+        logger.info("cached profile for %s was calibrated for other constraints (%s); recalibrating",
+                    cached.model_id, was)
         return False
     if opts.eval_set:
         from rigtune.evalset import eval_set_sha256
@@ -917,7 +982,12 @@ def calibrate(
     profile.calibration_seconds = elapsed
     profile.calibration_trials = trials
     profile.power_mode = power_mode
-    profile.options = opts.key(objective)
+    profile.options = opts.key(objective, constraints, workload)
+    profile.calibration_constraints = dataclasses.asdict(constraints)
+    profile.model_revision = resolve_revision(spec)
+    # Drift compares live latency with the ceilings the pick was scored against, which a caller may have set.
+    profile.workload_spec.update(ttft_ceiling_ms=constraints.ttft_ceiling_ms,
+                                 tpot_ceiling_ms=constraints.tpot_ceiling_ms)
     if gate is not None:
         profile.accuracy = gate.records()
         profile.eval_set = gate.info
@@ -985,8 +1055,9 @@ def resolve_profile(
         return _resolve_layout(spec, objective, force_backend, recalibrate, workload, constraints, progress, hw,
                                on_stage, power_mode, opts, layout)
     if not recalibrate and not skip_calibration:
-        cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, options=opts.key(objective))
-        if _usable(cached, opts, force_backend):
+        cached = profile_cache.load(hw, spec, objective, workload.name, power_mode,
+                                    options=opts.key(objective, constraints, workload))
+        if _usable(cached, opts, force_backend, constraints, workload):
             say("cache hit")
             return cached
     say("select")
@@ -1014,9 +1085,12 @@ def _resolve_phased(spec: ModelSpec, objective: str, force_backend: Optional[str
 
     say = on_stage or (lambda s: None)
     if not recalibrate:
+        # With the objective, as the profile was saved: without it a balanced profile's percentile key was missing
+        # from the lookup, so a disaggregated balanced profile was never found again.
+        opts = options or SearchOptions()
         cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, phases,
-                                    options=(options or SearchOptions()).key())
-        if _usable(cached, options or SearchOptions(), force_backend):
+                                    options=opts.key(objective, constraints, workload))
+        if _usable(cached, opts, force_backend, constraints, workload):
             say("cache hit")
             return cached
     if phases == "disaggregated":
@@ -1048,10 +1122,10 @@ def _resolve_layout(spec: ModelSpec, objective: str, force_backend: Optional[str
     from rigtune.layout import calibrate_layout
 
     say = on_stage or (lambda s: None)
-    key = {**options.key(objective), "layout": layout}
+    key = {**options.key(objective, constraints, workload), "layout": layout}
     if not recalibrate:
         cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, options=key)
-        if _usable(cached, options, force_backend):
+        if _usable(cached, options, force_backend, constraints, workload):
             say("cache hit")
             return cached
     gpus = [g for g in hw.gpus if g.vendor == "nvidia"]

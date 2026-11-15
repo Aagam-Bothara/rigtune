@@ -5,11 +5,15 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, Optional
+import re
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional, Union
 
 from rigtune.models import ArchInfo, ModelSpec
 
 logger = logging.getLogger(__name__)
+
+_COMMIT = re.compile(r"[0-9a-f]{40}")
 
 DTYPE_BYTES: Dict[str, int] = {
     "float32": 4,
@@ -253,6 +257,49 @@ def safetensors_param_count(spec: ModelSpec, token: Optional[str] = None) -> Opt
     except Exception as exc:
         logger.debug("safetensors metadata unavailable for %s: %s", spec.hf_id, exc)
     return None
+
+
+def snapshot_revision(spec: ModelSpec, cache_dir: Union[str, Path, None] = None) -> Optional[str]:
+    """The commit of the model's snapshot in the local Hugging Face cache, read from the snapshot's own path
+    (.../snapshots/<commit>/config.json). Never asks the Hub. None for a local directory or an uncached model."""
+    if os.path.isdir(spec.hf_id):
+        return None
+    try:
+        from huggingface_hub import try_to_load_from_cache
+
+        path = try_to_load_from_cache(spec.hf_id, "config.json", cache_dir=cache_dir, revision=spec.revision)
+    except Exception as exc:
+        logger.debug("no cached snapshot for %s: %s", spec.hf_id, exc)
+        return None
+    if not isinstance(path, str):
+        return None
+    snapshot = Path(path).parent
+    if snapshot.parent.name == "snapshots" and _COMMIT.fullmatch(snapshot.name):
+        return snapshot.name
+    return None
+
+
+def hub_revision(spec: ModelSpec, token: Optional[str] = None) -> Optional[str]:
+    """The commit the Hub resolves the requested revision (default: main) to. Asks the Hub."""
+    from huggingface_hub import HfApi
+
+    sha = getattr(HfApi(token=token).model_info(spec.hf_id, revision=spec.revision), "sha", None)
+    return sha if isinstance(sha, str) and _COMMIT.fullmatch(sha) else None
+
+
+def resolve_revision(spec: ModelSpec, fetch: Optional[Callable[[ModelSpec], Optional[str]]] = None,
+                     cache_dir: Union[str, Path, None] = None) -> Optional[str]:
+    """The Hub commit a calibration measured, for its profile: the cached snapshot's, since that is what the
+    engines load (fetch_config has just downloaded config.json into it), else what the Hub says (`fetch`,
+    default hub_revision). None for a local directory, or when neither can be read: never an error."""
+    found = snapshot_revision(spec, cache_dir)
+    if found is not None or os.path.isdir(spec.hf_id):
+        return found
+    try:
+        return (fetch or hub_revision)(spec)
+    except Exception as exc:
+        logger.debug("could not resolve the Hub revision of %s: %s", spec.hf_id, exc)
+        return None
 
 
 def load_arch(spec: ModelSpec, token: Optional[str] = None) -> ArchInfo:

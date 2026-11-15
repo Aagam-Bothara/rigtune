@@ -159,3 +159,11 @@ def tmp_home(tmp_path, monkeypatch):
 def _no_hf_token(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
+
+@pytest.fixture(autouse=True)
+def _no_model_revision(monkeypatch):
+    """A profile's model commit comes from this machine's Hugging Face cache, or the Hub: neither in tests. A test of
+    the revision check sets these itself; tests/test_cache_hardening.py tests the readers on a cache of its own."""
+    monkeypatch.setattr("rigtune.pipeline.resolve_revision", lambda spec: None)
+    monkeypatch.setattr("rigtune.cache.snapshot_revision", lambda spec: None)

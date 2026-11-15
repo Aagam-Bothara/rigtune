@@ -54,8 +54,9 @@ class BackendAvailability(BaseModel):
     version: Optional[str] = None
     reason: Optional[str] = None
     # Versions of the libraries an engine release depends on most (torch, transformers, flashinfer, tokenizers),
-    # read in the engine's own environment. Recorded, not compared: no part of the hardware hash, and a change
-    # leaves cached profiles valid. vLLM 0.29.0 declared only transformers>=5.10.4, so two installs of the same
+    # read in the engine's own environment. No part of the hardware hash, but compared when a cached profile is
+    # reused (cache.library_changes): torch, transformers and tokenizers by major.minor, FlashInfer exactly, since
+    # it ships the attention kernels. vLLM 0.29.0 declared only transformers>=5.10.4, so two installs of the same
     # vLLM could differ here, and one that resolved transformers 5.23.0 failed Gemma 4's multimodal start-up.
     libs: Dict[str, str] = Field(default_factory=dict)
 
@@ -520,6 +521,12 @@ class Profile(BaseModel):
     hardware_hash: str
     hardware: HardwareDescriptor
     model_id: str
+    # The Hub commit the calibration measured (hfconfig.resolve_revision), None for a local directory or when it
+    # could not be read. A reused profile is compared with the local snapshot's commit when both are known.
+    model_revision: Optional[str] = None
+    # Every field of the Constraints the calibration was scored with. Empty in profiles written before they were
+    # recorded: those cannot show they answer today's request, so they are recalibrated once (pipeline._usable).
+    calibration_constraints: Dict[str, Any] = Field(default_factory=dict)
     objective: str
     workload: str = "default"
     workload_spec: Dict[str, Any] = Field(default_factory=dict)

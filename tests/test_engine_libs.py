@@ -1,11 +1,14 @@
 """torch, transformers, flashinfer and tokenizers versions, read in each engine's own environment and recorded
-beside the engine's version: in the probe, in every profile, never in the hardware hash or the cache check."""
+beside the engine's version: in the probe and in every profile, never in the hardware hash. A cached profile is
+compared with them when reused (cache.library_changes)."""
 
 from __future__ import annotations
 
 import json
 import subprocess
 import sys
+
+import pytest
 
 import rigtune.hardware as H
 from rigtune.cache import invalid_reason
@@ -70,18 +73,48 @@ def test_the_question_runs_in_a_real_interpreter():
     assert got["no-such-distribution-here"] is None and set(got) == {"pip", "no-such-distribution-here"}
 
 
-def test_libraries_change_neither_the_hardware_hash_nor_whether_a_profile_is_valid(hw_a100, prepared_vllm):
-    before = H.hardware_hash(hw_a100)
-    newer = hw_a100.model_copy(deep=True)
-    newer.backends["vllm"] = newer.backends["vllm"].model_copy(update={"libs": {"transformers": "5.23.0"}})
-    assert H.hardware_hash(newer) == before
-    profile = Profile(rigtune_version="x", hardware_hash=before, hardware=hw_a100, model_id="m",
-                      objective="balanced", workload="chat", backend="vllm",
-                      backend_version=hw_a100.backend_version("vllm"),
-                      config=Config(backend="vllm", quant="bf16"),
-                      prepared=PreparedModel(spec=ModelSpec(hf_id="m"), backend="vllm", arch=prepared_vllm.arch),
-                      launch_args=[])
-    assert invalid_reason(profile, newer) is None
+def _libs_profile(hw, libs, arch):
+    recorded = hw.model_copy(deep=True)
+    recorded.backends["vllm"] = recorded.backends["vllm"].model_copy(update={"libs": libs})
+    return Profile(rigtune_version="x", hardware_hash=H.hardware_hash(hw), hardware=recorded, model_id="m",
+                   objective="balanced", workload="chat", backend="vllm",
+                   backend_version=hw.backend_version("vllm"), config=Config(backend="vllm", quant="bf16"),
+                   prepared=PreparedModel(spec=ModelSpec(hf_id="m"), backend="vllm", arch=arch), launch_args=[])
+
+
+def _now(hw, libs):
+    newer = hw.model_copy(deep=True)
+    newer.backends["vllm"] = newer.backends["vllm"].model_copy(update={"libs": libs})
+    return newer
+
+
+def test_libraries_keep_the_hardware_hash(hw_a100):
+    assert H.hardware_hash(_now(hw_a100, {"transformers": "5.23.0"})) == H.hardware_hash(hw_a100)
+
+
+@pytest.mark.parametrize("old, new, invalid, noted", [
+    ({"transformers": "5.22.0"}, {"transformers": "5.23.0"}, True, False),  # a minor release: recalibrate
+    ({"transformers": "5.23.0"}, {"transformers": "5.23.1"}, False, True),  # a patch release: reuse, say so
+    ({"torch": "2.13.0+cu128"}, {"torch": "2.13.1+cu128"}, False, True),
+    ({"torch": "2.13.0"}, {"torch": "2.14.0"}, True, False),
+    ({"tokenizers": "0.22.1"}, {"tokenizers": "0.22.2"}, False, True),
+    ({"flashinfer": "0.6.18"}, {"flashinfer": "0.6.19"}, True, False),  # it ships kernels: any release counts
+    ({"torch": "2.13.0"}, {"torch": "2.13.0", "flashinfer": "0.6.18"}, True, False),  # a library appeared
+    ({}, {"transformers": "5.23.0"}, False, False),  # recorded before libraries were: nothing to compare
+    ({"transformers": "5.23.0"}, {}, False, False),  # the environment could not be asked now
+    ({"torch": "2.13.0"}, {"torch": "2.13.0"}, False, False),
+])
+def test_library_changes_invalidate_a_profile_by_how_much_they_change(old, new, invalid, noted, hw_a100,
+                                                                     prepared_vllm, spec):
+    from rigtune.cache import reuse_notes
+
+    profile = _libs_profile(hw_a100, old, prepared_vllm.arch)
+    reason = invalid_reason(profile, _now(hw_a100, new))
+    assert (reason is not None) == invalid
+    if invalid:
+        assert reason.startswith("vllm libraries changed (")
+    notes = reuse_notes(profile, _now(hw_a100, new), spec)
+    assert bool(notes) == noted and all("patch level" in n for n in notes)
 
 
 def test_the_probe_lists_them_beside_the_engine(hw_a100):

@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 import pytest
 
 from rigtune import cache
 from rigtune.hardware import hardware_hash
 from rigtune.models import Config, Profile
-from rigtune.pipeline import calibrate, default_profile, prepare_and_plan, resolve_profile, select
+from rigtune.pipeline import (
+    SearchOptions,
+    calibrate,
+    default_constraints,
+    default_profile,
+    prepare_and_plan,
+    resolve_profile,
+    select,
+)
 from tests.test_objectives_and_search import FakeRunner
 
 
@@ -13,6 +23,7 @@ def _profile(hw, spec, prepared) -> Profile:
     return Profile(
         rigtune_version="0.1.0", hardware_hash=hardware_hash(hw), hardware=hw, model_id=spec.hf_id,
         objective="balanced", backend="vllm", backend_version="1.0",
+        calibration_constraints=asdict(default_constraints(None, SearchOptions())),  # as the default workload's
         config=Config(backend="vllm", quant="bf16", ctx=4096, batch=64, gpu_memory_utilization=0.9),
         prepared=prepared, launch_args=["python", "-m", "vllm"],
     )
