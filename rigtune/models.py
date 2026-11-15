@@ -486,6 +486,11 @@ class TrialResult(BaseModel):
     memory: Optional[MemoryObservation] = None
     disagg: Optional[DisaggSpec] = None  # set for trials of a disaggregated prefill/decode pair
     replicas: int = 1  # engines measured behind a load balancer (the replicas layout)
+    # Why the trial failed, one of calibrate/search.py FAILURE_KINDS, set where its error text is written; None for a
+    # trial that succeeded. The error keeps its prefix, so everything that reads the cause from it still does, and
+    # search.failure_kind reads it back for results recorded without this field. Left out of every file a model dump
+    # writes (profiles, comparison results), which stay as they were; the trial ledger records it.
+    failure_kind: Optional[str] = Field(default=None, exclude=True)
 
     @property
     def ok(self) -> bool:

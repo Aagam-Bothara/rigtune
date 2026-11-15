@@ -77,6 +77,22 @@ SUFFIX_FAILED = "suffix decoding failed at start-up"  # Arctic Inference not usa
 ARCTIC_PLUGIN_FAILED = "arctic-inference's plugin stopped vLLM at start-up"  # any vLLM launch
 SUFFIX_TRIAL_ERROR = "a suffix trial failed to start"  # anything else on a suffix trial: quoted, not blamed
 STARTUP_CAUSES = (MM_PROFILING_FAILED, LOAD_FAILED, SUFFIX_FAILED, ARCTIC_PLUGIN_FAILED, SUFFIX_TRIAL_ERROR)
+# TrialResult.failure_kind: why a trial failed, as a word a program can match on rather than an error's prefix.
+#   oom_startup        out of memory at start-up (the error's "out of memory at start-up; ")
+#   mm_profiling, load_failure, suffix_unusable, arctic_plugin
+#                      a start-up failure whose cause the log showed (STARTUP_CAUSES, by _CAUSE_KINDS)
+#   startup_other      any other start-up failure, a suffix trial's quoted error among them
+#   power_unavailable  the engine started but the trial's power setting could not be applied
+#   request_failures   it started and ran, but more requests failed than TrialMetrics.FAILURE_TOLERANCE allows
+#   crashed            the trial itself raised (an exception in rigtune, a full disk for a tier)
+#   skipped_budget     not launched: --budget was spent
+#   skipped_blocked    not launched: its speculation method failed to start earlier in the calibration
+FAILURE_KINDS = ("oom_startup", "mm_profiling", "load_failure", "suffix_unusable", "arctic_plugin", "startup_other",
+                 "power_unavailable", "request_failures", "crashed", "skipped_budget", "skipped_blocked")
+_CAUSE_KINDS = {MM_PROFILING_FAILED: "mm_profiling", LOAD_FAILED: "load_failure", SUFFIX_FAILED: "suffix_unusable",
+                ARCTIC_PLUGIN_FAILED: "arctic_plugin", SUFFIX_TRIAL_ERROR: "startup_other"}
+BUDGET_SKIPPED = "skipped: calibration budget reached"
+_REQUESTS_FAILED = re.compile(r"\d+/\d+ requests failed")  # TrialMetrics.failure_summary
 # vLLM profiles memory at start-up with dummy multimodal inputs, and a processor that rejects them stops the engine.
 # That happens when the engine and transformers mismatch: vLLM 0.29.0 declares only transformers>=5.10.4, and with
 # transformers 5.23.0 (whose ProcessorMixin.validate_inputs raises the first line; 5.12.1 has no such check) it failed
@@ -194,6 +210,30 @@ def startup_cause(error: Optional[str]) -> Tuple[Optional[str], str]:
             head = (error or "").split("\n", 1)[0]
             return kind, head[len(kind) + 2:].rsplit("); failed to start", 1)[0]
     return None, ""
+
+
+def failure_kind(res: TrialResult) -> Optional[str]:
+    """Why `res` failed (FAILURE_KINDS), or None when it succeeded: its failure_kind where the runner set one, else,
+    for a result recorded without one (a profile written before it existed, another runner), what its error says."""
+    if res.failure_kind is not None:
+        return res.failure_kind
+    if res.ok:
+        return None
+    error = res.error or ""
+    if error.startswith("out of memory at start-up"):
+        return "oom_startup"
+    cause = startup_cause(error)[0]
+    if cause is not None:
+        return _CAUSE_KINDS[cause]
+    if error == BUDGET_SKIPPED:
+        return "skipped_budget"
+    if error.startswith("skipped: "):
+        return "skipped_blocked"
+    if not res.launched:
+        return "startup_other" if "failed to start" in error else "crashed"
+    if not error or _REQUESTS_FAILED.match(error):
+        return "request_failures"
+    return "power_unavailable" if error.startswith("power ") else "crashed"
 
 
 def startup_finders(cfg: Config, log: str) -> List[Tuple[str, Callable[[str], Optional[str]]]]:
@@ -346,18 +386,21 @@ class SubprocessTrialRunner:
                 # vLLM prints its engine's out-of-memory error well above the 20-line tail: say so in
                 # the error, so the memory report counts it as the planner failure it is.
                 cause = "out of memory at start-up; " if mentions_oom(log) else ""
+                why = "oom_startup" if cause else "startup_other"
                 # The causes the search acts on or reports, also often above the tail (StagedSearch._startup_retry).
                 for kind, find in startup_finders(cfg, log):
                     line = None if cause else find(log)
                     if line:
-                        cause = f"{kind} ({line}); "
+                        cause, why = f"{kind} ({line}); ", _CAUSE_KINDS[kind]
                 return TrialResult(
                     config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
                     error=f"{cause}failed to start (rc={proc.returncode()})\n{tail}", memory=observation,
+                    failure_kind=why,
                 )
             perr = self._apply_power(cfg)
             if perr:
-                return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=perr, memory=observation)
+                return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=perr, memory=observation,
+                                   failure_kind="power_unavailable")
             metrics = run_trial(
                 f"http://127.0.0.1:{port}", hooks, self.workload, pid=proc.pid,
                 request_timeout=self.request_timeout, enough=self.enough, close_call=self.close_call,
@@ -379,11 +422,12 @@ class SubprocessTrialRunner:
                 err = metrics.failure_summary()
             elif metrics.failed:
                 logger.info("%s: tolerated %d/%d failed requests", cfg.key(), metrics.failed, metrics.requests)
-            return TrialResult(config=cfg, stage=stage, metrics=metrics, error=err, memory=observation)
+            return TrialResult(config=cfg, stage=stage, metrics=metrics, error=err, memory=observation,
+                               failure_kind="request_failures" if err else None)
         except Exception as exc:
             logger.exception("trial %s crashed", cfg.key())
             return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False, error=str(exc),
-                               memory=observation)
+                               memory=observation, failure_kind="crashed")
         finally:
             self._restore_power()
             if proc is not None:
@@ -427,24 +471,27 @@ class SubprocessTrialRunner:
             if not proc.wait_ready(timeout=self.startup_timeout):
                 err = f"failed to start (rc={proc.returncode()})\n{proc.tail_log(20)}"
                 return [TrialResult(config=with_power(base, s), stage=stage, metrics=TrialMetrics(), launched=False,
-                                    error=err) for s in settings]
+                                    error=err, failure_kind="startup_other") for s in settings]
             for i, s in enumerate(settings):
                 cfg = with_power(base, s)
                 if progress:
                     progress(stage, cfg, None)
                 perr = self._apply_power(cfg)
                 if perr:
-                    res = TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=perr)
+                    res = TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=perr,
+                                      failure_kind="power_unavailable")
                 else:
                     try:
                         metrics = run_trial(f"http://127.0.0.1:{port}", hooks,
                                             _point_workload(self.workload, i, len(settings)), pid=proc.pid,
                                             request_timeout=self.request_timeout, idle_tail_s=self.idle_tail_s)
                         err = None if metrics.ok else metrics.failure_summary()
-                        res = TrialResult(config=cfg, stage=stage, metrics=metrics, error=err)
+                        res = TrialResult(config=cfg, stage=stage, metrics=metrics, error=err,
+                                          failure_kind="request_failures" if err else None)
                     except Exception as exc:
                         logger.exception("power point %s crashed", cfg.key())
-                        res = TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=str(exc))
+                        res = TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=str(exc),
+                                          failure_kind="crashed")
                 results.append(res)
                 if progress:
                     progress(stage, cfg, res)
@@ -717,12 +764,13 @@ class StagedSearch:
         if self._over_budget():
             self._skipped.append(f"{stage} {key}")
             return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
-                               error="skipped: calibration budget reached")
+                               error=BUDGET_SKIPPED, failure_kind="skipped_budget")
         spec_kind = (cfg.spec_decode or "").partition(":")[0]
         if spec_kind in self._spec_blocked:  # its start-up failure would only repeat
             self._spec_blocked[spec_kind].append(key)
             return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
-                               error=f"skipped: {spec_kind} decoding failed to start earlier in this calibration")
+                               error=f"skipped: {spec_kind} decoding failed to start earlier in this calibration",
+                               failure_kind="skipped_blocked")
         if self.progress:
             self.progress(stage, cfg, None)
         t0 = self.clock()
