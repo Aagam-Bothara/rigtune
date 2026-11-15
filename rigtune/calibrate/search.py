@@ -73,6 +73,10 @@ def mentions_oom(log: str) -> bool:
 # How a start-up failure's error begins when the engine log shows its cause (SubprocessTrialRunner.run).
 MM_PROFILING_FAILED = "multimodal profiling failed at start-up"
 LOAD_FAILED = "model failed to load at start-up"
+SUFFIX_FAILED = "suffix decoding failed at start-up"  # Arctic Inference not usable; suffix is not tried again
+ARCTIC_PLUGIN_FAILED = "arctic-inference's plugin stopped vLLM at start-up"  # any vLLM launch
+SUFFIX_TRIAL_ERROR = "a suffix trial failed to start"  # anything else on a suffix trial: quoted, not blamed
+STARTUP_CAUSES = (MM_PROFILING_FAILED, LOAD_FAILED, SUFFIX_FAILED, ARCTIC_PLUGIN_FAILED, SUFFIX_TRIAL_ERROR)
 # vLLM profiles memory at start-up with dummy multimodal inputs, and a processor that rejects them stops the engine.
 # That happens when the engine and transformers mismatch: vLLM 0.29.0 declares only transformers>=5.10.4, and with
 # transformers 5.23.0 (whose ProcessorMixin.validate_inputs raises the first line; 5.12.1 has no such check) it failed
@@ -85,6 +89,40 @@ _MM_PROFILING = (re.compile(r"tokens in the text but no (?:images|videos|audios)
 # SGLang bug for Gemma 4 unified models fixed in 0.5.21 (pipeline.KNOWN_LOAD_BUGS):
 #   AttributeError: 'Gemma4UnifiedForConditionalGeneration' object has no attribute 'lm_head_is_tied'
 _LOAD_FAILURE = re.compile(r"AttributeError: .*object has no attribute")
+
+
+# Arctic Inference's causes of a start-up failure, from what vLLM and arctic-inference print (speculative.py has the
+# sources; the check before launch should catch each, so these are for what slips past it). Most specific first:
+#   "plugin": arctic-inference's vLLM plugin, enabled by ARCTIC_INFERENCE_ENABLED=1, refused this vLLM. It runs in every
+#     vLLM process, so this is read on any vLLM start-up failure, not only a suffix trial ("Arctic Inference plugin
+#     requires vllm==0.10.1 but found vllm==0.29.0!" from 0.1.1, captured; "Arctic Inference is enabled
+#     (ARCTIC_INFERENCE_ENABLED=1) but the installed vllm==..." from 0.3.0, read).
+#   "import": the package is there but fails to import; vLLM's utils/import_utils._has_module logs "Module
+#     arctic_inference was found but failed to import" before its own "Arctic Inference is required" error.
+#   "build": the package imports but its native suffix tree does not, where SuffixDecodingProposer imports it: "No module
+#     named 'arctic_inference.suffix_decoding._C'" for an extension built for another interpreter (as reproduced in the
+#     14 Nov pod's image), or a loader error naming arctic_inference (undefined symbol, GLIBCXX, a missing library).
+#   "missing": not installed: SpeculativeConfig._validate_suffix_decoding's ImportError ("Arctic Inference is required
+#     for suffix decoding. Install via `pip install arctic-inference==0.1.1`.", captured).
+ARCTIC_CAUSES = (
+    ("plugin", "arctic-inference's vLLM plugin refused this vLLM",
+     re.compile(r"Arctic Inference (?:plugin requires vllm==|is enabled \(ARCTIC_INFERENCE_ENABLED=1\) but)")),
+    ("import", "arctic-inference fails to import where vLLM runs",
+     re.compile(r"Module arctic_inference was found but failed to import")),
+    ("build", "arctic-inference's suffix tree did not load (a broken build)",
+     re.compile(r"No module named '?arctic_inference\.suffix_decoding\._C|"
+                r"(?:undefined symbol|cannot open shared object|GLIBCXX).*arctic_inference|"
+                r"arctic_inference.*(?:undefined symbol|cannot open shared object|GLIBCXX)")),
+    ("missing", "arctic-inference is not installed where vLLM runs",
+     re.compile(r"Arctic Inference is required for suffix decoding|No module named '?arctic_inference'")),
+)
+# Any other error on a suffix trial is not blamed on suffix decoding: the trial's error quotes the log's last exception
+# line before vLLM's engine-core wrapper ("Engine core initialization failed. See root cause above."), which names no
+# cause itself; earlier exceptions are often benign (vLLM logs optional imports that fail, with tracebacks). A pydantic
+# ValidationError's reason is on the lines after it, so the first of those is quoted too.
+_EXCEPTION = re.compile(r"\b[A-Z]\w*(?:Error|Exception): ")
+_ENGINE_WRAPPER = re.compile(r"Engine core initialization failed")
+_PROCESS = re.compile(r"^\s*\([^)]*pid=\d+\)")  # vLLM's "(APIServer pid=1) " before each line of a process
 
 
 def _first_line(log: str, patterns) -> Optional[str]:
@@ -106,13 +144,74 @@ def load_failure(log: str) -> Optional[str]:
     return _first_line(log, (_LOAD_FAILURE,))
 
 
+def _short(line: str, limit: int = 160) -> str:
+    line = line.strip()
+    return line if len(line) <= limit else line[:limit - 3] + "..."
+
+
+def arctic_failure(log: str, causes: Tuple[str, ...] = ("plugin", "import", "build", "missing")) -> Optional[str]:
+    """"<what>: <log line>" for the first of ARCTIC_CAUSES (among `causes`) the engine log shows, or None. For "import",
+    the exception that follows vLLM's warning is quoted, since the warning names no cause."""
+    lines = log.splitlines()
+    for key, what, pattern in ARCTIC_CAUSES:
+        if key not in causes:
+            continue
+        for i, line in enumerate(lines):
+            if pattern.search(line):
+                if key == "import":
+                    after = next((x for x in lines[i + 1:i + 60] if _EXCEPTION.search(x)), None)
+                    line = after or line
+                return f"{what}: {_short(line)}"
+    return None
+
+
+def arctic_cause(line: str) -> Optional[str]:
+    """The ARCTIC_CAUSES key of a line arctic_failure returned."""
+    return next((key for key, what, _ in ARCTIC_CAUSES if line.startswith(what + ": ")), None)
+
+
+def log_error(log: str) -> Optional[str]:
+    """The log's last exception line before vLLM's engine-core wrapper (the last in the log without one), with a
+    ValidationError's reason line after it; None when it has none."""
+    lines = log.splitlines()
+    end = max((i for i, x in enumerate(lines) if _ENGINE_WRAPPER.search(x)), default=len(lines))
+    found = [i for i in range(end) if _EXCEPTION.search(lines[i]) and not _ENGINE_WRAPPER.search(lines[i])]
+    if not found:
+        return None
+    i = found[-1]
+    line = lines[i].strip()
+    if "ValidationError" in line:
+        reason = next((_PROCESS.sub("", x).strip() for x in lines[i + 1:i + 4] if "error" in x.lower()), None)
+        if reason:
+            return _short(f"{line} {reason}", 240)
+    return _short(line)
+
+
 def startup_cause(error: Optional[str]) -> Tuple[Optional[str], str]:
-    """(MM_PROFILING_FAILED or LOAD_FAILED, the log line) from a start-up failure's error; (None, "") otherwise."""
-    for kind in (MM_PROFILING_FAILED, LOAD_FAILED):
+    """(the STARTUP_CAUSES kind, the log line) from a start-up failure's error; (None, "") otherwise."""
+    for kind in STARTUP_CAUSES:
         if (error or "").startswith(kind + " ("):
             head = (error or "").split("\n", 1)[0]
             return kind, head[len(kind) + 2:].rsplit("); failed to start", 1)[0]
     return None, ""
+
+
+def startup_finders(cfg: Config, log: str) -> List[Tuple[str, Callable[[str], Optional[str]]]]:
+    """(kind, finder) pairs tried in order on a start-up failure that was not out of memory. An enabled arctic-inference
+    plugin stops any vLLM launch; on a suffix trial Arctic Inference's other causes come first, and anything else is
+    quoted last (SUFFIX_TRIAL_ERROR) unless the log looks like memory, which the memory report must keep counting."""
+    finders: List[Tuple[str, Callable[[str], Optional[str]]]] = []
+    if cfg.backend.startswith("vllm"):
+        finders.append((ARCTIC_PLUGIN_FAILED, lambda text: arctic_failure(text, ("plugin",))))
+    suffix = (cfg.spec_decode or "").startswith("suffix:")
+    if suffix:
+        finders.append((SUFFIX_FAILED, lambda text: arctic_failure(text, ("import", "build", "missing"))))
+    finders += [(MM_PROFILING_FAILED, mm_profiling_failure), (LOAD_FAILED, load_failure)]
+    lowered = log.lower()
+    if suffix and "failed to allocate" not in lowered and "no available memory" not in lowered:
+        finders.append((SUFFIX_TRIAL_ERROR, lambda text: (lambda e: f"error in the log: {e}" if e else None)(
+            log_error(text))))
+    return finders
 
 
 def _point_workload(workload: Workload, i: int, points: int) -> Workload:
@@ -244,7 +343,7 @@ class SubprocessTrialRunner:
                 # the error, so the memory report counts it as the planner failure it is.
                 cause = "out of memory at start-up; " if mentions_oom(log) else ""
                 # The causes the search acts on or reports, also often above the tail (StagedSearch._startup_retry).
-                for kind, find in ((MM_PROFILING_FAILED, mm_profiling_failure), (LOAD_FAILED, load_failure)):
+                for kind, find in startup_finders(cfg, log):
                     line = None if cause else find(log)
                     if line:
                         cause = f"{kind} ({line}); "
@@ -511,6 +610,9 @@ class StagedSearch:
     _tier_tried: set = field(default_factory=set)  # engines whose tier stage has run
     _text_only: set = field(default_factory=set)  # engines whose multimodal profiling failed: trials run text-only
     _startup_notes: List[str] = field(default_factory=list)
+    # Speculation kinds not launched again: suffix decoding, after a trial showed Arctic Inference unusable
+    # (SUFFIX_FAILED); kind -> the configurations that were not launched for it.
+    _spec_blocked: Dict[str, List[str]] = field(default_factory=dict)
 
     # ---- predictor helpers
 
@@ -610,6 +712,11 @@ class StagedSearch:
             self._skipped.append(f"{stage} {key}")
             return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
                                error="skipped: calibration budget reached")
+        spec_kind = (cfg.spec_decode or "").partition(":")[0]
+        if spec_kind in self._spec_blocked:  # its start-up failure would only repeat
+            self._spec_blocked[spec_kind].append(key)
+            return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
+                               error=f"skipped: {spec_kind} decoding failed to start earlier in this calibration")
         if self.progress:
             self.progress(stage, cfg, None)
         t0 = self.clock()
@@ -620,6 +727,8 @@ class StagedSearch:
         # Grading runs inside a trial but only once per precision, so --budget's typical trial leaves it out.
         self._trial_seconds.append(self.clock() - t0 - (self._grading_seconds() - graded))
         self._done[key] = res
+        if not res.launched and spec_kind and startup_cause(res.error)[0] == SUFFIX_FAILED:
+            self._spec_blocked.setdefault(spec_kind, [])
         retry = self._headroom_retry(cfg, res)
         if retry is not None:
             self.results.append(res)  # the failed launch stays on record for the memory report
@@ -1456,6 +1565,9 @@ class StagedSearch:
                 notes.append(rn)
         if self.gate is not None:
             notes.extend(self.gate.final_notes(winner, self.results, self.objective, self.constraints))  # type: ignore
+        for kind, skipped in self._spec_blocked.items():
+            self.notes.append(f"{kind} decoding failed to start (its cause is noted above) and was not launched again "
+                              f"in this calibration" + (f": {len(skipped)} configurations skipped" if skipped else ""))
         if self._skipped:
             shown = "; ".join(self._skipped[:5]) + (f"; and {len(self._skipped) - 5} more" if len(self._skipped) > 5 else "")
             self.notes.append(f"calibration budget of {self.budget_s:.0f}s reached after {len(self.results)} trials; "

@@ -537,11 +537,35 @@ TEXT_ONLY_NOTE = ("served text-only (--language-model-only): image, video and au
                   "rigtune serve answers them with HTTP 400")
 
 
+def arctic_failure_note(engine: str, kind: str, line: str) -> str:
+    """The profile's note for a start-up failure that Arctic Inference caused (search.SUFFIX_FAILED,
+    ARCTIC_PLUGIN_FAILED) or that a suffix trial hit for another reason (SUFFIX_TRIAL_ERROR), with what to do. No
+    interpreter path: the profile may be committed (the install line for vLLM's Python is in the log and the docs)."""
+    from rigtune import speculative
+    from rigtune.calibrate.search import ARCTIC_PLUGIN_FAILED, SUFFIX_TRIAL_ERROR, arctic_cause
+
+    if kind == ARCTIC_PLUGIN_FAILED:
+        return (f"vLLM could not start on {engine}: {line}; unset ARCTIC_INFERENCE_ENABLED (vLLM's suffix decoding "
+                "does not need the plugin); not retried")
+    if kind == SUFFIX_TRIAL_ERROR:
+        return f"a suffix trial could not start on {engine}: {line}; not retried (the engine log has the rest)"
+    cause = arctic_cause(line)
+    what = {"build": "rebuild it", "import": "repair it"}.get(cause, "install it")
+    return (f"suffix decoding could not start on {engine}: {line}; not retried, and not tried again in this "
+            f"calibration; {what} in vLLM's Python (see {speculative.SUFFIX_DOCS}), then run `rigtune recalibrate`")
+
+
 def startup_failure_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult"):
     """What the search does after a start-up failure whose cause the engine log shows (search.startup_cause): a
     multimodal model whose multimodal profiling failed is retried text-only where the engine can serve it so
     (BaseBackend.text_only_refusal); anything else is noted, never retried. Returns (config to retry, note)."""
-    from rigtune.calibrate.search import LOAD_FAILED, startup_cause
+    from rigtune.calibrate.search import (
+        ARCTIC_PLUGIN_FAILED,
+        LOAD_FAILED,
+        SUFFIX_FAILED,
+        SUFFIX_TRIAL_ERROR,
+        startup_cause,
+    )
 
     def fn(c: Config, res) -> Tuple[Optional[Config], Optional[str]]:
         be, pm = reg.get(c.backend), plan.prepared.get(c.backend)
@@ -549,6 +573,8 @@ def startup_failure_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan
         if be is None or pm is None or kind is None:
             return None, None
         engine = f"{ENGINE_NAMES.get(c.backend, c.backend)} {be.version(hw) or '(version unknown)'}"
+        if kind in (SUFFIX_FAILED, ARCTIC_PLUGIN_FAILED, SUFFIX_TRIAL_ERROR):
+            return None, arctic_failure_note(engine, kind, line)
         if kind == LOAD_FAILED:
             known = next((why for (b, mark), why in KNOWN_LOAD_BUGS.items() if b == c.backend and mark in line), "")
             return None, (f"{pm.spec.hf_id} could not start on {engine}: the engine's model code failed while "

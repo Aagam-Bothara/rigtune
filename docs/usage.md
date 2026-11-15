@@ -271,6 +271,8 @@ Before it offers the method, rigtune asks vLLM's Python, once per calibration an
 
 Leave `ARCTIC_INFERENCE_ENABLED` unset: it turns on arctic-inference's own vLLM plugin, which every vLLM process loads, whatever the method, and which refuses any vLLM but the one release it patches (0.10.1 for arctic-inference 0.1.1, 0.26.0 for 0.3.0): "Arctic Inference plugin requires vllm==0.10.1 but found vllm==0.29.0!". vLLM's suffix decoding does not need it. When it is set and the plugin would refuse, the calibration says so at the start.
 
+If a suffix trial fails to start anyway, its error and the profile's notes name the cause from the engine log, even when it scrolled above the last 20 lines: arctic-inference not installed, failing to import, or its suffix tree not loading, after which suffix decoding is not launched again in that calibration. A plugin refusing vLLM is read on any vLLM start-up failure. Any other error on a suffix trial is quoted (the log's last exception before vLLM's engine-core wrapper) without blaming suffix decoding. None of these is retried.
+
 #### Labelled eval sets
 
 `--eval-set` takes `gsm8k` or a JSONL file with one item per line. The whole file is checked before any engine starts, and an error names the line:
