@@ -43,7 +43,7 @@ curl localhost:8000/v1/chat/completions -H 'content-type: application/json' \
   -d '{"model":"Qwen/Qwen2.5-3B-Instruct","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-The first launch calibrates and caches the result per machine, model, objective and workload; later launches serve at once. To tune for your own traffic, pass a sample of it: `--workload-file prompts.jsonl`, one prompt per line. Optional: `pip install arctic-inference==0.1.1` adds suffix decoding; SGLang can live in its own environment (set `SGLANG_PYTHON` to its `python`); llama.cpp needs `llama-server` built with CUDA, on `PATH` or in `LLAMA_SERVER`.
+The first launch calibrates and caches the result per machine, model, objective and workload; later launches serve at once. To tune for your own traffic, pass a sample of it: `--workload-file prompts.jsonl`, one prompt per line. Optional: suffix decoding needs arctic-inference built for the Python that runs vLLM, `CMAKE_ARGS="-DPython_EXECUTABLE=$(python -c 'import sys; print(sys.executable)')" python -m pip install --no-cache-dir --force-reinstall arctic-inference==0.1.1` (checked with vLLM 0.29.0, and a plain install with 0.33.0, on a CPU; [why each part](docs/usage.md#suffix-decoding)); SGLang can live in its own environment (set `SGLANG_PYTHON` to its `python`); llama.cpp needs `llama-server` built with CUDA, on `PATH` or in `LLAMA_SERVER`.
 
 With Docker (built on the official vLLM image):
 
