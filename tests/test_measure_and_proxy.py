@@ -25,6 +25,8 @@ from rigtune.serve.proxy import create_app
 def fake_upstream(token_delay_s: float = 0.002) -> FastAPI:
     app = FastAPI()
     app.state.requests = []
+    app.state.in_flight = 0
+    app.state.peak_in_flight = 0  # the most streams open at once; tests reset it
 
     @app.get("/health")
     async def health():
@@ -50,13 +52,18 @@ def fake_upstream(token_delay_s: float = 0.002) -> FastAPI:
             return JSONResponse({"choices": [{"text": "x " * n}], "usage": {"completion_tokens": n}})
 
         async def gen():
-            # Two tokens per chunk on purpose: chunk counting must not be mistaken for token counting.
-            for i in range(0, n, 2):
-                await asyncio.sleep(token_delay_s)
-                yield f"data: {json.dumps({'choices': [{'text': 'x y '}]})}\n\n"
-            if with_usage:
-                yield f"data: {json.dumps({'choices': [], 'usage': {'completion_tokens': n}})}\n\n"
-            yield "data: [DONE]\n\n"
+            app.state.in_flight += 1
+            app.state.peak_in_flight = max(app.state.peak_in_flight, app.state.in_flight)
+            try:
+                # Two tokens per chunk on purpose: chunk counting must not be mistaken for token counting.
+                for i in range(0, n, 2):
+                    await asyncio.sleep(token_delay_s)
+                    yield f"data: {json.dumps({'choices': [{'text': 'x y '}]})}\n\n"
+                if with_usage:
+                    yield f"data: {json.dumps({'choices': [], 'usage': {'completion_tokens': n}})}\n\n"
+                yield "data: [DONE]\n\n"
+            finally:
+                app.state.in_flight -= 1
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -118,11 +125,14 @@ def test_run_trial_against_fake_server(upstream):
     srv, app = upstream
     wl = Workload(n_prompts=4, prefill_tokens=32, decode_tokens=8, concurrencies=(1, 4))
     hooks = LlmtraceHooks(model_name="fake-model", gpu_ids=[])
+    app.state.peak_in_flight = 0
     m = run_trial(srv.url, hooks, wl, pid=None, warmup=True)
     assert m.ok and m.requests == 8 and m.failed == 0
     assert m.output_tokens == 64 and m.token_count_source == "usage"  # usage.completion_tokens honoured
     assert set(m.by_concurrency) == {"1", "4"}
-    assert m.by_concurrency["4"].tok_s >= m.by_concurrency["1"].tok_s * 0.8
+    # The 4-user level kept several streams open at once. Checked on the server rather than by comparing tok/s
+    # between levels, which failed whenever the machine was busy (2 runs in 6 with six copies at once).
+    assert app.state.peak_in_flight >= 2
     assert 0 < m.ttft_ms < 5000 and m.tpot_ms > 0
     assert app.state.requests[-1]["stream"] is True and app.state.requests[-1]["max_tokens"] == 8
 
