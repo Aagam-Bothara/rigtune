@@ -223,12 +223,13 @@ def _constraints(ttft_ceiling: Optional[float], tok_s_floor: Optional[float], wo
 def _goal(objective: Optional[str], optimise: Optional[str], limits: Optional[List[str]],
           ttft_ceiling: Optional[float], ttft_percentile: int, tok_s_floor: Optional[float],
           tpot_ceiling: Optional[float], wl, arrival_rate: Optional[float], strict: bool,
-          eval_set: Optional[str] = None, max_accuracy_loss: float = 3.0):
+          eval_set: Optional[str] = None, max_accuracy_loss: float = 3.0, gpu_hourly_usd: Optional[float] = None,
+          kwh_usd: Optional[float] = None):
     """(objective, constraints, TTFT percentile and accuracy-loss tolerance for the search options): a preset named
     by --objective (balanced when none is), or a goal stated with --optimise and --limit, which is a preset when one
     says the same thing (rigtune/goals.py). Refused before anything is probed; a stated goal is said once before
     calibration."""
-    if optimise is None and not limits:
+    if optimise is None and not limits and gpu_hourly_usd is None and kwh_usd is None:
         return (objective or "balanced", _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile,
                                                       arrival_rate, strict=strict), ttft_percentile,
                 max_accuracy_loss)
@@ -238,7 +239,8 @@ def _goal(objective: Optional[str], optimise: Optional[str], limits: Optional[Li
         r = resolve(objective, optimise, limits or [], ttft_ceiling=ttft_ceiling, ttft_percentile=ttft_percentile,
                     tok_s_floor=tok_s_floor, tpot_ceiling=tpot_ceiling, workload_ttft_ms=wl.ttft_ceiling_ms,
                     workload_tpot_ms=wl.tpot_ceiling_ms, arrival_rate=arrival_rate, strict=strict,
-                    eval_set=eval_set, max_accuracy_loss=max_accuracy_loss)
+                    eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, gpu_hourly_usd=gpu_hourly_usd,
+                    kwh_usd=kwh_usd)
     except GoalError as exc:
         raise typer.BadParameter(str(exc), param_hint="--optimise/--limit") from None
     err.print(r.line, style="dim", markup=False, highlight=False)
@@ -542,8 +544,14 @@ OBJECTIVE_HELP = ("A preset goal: balanced (default; most tok/s within the TTFT 
 OPTIMISE_OPT = typer.Option(
     None, "--optimise", "--optimize",
     help="State the goal instead of naming a preset: the one metric to optimise (tok_s, ttft_p95_ms, ttft_p50_ms, "
-         "tpot_ms, request_latency_ms, joules_per_token), within every --limit. A goal a preset expresses is that "
+         "tpot_ms, request_latency_ms, joules_per_token, cost_per_mtok), within every --limit. A goal a preset expresses is that "
          "preset, with its cached profile; the workload's TPOT ceiling still applies")
+GPU_PRICE_OPT = typer.Option(None, "--gpu-hourly-usd",
+                             help="What the GPU costs per hour, in US dollars: prices cost_per_mtok (dollars per "
+                                  "million output tokens) for --optimise or --limit")
+ENERGY_PRICE_OPT = typer.Option(None, "--kwh-usd",
+                                help="With --gpu-hourly-usd: electricity per kWh, so cost_per_mtok counts the "
+                                     "power measured too (needs NVML power readings)")
 LIMIT_OPT = typer.Option(
     None, "--limit",
     help="A limit on the goal, quoted: \"ttft_p95_ms<=800\", \"tok_s>=200\", \"tok_s>=50%best\", \"power_w<=250\", "
@@ -743,6 +751,8 @@ def bench(
     objective: Optional[str] = typer.Option(None, "--objective", callback=_objective, help=OBJECTIVE_HELP),
     optimise: Optional[str] = OPTIMISE_OPT,
     limit: Optional[List[str]] = LIMIT_OPT,
+    gpu_hourly_usd: Optional[float] = GPU_PRICE_OPT,
+    kwh_usd: Optional[float] = ENERGY_PRICE_OPT,
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     sessions: bool = SESSIONS_OPT,
@@ -796,7 +806,7 @@ def bench(
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     objective, cons, ttft_percentile, max_accuracy_loss = _goal(
         objective, optimise, limit, ttft_ceiling, ttft_percentile, tok_s_floor, tpot_ceiling, wl, arrival_rate,
-        strict_constraints, eval_set, max_accuracy_loss)
+        strict_constraints, eval_set, max_accuracy_loss, gpu_hourly_usd, kwh_usd)
     _check_rate(objective, arrival_rate)
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)
@@ -851,6 +861,8 @@ def recalibrate(
     objective: Optional[str] = typer.Option(None, "--objective", callback=_objective, help=OBJECTIVE_HELP),
     optimise: Optional[str] = OPTIMISE_OPT,
     limit: Optional[List[str]] = LIMIT_OPT,
+    gpu_hourly_usd: Optional[float] = GPU_PRICE_OPT,
+    kwh_usd: Optional[float] = ENERGY_PRICE_OPT,
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     sessions: bool = SESSIONS_OPT,
@@ -895,7 +907,7 @@ def recalibrate(
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     objective, cons, ttft_percentile, max_accuracy_loss = _goal(
         objective, optimise, limit, ttft_ceiling, ttft_percentile, tok_s_floor, tpot_ceiling, wl, arrival_rate,
-        strict_constraints, eval_set, max_accuracy_loss)
+        strict_constraints, eval_set, max_accuracy_loss, gpu_hourly_usd, kwh_usd)
     _check_rate(objective, arrival_rate)
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)
@@ -920,6 +932,8 @@ def compare(
     objective: Optional[str] = typer.Option(None, "--objective", callback=_objective, help=OBJECTIVE_HELP),
     optimise: Optional[str] = OPTIMISE_OPT,
     limit: Optional[List[str]] = LIMIT_OPT,
+    gpu_hourly_usd: Optional[float] = GPU_PRICE_OPT,
+    kwh_usd: Optional[float] = ENERGY_PRICE_OPT,
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     sessions: bool = SESSIONS_OPT,
@@ -1014,7 +1028,7 @@ def compare(
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     objective, cons, ttft_percentile, max_accuracy_loss = _goal(
         objective, optimise, limit, ttft_ceiling, ttft_percentile, tok_s_floor, tpot_ceiling, wl, arrival_rate,
-        strict_constraints, eval_set, max_accuracy_loss)
+        strict_constraints, eval_set, max_accuracy_loss, gpu_hourly_usd, kwh_usd)
     _check_rate(objective, arrival_rate)
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)
@@ -1336,6 +1350,8 @@ def serve(
     objective: Optional[str] = typer.Option(None, "--objective", callback=_objective, help=OBJECTIVE_HELP),
     optimise: Optional[str] = OPTIMISE_OPT,
     limit: Optional[List[str]] = LIMIT_OPT,
+    gpu_hourly_usd: Optional[float] = GPU_PRICE_OPT,
+    kwh_usd: Optional[float] = ENERGY_PRICE_OPT,
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     sessions: bool = SESSIONS_OPT,
@@ -1431,7 +1447,7 @@ def serve(
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     objective, cons, ttft_percentile, max_accuracy_loss = _goal(
         objective, optimise, limit, ttft_ceiling, ttft_percentile, tok_s_floor, tpot_ceiling, wl, arrival_rate,
-        strict_constraints, eval_set, max_accuracy_loss)
+        strict_constraints, eval_set, max_accuracy_loss, gpu_hourly_usd, kwh_usd)
     _check_rate(objective, arrival_rate)
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)

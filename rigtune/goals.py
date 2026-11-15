@@ -139,7 +139,8 @@ def resolve(objective: Optional[str], optimise: Optional[str], limits: Sequence[
             ttft_ceiling: Optional[float], ttft_percentile: int, tok_s_floor: Optional[float],
             tpot_ceiling: Optional[float], workload_ttft_ms: float, workload_tpot_ms: Optional[float],
             arrival_rate: Optional[float] = None, strict: bool = False, eval_set: Optional[str] = None,
-            max_accuracy_loss: float = DEFAULT_MAX_LOSS) -> Resolved:
+            max_accuracy_loss: float = DEFAULT_MAX_LOSS, gpu_hourly_usd: Optional[float] = None,
+            kwh_usd: Optional[float] = None) -> Resolved:
     """The objective and constraints of a goal stated with --optimise or --limit.
 
     With --optimise, the older --ttft-ceiling, --tok-s-floor and --tpot-ceiling state limits of that goal, and a goal a
@@ -148,7 +149,8 @@ def resolve(objective: Optional[str], optimise: Optional[str], limits: Sequence[
 
     The workload's TPOT ceiling applies to every goal unless a limit or --tpot-ceiling replaces it. An accuracy_loss
     limit is the accuracy gate's tolerance, --max-accuracy-loss with --eval-set, and no part of the goal: a --limit
-    that holds only it leaves the preset and the older flags exactly as without it."""
+    that holds only it leaves the preset and the older flags exactly as without it. --gpu-hourly-usd (and
+    --kwh-usd) price cost_per_mtok, and only a goal that names it takes them."""
     if optimise is not None and objective is not None:
         raise GoalError("--optimise states the goal; leave out --objective, which names a preset one")
     stated: Dict[str, Limit] = {}
@@ -176,15 +178,19 @@ def resolve(objective: Optional[str], optimise: Optional[str], limits: Sequence[
         raise GoalError("tpot_ms is limited twice, differently (--limit and --tpot-ceiling)")
     tpot_ms = tpot.bound if tpot is not None else (tpot_ceiling if tpot_ceiling is not None else workload_tpot_ms)
     from_workload = tpot is None and tpot_ceiling is None
+    metric = check_optimise(optimise) if optimise is not None else resolve_goal(objective or "balanced",
+                                                                                 Constraints()).optimise
+    prices = _prices(metric, stated, gpu_hourly_usd, kwh_usd)
     base = dict(ttft_ceiling_ms=workload_ttft_ms, ttft_percentile=ttft_percentile, tpot_ceiling_ms=tpot_ms,
                 arrival_rate=arrival_rate, strict=strict)
     if optimise is None:
-        return finish(_added(objective or "balanced", stated, base, ttft_ceiling, tok_s_floor, from_workload))
+        return finish(_added(objective or "balanced", stated, base, ttft_ceiling, tok_s_floor, from_workload,
+                             prices))
     if ttft_ceiling is not None:
         _same(stated, Limit(ttft_metric(ttft_percentile), "<=", ttft_ceiling), "--limit and --ttft-ceiling")
     if tok_s_floor is not None:
         _same(stated, Limit("tok_s", ">=", tok_s_floor), "--limit and --tok-s-floor")
-    goal = Goal(check_optimise(optimise), tuple(stated[k] for k in sorted(stated)))
+    goal = Goal(metric, tuple(stated[k] for k in sorted(stated)), **prices)
     preset_name = _preset(goal)
     pct = ttft_percentile
     if preset_name == "balanced":
@@ -202,7 +208,7 @@ def resolve(objective: Optional[str], optimise: Optional[str], limits: Sequence[
 
 
 def _added(preset: str, stated: Dict[str, Limit], base: Dict[str, Any], ttft_ceiling: Optional[float],
-           tok_s_floor: Optional[float], from_workload: bool) -> Resolved:
+           tok_s_floor: Optional[float], from_workload: bool, prices: Dict[str, float]) -> Resolved:
     """--limit added to a preset (--objective, or balanced). The older flags mean what they always meant for it;
     each limit becomes the preset's own setting where it has one: a TTFT ceiling under balanced, and under
     efficiency at an arrival rate, which judges latency against it; a throughput floor under latency and efficiency;
@@ -245,7 +251,7 @@ def _added(preset: str, stated: Dict[str, Limit], base: Dict[str, Any], ttft_cei
                         "leave out --arrival-rate to calibrate a custom goal" if at_rate else
                         f"--arrival-rate applies to --objective efficiency only, not {preset}")
     custom = Goal(goal.optimise, tuple(sorted((*(lim for lim in goal.limits if lim.metric != "tpot_ms"), *left),
-                                              key=lambda lim: lim.metric)))
+                                              key=lambda lim: lim.metric)), **prices)
     other = _preset(custom)
     if other is not None:
         raise GoalError(f"--objective {preset} has no setting for {texts}; with it the goal ({format_goal(custom)}) "
@@ -254,6 +260,24 @@ def _added(preset: str, stated: Dict[str, Limit], base: Dict[str, Any], ttft_cei
             "its own, cached under its own name")
     return Resolved(CUSTOM, Constraints(**base, goal=format_goal(custom)), base["ttft_percentile"],
                     _line(custom, base["tpot_ceiling_ms"], from_workload, None, said))
+
+
+def _prices(metric: str, stated: Dict[str, Limit], gpu_hourly_usd: Optional[float],
+            kwh_usd: Optional[float]) -> Dict[str, float]:
+    """The prices a goal counts cost at, refused where they would price nothing or something is missing."""
+    counts_cost = metric == "cost_per_mtok" or "cost_per_mtok" in stated
+    given = {k: v for k, v in (("gpu_hourly_usd", gpu_hourly_usd), ("kwh_usd", kwh_usd)) if v is not None}
+    if not counts_cost:
+        if given:
+            raise GoalError("--gpu-hourly-usd and --kwh-usd price cost_per_mtok: name it with --optimise "
+                            "cost_per_mtok or --limit \"cost_per_mtok<=N\"")
+        return {}
+    if gpu_hourly_usd is None:
+        raise GoalError("cost_per_mtok needs --gpu-hourly-usd, what the GPU costs per hour")
+    bad = [k for k, v in given.items() if not (v > 0 and math.isfinite(v))]
+    if bad:
+        raise GoalError(f"--{bad[0].replace('_', '-')} is a price above 0")
+    return given
 
 
 def _line(goal: Goal, tpot_ms: Optional[float], from_workload: bool, preset: Optional[str], said: str) -> str:

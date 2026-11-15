@@ -1113,9 +1113,6 @@ def check_distributed_options(opts: SearchOptions, hw: HardwareDescriptor, layou
                          "once, so it would not run the rounds asked for")
 
 
-POWER_METRICS = ("joules_per_token", "power_w")  # read from NVML's power readings, and from nothing else
-
-
 def power_reading_problem(hw: HardwareDescriptor) -> Optional[str]:
     """Why NVML cannot read the power of the GPU a single-engine trial runs on, or None when one reading succeeds."""
     gpu = hw.gpu
@@ -1159,11 +1156,11 @@ def check_goal_measurable(objective: str, constraints: Optional[Constraints], op
     if opts.arrival_rate is not None:
         raise OptionRefused("--arrival-rate scores energy per request under --objective efficiency only, not a "
                             "custom goal")
-    needs = [name for name in (goal.optimise, *(lim.metric for lim in goal.limits)) if name in POWER_METRICS]
+    needs = goal.reads_power
     if needs and power:
         problem = (power_probe or power_reading_problem)(hw)
         if problem is not None:
-            raise OptionRefused(f"the goal reads the GPU's power ({', '.join(dict.fromkeys(needs))}), but {problem}; "
+            raise OptionRefused(f"the goal reads the GPU's power ({', '.join(needs)}), but {problem}; "
                                 "a custom goal never falls back to another metric")
 
 

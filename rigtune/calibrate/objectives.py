@@ -137,7 +137,22 @@ class Metric:
     optimisable: bool = True  # False: a limit only
 
 
-# Every metric a goal names, in its own unit (ms, W, MiB). tok_s is read as recorded, never replaced by None, so a
+def cost_per_mtok(m: TrialMetrics, usd_per_hour: Optional[float], usd_per_kwh: Optional[float]) -> Optional[float]:
+    """US dollars per million output tokens at one level: the GPU's hourly price, plus its measured power at
+    usd_per_kwh when that is given. None without an hourly price, without throughput, or with an energy price and
+    no power reading. Output tokens only: a prompt's tokens cost nothing here."""
+    if usd_per_hour is None or not (m.tok_s > 0 and math.isfinite(m.tok_s)):
+        return None
+    hourly = usd_per_hour
+    if usd_per_kwh is not None:
+        power = _finite(m.power_w)
+        if power is None:
+            return None
+        hourly += usd_per_kwh * power / 1000
+    return hourly / (m.tok_s * 3600) * 1e6
+
+
+# Every metric a goal names, in its own unit (ms, W, MiB, $). tok_s is read as recorded, never replaced by None, so a
 # throughput floor judges a trial exactly as the presets always have.
 METRICS: Dict[str, Metric] = {m.name: m for m in (
     Metric("tok_s", "max", "improves", lambda m: m.tok_s),
@@ -148,6 +163,9 @@ METRICS: Dict[str, Metric] = {m.name: m for m in (
     # Energy per token can fall as load rises (the card's draw is shared by more tokens) or rise (a busier card
     # draws more than it adds tokens): no level order settles it.
     Metric("joules_per_token", "min", "unknown", lambda m: _finite(m.joules_per_token)),
+    # Priced by the goal (Goal.reader): unpriced, it is not measured. At an hourly price alone it is that price over
+    # tok/s, so it improves with load and picks what tok_s picks; with an energy price, power moves it too.
+    Metric("cost_per_mtok", "min", "improves", lambda m: cost_per_mtok(m, None, None)),
     # Limits only: the least power or memory is never worth having for itself, only as a bound on the rest.
     Metric("power_w", "min", "unknown", lambda m: _finite(m.power_w), optimisable=False),
     Metric("mem_mb", "min", "unknown", lambda m: _finite(m.peak_mem_mb), optimisable=False),
@@ -176,27 +194,29 @@ class Limit:
         best = max((r.metrics.tok_s for r in results), default=0.0)
         return self.bound * best
 
-    def value(self, m: TrialMetrics) -> float:
-        v = METRICS[self.metric].read(m)
+    def value(self, m: TrialMetrics, read: Optional[Callable[[TrialMetrics], Optional[float]]] = None) -> float:
+        v = (read or METRICS[self.metric].read)(m)
         if v is not None:
             return v
         if self.missing == "zero":
             return 0.0
         return math.inf if self.op == "<=" else -math.inf
 
-    def excess(self, m: TrialMetrics, bound: float) -> float:
+    def excess(self, m: TrialMetrics, bound: float,
+               read: Optional[Callable[[TrialMetrics], Optional[float]]] = None) -> float:
         """How far the level is outside the limit, in the metric's unit; 0 when it meets it."""
-        v = self.value(m)
+        v = self.value(m, read)
         return max(0.0, v - bound) if self.op == "<=" else max(0.0, bound - v)
 
-    def met(self, m: TrialMetrics, bound: float) -> bool:
+    def met(self, m: TrialMetrics, bound: float,
+            read: Optional[Callable[[TrialMetrics], Optional[float]]] = None) -> bool:
         """Whether one level meets the limit, for stopping a trial there. A "zero" ceiling is met at or under its
         bound and any other limit when nothing exceeds it: the two tests enough_level has always made. They differ
         only for a NaN bound."""
         if self.missing == "zero":
-            v = self.value(m)
+            v = self.value(m, read)
             return v <= bound if self.op == "<=" else v >= bound
-        return not self.excess(m, bound) > 0
+        return not self.excess(m, bound, read) > 0
 
 
 @dataclass(frozen=True)
@@ -212,10 +232,19 @@ class Goal:
     # misses, then by how far past them it is relative to each bound, since milliseconds and watts do not add up.
     # The presets keep summing each limit's excess in its own unit, so no preset pick moves.
     custom: bool = False
+    # Prices for cost_per_mtok, in US dollars: the GPU per hour, and energy per kWh (which makes power count).
+    gpu_hourly_usd: Optional[float] = None
+    kwh_usd: Optional[float] = None
+
+    def reader(self, name: str) -> Callable[[TrialMetrics], Optional[float]]:
+        """How a level's value of `name` is read under this goal: cost_per_mtok at the goal's prices."""
+        if name == "cost_per_mtok":
+            return functools.partial(cost_per_mtok, usd_per_hour=self.gpu_hourly_usd, usd_per_kwh=self.kwh_usd)
+        return METRICS[name].read
 
     def score(self, m: TrialMetrics) -> float:
         """Lower is better; a level that did not measure the optimised metric scores worst."""
-        v = METRICS[self.optimise].read(m)
+        v = self.reader(self.optimise)(m)
         if v is None:
             return 1e9 - m.tok_s if self.energy_fallback else math.inf
         return -v if METRICS[self.optimise].sense == "max" else v
@@ -228,17 +257,17 @@ class Goal:
         far outside their constraints a level is."""
         total = 0.0
         for lim, bound in zip(self.limits, bounds):
-            total = total + lim.excess(m, bound)
+            total = total + lim.excess(m, bound, self.reader(lim.metric))
         return total
 
     def meets(self, m: TrialMetrics, bounds: Sequence[float]) -> bool:
-        return all(lim.met(m, b) for lim, b in zip(self.limits, bounds))
+        return all(lim.met(m, b, self.reader(lim.metric)) for lim, b in zip(self.limits, bounds))
 
     def violation_key(self, m: TrialMetrics, bounds: Sequence[float]) -> Tuple[float, float]:
         """(limits missed, the sum of each excess over its bound): how a custom goal orders levels that miss."""
         missed, relative = 0, 0.0
         for lim, bound in zip(self.limits, bounds):
-            excess = lim.excess(m, bound)
+            excess = lim.excess(m, bound, self.reader(lim.metric))
             if excess > 0:
                 missed += 1
                 relative += excess / abs(bound) if bound else excess
@@ -247,8 +276,17 @@ class Goal:
     @property
     def improves_with_load(self) -> bool:
         """Whether the optimised metric gets better as load rises, so the busiest level that meets the limits is
-        the trial's best (enough_level)."""
+        the trial's best (enough_level). Cost does only at an hourly price alone: an energy price adds power."""
+        if self.optimise == "cost_per_mtok":
+            return self.kwh_usd is None
         return METRICS[self.optimise].load == "improves"
+
+    @property
+    def reads_power(self) -> List[str]:
+        """The goal's metrics that only NVML's power readings give."""
+        names = [self.optimise, *(lim.metric for lim in self.limits)]
+        power = ["joules_per_token", "power_w"] + (["cost_per_mtok"] if self.kwh_usd is not None else [])
+        return [n for n in dict.fromkeys(names) if n in power]
 
     @property
     def scores_tok_s(self) -> bool:
@@ -267,6 +305,8 @@ def ttft_metric(percentile: int) -> str:
 
 CUSTOM = "custom"  # the objective of a goal no preset expresses: Constraints.goal says what it is
 
+PRICES = ("gpu_hourly_usd", "kwh_usd")
+_PRICE = re.compile(r"(?P<name>[a-z_]+)\s*=\s*(?P<num>\d+(?:\.\d*)?(?:e[+-]?\d+)?|\.\d+(?:e[+-]?\d+)?)")
 _LIMIT = re.compile(r"(?P<metric>[a-z0-9_]+)\s*(?P<op><=|>=)\s*"
                     r"(?P<num>\d+(?:\.\d*)?(?:e[+-]?\d+)?|\.\d+(?:e[+-]?\d+)?)(?P<best>%best)?")
 
@@ -279,11 +319,13 @@ def _number(x: float) -> str:
 
 def format_goal(goal: Goal) -> str:
     """The canonical text of a custom goal: `min joules_per_token; tok_s>=50%best; ttft_p95_ms<=800`, the limits
-    in the order of their names, so one goal is always one string (and one profile fingerprint)."""
+    in the order of their names, so one goal is always one string (and one profile fingerprint). The prices of a goal
+    that counts cost come last: `min cost_per_mtok; ttft_p95_ms<=800; gpu_hourly_usd=2.5; kwh_usd=0.15`."""
     parts = [f"{METRICS[goal.optimise].sense} {goal.optimise}"]
     for lim in goal.limits:
         number = _number(round(lim.bound * 100, 10)) + "%best" if lim.of_best else _number(lim.bound)
         parts.append(f"{lim.metric}{lim.op}{number}")
+    parts += [f"{name}={_number(getattr(goal, name))}" for name in PRICES if getattr(goal, name) is not None]
     return "; ".join(parts)
 
 
@@ -303,7 +345,16 @@ def parse_goal(text: str) -> Goal:
         raise ValueError(f"{optimise} is better {'higher' if metric.sense == 'max' else 'lower'}: "
                          f"`{metric.sense} {optimise}`")
     limits: Dict[str, Limit] = {}
+    prices: Dict[str, float] = {}
     for part in rest:
+        price = _PRICE.fullmatch(part)
+        if price and price["name"] in PRICES:
+            if price["name"] in prices:
+                raise ValueError(f"{price['name']} is given twice")
+            prices[price["name"]] = float(price["num"])
+            if not 0 < prices[price["name"]] < math.inf:
+                raise ValueError(f"{price['name']} is a finite price above 0")
+            continue
         match = _LIMIT.fullmatch(part)
         if not match:
             raise ValueError(f"not a limit: {part!r} (`metric<=number` or `metric>=number`)")
@@ -326,7 +377,12 @@ def parse_goal(text: str) -> Goal:
         if match["best"] and not 0 < bound <= 100:
             raise ValueError(f"{name}>={match['num']}%best: a share of the best tok/s is above 0% and at most 100%")
         limits[name] = Limit(name, op, bound / 100 if match["best"] else bound, of_best=bool(match["best"]))
-    return Goal(optimise, tuple(limits[k] for k in sorted(limits)), custom=True)
+    counts_cost = optimise == "cost_per_mtok" or "cost_per_mtok" in limits
+    if counts_cost and "gpu_hourly_usd" not in prices:
+        raise ValueError("cost_per_mtok needs the GPU's price per hour (gpu_hourly_usd=N)")
+    if prices and not counts_cost:
+        raise ValueError(f"{', '.join(prices)} price cost_per_mtok, which the goal does not name")
+    return Goal(optimise, tuple(limits[k] for k in sorted(limits)), custom=True, **prices)
 
 
 def resolve_goal(objective: str, cons: Constraints) -> Goal:
