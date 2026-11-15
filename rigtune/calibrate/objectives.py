@@ -59,12 +59,6 @@ class Constraints:
     # still the least-violating configuration, so the stages after it can find one that does meet them.
     strict: bool = False
 
-    def tok_s_floor(self, results: Sequence[TrialResult]) -> float:
-        if self.tok_s_floor_abs is not None:
-            return self.tok_s_floor_abs
-        best = max((r.metrics.tok_s for r in results), default=0.0)
-        return self.tok_s_floor_frac * best
-
 
 @dataclass
 class Ranked:
@@ -119,28 +113,127 @@ def _e2e_latency(m: TrialMetrics) -> float:
     return ttft + tpot * max(0.0, per_request - 1)
 
 
-def _score_and_constraint(
-    objective: str, cons: Constraints, results: Sequence[TrialResult]
-) -> Tuple[Callable[[TrialMetrics], float], Callable[[TrialMetrics], float]]:
-    """Return (score fn: lower better, violation fn: 0 when feasible), both over TrialMetrics."""
+def _finite(v: Optional[float]) -> Optional[float]:
+    return v if (v is not None and math.isfinite(v)) else None
+
+
+@dataclass(frozen=True)
+class Metric:
+    """One thing a goal can optimise or limit, read from one measured concurrency level."""
+
+    name: str
+    sense: str  # "max" or "min": which way is better
+    read: Callable[[TrialMetrics], Optional[float]]  # None: not measured at that level
+
+
+# Every metric a goal names, in its own unit (ms). tok_s is read as recorded, never replaced by None, so a
+# throughput floor judges a trial exactly as the presets always have.
+METRICS: Dict[str, Metric] = {m.name: m for m in (
+    Metric("tok_s", "max", lambda m: m.tok_s),
+    Metric("ttft_p95_ms", "min", lambda m: _finite(_ttft_for(m, 95))),
+    Metric("ttft_p50_ms", "min", lambda m: _finite(_ttft(m))),
+    Metric("tpot_ms", "min", lambda m: _finite(m.tpot_ms)),
+    Metric("request_latency_ms", "min", lambda m: _finite(_e2e_latency(m))),
+    Metric("joules_per_token", "min", lambda m: _finite(m.joules_per_token)),
+)}
+
+
+@dataclass(frozen=True)
+class Limit:
+    """`metric op bound`: a ceiling (<=) or a floor (>=), in the metric's own unit.
+
+    of_best: the bound is a fraction of the best trial's tok/s among those ranked (tok_s >= 50%best), the
+    throughput floor latency and efficiency have always had. missing: what a level that did not measure the metric
+    counts as. "fail" counts it as the worst value, so it misses the limit; "zero" counts it as 0, the TPOT
+    ceiling's convention (a level with no decode step to time passes it)."""
+
+    metric: str
+    op: str  # "<=" or ">="
+    bound: float
+    of_best: bool = False
+    missing: str = "fail"
+
+    def resolve(self, results: Sequence[TrialResult]) -> float:
+        """The bound in the metric's unit, among `results` for a fraction of the best."""
+        if not self.of_best:
+            return self.bound
+        best = max((r.metrics.tok_s for r in results), default=0.0)
+        return self.bound * best
+
+    def value(self, m: TrialMetrics) -> float:
+        v = METRICS[self.metric].read(m)
+        if v is not None:
+            return v
+        if self.missing == "zero":
+            return 0.0
+        return math.inf if self.op == "<=" else -math.inf
+
+    def excess(self, m: TrialMetrics, bound: float) -> float:
+        """How far the level is outside the limit, in the metric's unit; 0 when it meets it."""
+        v = self.value(m)
+        return max(0.0, v - bound) if self.op == "<=" else max(0.0, bound - v)
+
+    def met(self, m: TrialMetrics, bound: float) -> bool:
+        """Whether one level meets the limit, for stopping a trial there. A "zero" ceiling is met at or under its
+        bound and any other limit when nothing exceeds it: the two tests enough_level has always made. They differ
+        only for a NaN bound."""
+        if self.missing == "zero":
+            v = self.value(m)
+            return v <= bound if self.op == "<=" else v >= bound
+        return not self.excess(m, bound) > 0
+
+
+@dataclass(frozen=True)
+class Goal:
+    """One metric to optimise within any number of limits: still a constrained argmax, with no weighted score."""
+
+    optimise: str
+    limits: Tuple[Limit, ...] = ()
+    # efficiency's own fallback: a level without energy readings is ordered by tok/s, so the preset still resolves
+    # where NVML cannot read power.
+    energy_fallback: bool = False
+
+    def score(self, m: TrialMetrics) -> float:
+        """Lower is better; a level that did not measure the optimised metric scores worst."""
+        v = METRICS[self.optimise].read(m)
+        if v is None:
+            return 1e9 - m.tok_s if self.energy_fallback else math.inf
+        return -v if METRICS[self.optimise].sense == "max" else v
+
+    def bounds(self, results: Sequence[TrialResult]) -> Tuple[float, ...]:
+        return tuple(lim.resolve(results) for lim in self.limits)
+
+    def violation(self, m: TrialMetrics, bounds: Sequence[float]) -> float:
+        """The limits' excesses summed in order, each in its own unit: how the presets have always measured how
+        far outside their constraints a level is."""
+        total = 0.0
+        for lim, bound in zip(self.limits, bounds):
+            total = total + lim.excess(m, bound)
+        return total
+
+    def meets(self, m: TrialMetrics, bounds: Sequence[float]) -> bool:
+        return all(lim.met(m, b) for lim, b in zip(self.limits, bounds))
+
+
+def _ttft_metric(percentile: int) -> str:
+    return "ttft_p95_ms" if percentile >= 95 else "ttft_p50_ms"
+
+
+def resolve_goal(objective: str, cons: Constraints) -> Goal:
+    """The goal an objective name stands for, built from the constraints' fields (the docstring table above).
+
+    The workload's TPOT ceiling, when set, is the last limit of every one, a missing TPOT counting as 0."""
+    tpot = (Limit("tpot_ms", "<=", cons.tpot_ceiling_ms, missing="zero"),) if cons.tpot_ceiling_ms is not None else ()
+    floor = (Limit("tok_s", ">=", cons.tok_s_floor_abs) if cons.tok_s_floor_abs is not None
+             else Limit("tok_s", ">=", cons.tok_s_floor_frac, of_best=True))
     if objective == "throughput":
-        return (lambda m: -m.tok_s), (lambda m: 0.0)
+        return Goal("tok_s", tpot)
     if objective == "latency":
-        floor = cons.tok_s_floor(results)
-        return _e2e_latency, (lambda m: max(0.0, floor - m.tok_s))
+        return Goal("request_latency_ms", (floor, *tpot))
     if objective == "balanced":
-        return (lambda m: -m.tok_s), (lambda m: max(0.0, _ttft_for(m, cons.ttft_percentile) - cons.ttft_ceiling_ms))
+        return Goal("tok_s", (Limit(_ttft_metric(cons.ttft_percentile), "<=", cons.ttft_ceiling_ms), *tpot))
     if objective == "efficiency":
-        floor = cons.tok_s_floor(results)
-
-        def score(m: TrialMetrics) -> float:
-            j = m.joules_per_token
-            if j is None or not math.isfinite(j):
-                # No energy telemetry: fall back to ordering by tok/s so the objective still resolves.
-                return 1e9 - m.tok_s
-            return j
-
-        return score, (lambda m: max(0.0, floor - m.tok_s))
+        return Goal("joules_per_token", (floor, *tpot), energy_fallback=True)
     raise ValueError(f"unknown objective {objective!r}; choose from {OBJECTIVES}")
 
 
@@ -155,15 +248,11 @@ def enough_level(objective: str, cons: Optional[Constraints] = None) -> Optional
     """
     if objective not in ("throughput", "balanced"):
         return None
-    cons = cons or Constraints()
-    _, violation = _score_and_constraint(objective, cons, [])
-    tpot_ceiling = cons.tpot_ceiling_ms
+    goal = resolve_goal(objective, cons or Constraints())
+    bounds = goal.bounds([])
 
     def enough(m: TrialMetrics) -> bool:
-        if not m.ok or violation(m) > 0:
-            return False
-        tpot = m.tpot_ms if (m.tpot_ms is not None and math.isfinite(m.tpot_ms)) else 0.0
-        return tpot_ceiling is None or tpot <= tpot_ceiling
+        return m.ok and goal.meets(m, bounds)
 
     return enough
 
@@ -379,20 +468,16 @@ def rank(results: Sequence[TrialResult], objective: str, cons: Optional[Constrai
         return []
     if objective == "efficiency" and cons.arrival_rate is not None:
         return _break_ties(_rank_at_rate(ok, cons), cons)
-    score, violation = _score_and_constraint(objective, cons, ok)
-    if cons.tpot_ceiling_ms is not None:
-        phase_violation, ceiling = violation, cons.tpot_ceiling_ms
-
-        def violation(m: TrialMetrics) -> float:  # noqa: F811  (the decode-phase SLO on top)
-            tpot = m.tpot_ms if (m.tpot_ms is not None and math.isfinite(m.tpot_ms)) else 0.0
-            return phase_violation(m) + max(0.0, tpot - ceiling)
+    goal = resolve_goal(objective, cons)
+    bounds = goal.bounds(ok)  # a floor relative to the best is relative to these trials
     ranked: List[Ranked] = []
     for r in ok:
         # Score the trial at its best concurrency level for this objective.
-        per_level = [
-            Ranked(result=r, metrics=m, score=score(m), feasible=violation(m) == 0.0, violation=violation(m))
-            for m in _levels(r)
-        ]
+        per_level = []
+        for m in _levels(r):
+            violation = goal.violation(m, bounds)
+            per_level.append(Ranked(result=r, metrics=m, score=goal.score(m), feasible=violation == 0.0,
+                                    violation=violation))
         per_level.sort(key=_sort_key)
         ranked.append(per_level[0])
     ranked.sort(key=_sort_key)
