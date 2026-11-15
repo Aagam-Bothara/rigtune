@@ -371,6 +371,11 @@ class BaseBackend:
         """Why `cfg` is expected to fail at start-up or under load, so the search does not try it. Default: never."""
         return None
 
+    def launch_note(self) -> Optional[str]:
+        """Something in the environment the engines inherit that will stop every launch of this backend, said once at
+        the start of a calibration (nothing is refused for it: the launches would fail on their own). Default: nothing."""
+        return None
+
     def text_only_refusal(self) -> Optional[str]:
         """Why a multimodal model whose multimodal profiling failed at start-up cannot be retried serving its language
         model alone (Config.text_only), or None when it can. Default: this backend has no such mode."""

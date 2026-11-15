@@ -286,7 +286,8 @@ def _clear() -> None:
     import rigtune.backends.vllm as vl
 
     for fn in (vl._vllm_package, vl._serve_cli, vl._attention_backend_flag, vl._prompt_tokens_details_flag,
-               vl._language_model_only_flag, vl._offload_features, vl._mtp_archs,
+               vl._language_model_only_flag, vl._offload_features, vl._mtp_archs, vl._vllm_python,
+               vl._suffix_refusal, vl._arctic_report,
                vl._offload_counts_every_group_as_draft, sg.sglang_spec_methods,
                sg._cache_report_flag, sg._hicache_features, sg._tier_details_flag, sg.sglang_mtp_archs):
         fn.cache_clear()
@@ -331,6 +332,13 @@ def installed(engine: str, version: str, root: Path, flashinfer: bool = True,
                 stack.enter_context(mock.patch.object(vl, "_vllm_package", lambda: pkg))
                 stack.enter_context(mock.patch.object(vl, "_vllm_version", lambda: _version_tuple(version)))
                 stack.enter_context(mock.patch.object(speculative, "_vllm_version", lambda: version))
+                # Arctic Inference as vLLM's own Python would report it: its suffix tree loads, or it is absent.
+                absent = "ModuleNotFoundError: No module named 'arctic_inference'"
+                report = ({"arctic_inference": speculative.ARCTIC_ADVISED, "toplevel": "ok", "suffix": "ok",
+                           "vllm": version} if arctic_inference
+                          else {"arctic_inference": None, "toplevel": absent, "suffix": absent})
+                stack.enter_context(mock.patch.object(vl, "_arctic_report",
+                                                      lambda: ("/opt/vllm/bin/python", report, None)))
             else:
                 stack.enter_context(mock.patch.object(sg, "sglang_python", lambda: SGLANG_PYTHON))
                 stack.enter_context(mock.patch.object(sg, "_sglang_package_dir", lambda python: pkg))

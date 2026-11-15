@@ -941,6 +941,10 @@ def calibrate(
         if note:
             engines.warn_once(note)
             version_notes.append(note)
+        launch = reg[name].launch_note() if name in reg else None  # e.g. an arctic-inference plugin refusing vLLM
+        if launch and launch not in version_notes:
+            logger.warning(launch)
+            version_notes.append(launch)
     client_notes: List[str] = []
     if runner is None:
         busiest = max(workload.concurrencies, default=0)

@@ -426,9 +426,12 @@ def sglang_python() -> Optional[str]:
 # What each engine's environment has of the libraries its releases pin (name shown -> distribution name). vLLM
 # 0.33.0 pins torch 2.14.0 and transformers >=5.16.1,<5.21.0, SGLang 0.5.23 torch 2.14.1 and transformers 5.19.0
 # (vLLM requirements/cuda.txt and common.txt, SGLang python/pyproject.toml), so the two need separate
-# environments, and each one's libraries are read there.
+# environments, and each one's libraries are read there. arctic-inference holds vLLM's suffix decoding
+# (speculative.suffix_refusal), so a profile records which one it was calibrated with; a library that is not
+# installed is left out, as before. These are recorded and shown, not part of a profile's cache key (cache.invalid_reason
+# compares the hardware and the engine's version), so a changed install takes `rigtune recalibrate`.
 ENGINE_LIBS = {"torch": "torch", "transformers": "transformers", "flashinfer": "flashinfer-python",
-               "tokenizers": "tokenizers"}
+               "tokenizers": "tokenizers", "arctic-inference": "arctic_inference"}
 _VERSIONS_CODE = ("import importlib.metadata as m, json, sys\n"
                   "def v(n):\n"
                   "    try:\n"

@@ -21,15 +21,8 @@ def test_the_new_methods_become_vllm_speculative_configs():
 
 def test_versions_gate_them():
     assert speculative.vllm_supports_ngram_gpu("0.29.0") and not speculative.vllm_supports_ngram_gpu("0.28.1")
-    assert not speculative.vllm_supports_suffix("0.28.1")
-
-
-def test_suffix_decoding_needs_arctic_inference(monkeypatch):
-    real = importlib.util.find_spec
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: None if name == "arctic_inference" else real(name, *a))
-    assert not speculative.vllm_supports_suffix("0.29.0")
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: object() if name == "arctic_inference" else real(name, *a))
-    assert speculative.vllm_supports_suffix("0.29.0")
+    assert speculative.vllm_suffix_release("0.29.0") and not speculative.vllm_suffix_release("0.28.1")
+    assert not speculative.vllm_supports_suffix("0.28.1")  # nothing asked of Arctic Inference there
 
 
 @pytest.mark.parametrize("version, arctic, expected", [
@@ -39,13 +32,16 @@ def test_suffix_decoding_needs_arctic_inference(monkeypatch):
     ("0.11.0", False, ["ngram:4"]),  # no separate draft model before 0.12
 ])
 def test_vllm_offers_what_the_installed_release_supports(monkeypatch, prepared_vllm, version, arctic, expected):
+    import rigtune.backends.vllm as vl
     from rigtune.backends import get_backend
     from rigtune.models import Config
 
     monkeypatch.setattr(speculative, "_vllm_version", lambda: version)
-    real = importlib.util.find_spec
-    monkeypatch.setattr(importlib.util, "find_spec",
-                        lambda name, *a: (object() if arctic else None) if name == "arctic_inference" else real(name, *a))
+    # Arctic Inference as vLLM's own Python reports it (tests/test_suffix_check.py covers the report itself).
+    absent = "ModuleNotFoundError: No module named 'arctic_inference'"
+    report = ({"arctic_inference": "0.1.1", "toplevel": "ok", "suffix": "ok"} if arctic
+              else {"arctic_inference": None, "toplevel": absent, "suffix": absent})
+    monkeypatch.setattr(vl, "_suffix_refusal", lambda: speculative.suffix_refusal(report))
     cfg = Config(backend="vllm", quant="bf16", batch=64)
     model = prepared_vllm.model_copy(update={"spec": prepared_vllm.spec.model_copy(update={"hf_id": "Qwen/Qwen2.5-3B-Instruct"})})
     assert [c.spec_decode for c in get_backend("vllm").spec_variants(cfg, model)] == expected

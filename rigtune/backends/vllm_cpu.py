@@ -38,6 +38,10 @@ class VllmCpuBackend(VllmBackend):
                       all_methods: bool = False, min_batch: Optional[int] = None) -> List[Config]:
         return []
 
+    def spec_notes(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
+                   all_methods: bool = False, min_batch: Optional[int] = None) -> List[str]:
+        return []  # offered no speculation, so nothing to say about any method (vLLM's suffix check included)
+
     def tier_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
         return "vLLM on CPU keeps its KV cache in host RAM already"
 

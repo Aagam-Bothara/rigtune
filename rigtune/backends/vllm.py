@@ -268,6 +268,112 @@ def _vllm_package() -> Optional[Path]:
     return found[0] if found else None
 
 
+def _is_python(path: str) -> bool:
+    """Whether a path names a Python interpreter (python3.12, python, pypy3, python.exe), not a shell."""
+    return re.match(r"(?:python|pypy)[\w.-]*$", Path(path).name, re.IGNORECASE) is not None
+
+
+def script_python(script: Path) -> Optional[str]:
+    """The Python a console script runs with, or None when it does not name one: its `#!` interpreter when that is a
+    Python (through `/usr/bin/env`, its options and assignments skipped, looked up on PATH), or, for pip's launcher for
+    long paths (`#!/bin/sh` followed by `'''exec' <python> "$0" "$@"`), the one it execs. A shell wrapper
+    (`#!/bin/bash ... exec .../vllm`) names none: probing bash would refuse a working install."""
+    try:
+        with open(script, "rb") as fh:
+            head = fh.read(1024).decode("utf-8", "replace").splitlines()[:2]
+    except OSError:
+        return None
+    if not head or not head[0].startswith("#!"):
+        return None
+    words = head[0][2:].split()
+    if words and Path(words[0]).name == "env":
+        words = words[1:]
+        while words and (words[0].startswith("-") or "=" in words[0]):  # env -S, -i, -u NAME is rare; VAR=value
+            words = words[1:]
+        if words:
+            words[0] = shutil.which(words[0]) or words[0]
+    if words and _is_python(words[0]):
+        return words[0]
+    if words and Path(words[0]).name == "sh" and len(head) > 1:
+        m = re.match(r"""'''exec' (?:'([^']+)'|"([^"]+)"|(\S+)) "\$0" "\$@\"""", head[1])
+        named = next((g for g in m.groups() if g), None) if m else None
+        return named if named and _is_python(named) else None
+    return None
+
+
+@functools.lru_cache(maxsize=1)
+def _vllm_python() -> Optional[str]:
+    """The Python the launch command runs vLLM with: this interpreter when the command is its own `vllm` or there is
+    none (vllm_serve_head then runs `python -m`); else the Python the `vllm` script names; else, for a launcher with no
+    `#!` line, a Python beside it; else this interpreter, which rigtune already requires to import vLLM before it
+    offers the backend at all (hardware.probe_backends)."""
+    cli = _serve_cli()
+    sibling = Path(sys.executable).with_name("vllm.exe" if sys.platform == "win32" else "vllm")
+    if cli is None or Path(cli) == sibling:
+        return sys.executable
+    named = script_python(Path(cli))
+    if named:
+        return named
+    try:
+        with open(cli, "rb") as fh:
+            has_shebang = fh.read(2) == b"#!"
+    except OSError:
+        has_shebang = True
+    if not has_shebang:
+        for name in ("python3", "python", "python.exe"):
+            beside = Path(cli).with_name(name)
+            if beside.exists():
+                return str(beside)
+    return sys.executable
+
+
+@functools.lru_cache(maxsize=1)
+def _arctic_report() -> Tuple[Optional[str], Optional[dict], Optional[str]]:
+    """(the Python vLLM runs from, speculative.SUFFIX_PROBE's report there or None, why there is none), asked once per
+    process, so once per calibration. Where that Python is this one and has no `arctic_inference` at all, nothing is
+    spawned."""
+    python = _vllm_python()
+    if python is None:
+        return None, None, "no interpreter found for the vllm command"
+    if python == sys.executable and importlib.util.find_spec("arctic_inference") is None:
+        absent = "ModuleNotFoundError: No module named 'arctic_inference'"
+        return python, {"arctic_inference": None, "toplevel": absent, "suffix": absent}, None
+    try:
+        return python, speculative.run_suffix_probe(python), None
+    except Exception as exc:  # TimeoutExpired, OSError, a crash or unreadable output: could not ask
+        logger.warning("could not ask %s about arctic-inference: %s", python, exc)
+        return python, None, type(exc).__name__
+
+
+@functools.lru_cache(maxsize=1)
+def _suffix_refusal() -> Optional[str]:
+    """speculative.suffix_refusal for the Python vLLM runs from: a positive finding only, never a check that could not
+    run (_suffix_caveat). The profile's note names no path; the full install line for that Python is logged."""
+    python, report, _ = _arctic_report()
+    refusal = speculative.suffix_refusal(report) if report is not None else None
+    if refusal and python:
+        logger.warning("suffix decoding not offered (asked %s): %s. Install line: %s", python, refusal,
+                       speculative.arctic_install_line(python))
+    return refusal
+
+
+def _suffix_caveat() -> Optional[str]:
+    """speculative.suffix_caveat when the check could not run; suffix decoding is then offered as before."""
+    _, report, why = _arctic_report()
+    return speculative.suffix_caveat(why or "no report") if report is None else None
+
+
+def arctic_plugin_note() -> Optional[str]:
+    """When ARCTIC_INFERENCE_ENABLED=1 is set for the engines rigtune launches (they inherit its environment) and
+    arctic-inference's plugin in vLLM's Python would refuse that vLLM: every vLLM launch, of any method, would fail at
+    start-up (speculative.plugin_refusal). Asks vLLM's Python only when the variable is set."""
+    if os.environ.get("ARCTIC_INFERENCE_ENABLED") != "1" or os.environ.get("ARCTIC_INFERENCE_SKIP_VERSION_CHECK") == "1":
+        return None
+    _, report, _ = _arctic_report()
+    refusal = speculative.plugin_refusal(report) if report is not None else None
+    return f"vllm: {refusal}" if refusal else None
+
+
 # Where a vLLM release defines its server's own arguments (BaseFrontendArgs, which holds
 # enable_prompt_tokens_details): entrypoints/common/cli_args.py in v0.33.0 (line 156), entrypoints/launchers/
 # cli_args.py in v0.29.0 (line 132), entrypoints/openai/cli_args.py before. Each tag has only its own file.
@@ -518,9 +624,16 @@ class VllmBackend(BaseBackend):
 
     def spec_notes(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
                    all_methods: bool = False, min_batch: Optional[int] = None) -> List[str]:
-        """What the search should say about the MTP settings for `cfg` (see _mtp_variants), and, where this card's
-        search has the fp8_e5m2 KV cache, that MTP is never paired with it (known_failure)."""
+        """What the search should say about the MTP settings for `cfg` (see _mtp_variants); where this card's
+        search has the fp8_e5m2 KV cache, that MTP is never paired with it (known_failure); and why suffix decoding
+        is not tried on a release that has it (speculative.suffix_refusal: on 14 Nov 2026 every suffix trial on an
+        A40 pod failed to start with arctic-inference 0.1.1 installed, and each cost a launch)."""
         notes = self._mtp_variants(cfg, model, hw, all_methods, min_batch)[1]
+        if speculative.vllm_suffix_release():
+            if not speculative.vllm_supports_suffix():
+                notes.append(f"vllm: suffix decoding not tried: {speculative.vllm_suffix_refusal()}")
+            elif _suffix_caveat():
+                notes.append(f"vllm: {_suffix_caveat()}")
         if all_methods and hw is not None and self._offers_mtp(cfg, model) and AMPERE_FP8_KV in self.kv_dtypes(hw):
             notes.append(f"vllm: MTP is not paired with the {AMPERE_FP8_KV} KV cache through FlashInfer on this card, "
                          "by analogy with EAGLE3, which shares its proposer path and is excluded after vLLM's draft "
@@ -672,6 +785,9 @@ class VllmBackend(BaseBackend):
         if cfg.text_only:  # set only by the retry after multimodal profiling failed at start-up
             args += ["--language-model-only"]
         return LaunchSpec(args=args, env=env)
+
+    def launch_note(self) -> Optional[str]:
+        return arctic_plugin_note()
 
     def text_only_refusal(self) -> Optional[str]:
         if not _language_model_only_flag():

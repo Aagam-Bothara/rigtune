@@ -192,6 +192,10 @@ def recorded_environment(profile: Profile) -> Iterator[None]:
         stack.enter_context(mock.patch.object(importlib.util, "find_spec", find_spec))
         stack.enter_context(mock.patch.object(vllm_backend, "_vllm_version", lambda: _version_tuple(version)))
         stack.enter_context(mock.patch.object(speculative, "_vllm_version", lambda: version))
+        # Suffix decoding is offered where Arctic Inference loads in vLLM's own Python: where a suffix trial was recorded.
+        stack.enter_context(mock.patch.object(vllm_backend, "_suffix_refusal", lambda: None if present[
+            "arctic_inference"] else "no suffix trial was recorded"))
+        stack.enter_context(mock.patch.object(vllm_backend, "_suffix_caveat", lambda: None))
         # No recording has SGLang speculation (rigtune offered none there), so a replay cannot answer it.
         stack.enter_context(mock.patch.object(sglang_backend, "sglang_spec_methods", lambda: frozenset()))
         yield

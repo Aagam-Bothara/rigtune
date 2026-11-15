@@ -11,8 +11,8 @@ Proposers:
     the GPU (`ngram_gpu`): vLLM 0.29 turns async scheduling off for its CPU n-gram and suffix
     proposers and keeps it for `ngram_gpu` and draft models. The CPU version lost 87% of throughput
     from four users up on an A40; whether losing async scheduling is why has not been measured.
-  * suffix decoding (vLLM, needs `pip install arctic-inference==0.1.1`): matches the prompt and the
-    model's earlier outputs in a suffix tree and adapts how many tokens it proposes per request.
+  * suffix decoding (vLLM, needs arctic-inference 0.1.1 in vLLM's own Python: suffix_refusal): matches the prompt and
+    the model's earlier outputs in a suffix tree and adapts how many tokens it proposes per request.
   * a draft model: a small model of the same family, sharing the tokenizer.
   * an EAGLE3 head: one decoder layer trained on the target's own hidden states, which proposes from them
     rather than from tokens alone. Heads are published per target model, so EAGLE3_HEADS lists them by
@@ -27,7 +27,6 @@ or "eagle3:<hf_id>:<k>".
 
 from __future__ import annotations
 
-import importlib.util
 import logging
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -265,9 +264,163 @@ def vllm_supports_eagle3(version: Optional[str] = None) -> bool:
     return _vllm_at_least(VLLM_EAGLE3_MIN, version)
 
 
+def vllm_suffix_release(version: Optional[str] = None) -> bool:
+    """Whether the installed (or given) vLLM is a release with suffix decoding."""
+    return _vllm_at_least(VLLM_SUFFIX_MIN, version)
+
+
+def vllm_suffix_refusal() -> Optional[str]:
+    """Why Arctic Inference cannot run suffix decoding in the Python the vLLM launch command runs, from a positive
+    finding there (suffix_refusal); None when it can, or when that could not be asked (rigtune.backends.vllm
+    _suffix_caveat then says so)."""
+    from rigtune.backends.vllm import _suffix_refusal
+
+    return _suffix_refusal()
+
+
 def vllm_supports_suffix(version: Optional[str] = None) -> bool:
-    """Whether vLLM can use suffix decoding here: a recent enough release, and Arctic Inference installed."""
-    return _vllm_at_least(VLLM_SUFFIX_MIN, version) and importlib.util.find_spec("arctic_inference") is not None
+    """Whether vLLM can use suffix decoding here: a release with it, and nothing found wrong with Arctic Inference,
+    which holds its code, in vLLM's own Python. Until 14 Nov 2026 the second half was find_spec("arctic_inference")
+    in rigtune's own process, which passed on a pod where every suffix trial then failed to start."""
+    return vllm_suffix_release(version) and vllm_suffix_refusal() is None
+
+
+# Suffix decoding's code is Arctic Inference's (pip arctic-inference), not vLLM's. What vLLM v0.29.0 and v0.33.0 need
+# of it (both read):
+#   config/speculative.py SpeculativeConfig._validate_suffix_decoding raises ImportError("Arctic Inference is required
+#     for suffix decoding. Install via `pip install arctic-inference==0.1.1`.") unless
+#     utils/import_utils.has_arctic_inference(), which imports the top-level `arctic_inference` package only
+#     (_has_module). It checks no version.
+#   v1/spec_decode/suffix_decoding.py SuffixDecodingProposer.__init__ imports SuffixDecodingCache from
+#     arctic_inference.suffix_decoding, whose cache.py imports the native suffix tree, arctic_inference.suffix_decoding
+#     ._C. That module is built from the sdist on the user's machine (every release from 0.0.6 is an sdist only, PyPI),
+#     so a broken build passes the first check and fails in the engine core, after the server has started loading.
+#   arctic-inference 0.1.0 to 0.3.0 ship byte-identical suffix_decoding/ and csrc/suffix_decoding/ (read from each
+#     sdist); 0.0.9's tree has another native API (Candidate where 0.1.x has Draft), which vLLM was not written
+#     against. So any release from 0.1.0 is accepted, and 0.1.1, the one vLLM's message names and the one measured,
+#     is the one advised.
+#   Its vLLM plugin (entry point vllm.general_plugins) is loaded in every vLLM process and run outside
+#     load_plugins_by_group's try (plugins/__init__.py load_general_plugins), whatever the speculative method. It does
+#     nothing unless ARCTIC_INFERENCE_ENABLED=1; with it, every release raises RuntimeError unless vLLM is the one
+#     release it patches (0.1.1: vllm==0.10.1, its "vllm" extra; 0.1.2: 0.11.0; 0.2.0: 0.18.0; 0.3.0:
+#     utils.VLLM_PATCH_VERSION "0.26.0"), unless ARCTIC_INFERENCE_SKIP_VERSION_CHECK=1. So it stops every vLLM launch,
+#     not only suffix trials ("Arctic Inference plugin requires vllm==0.10.1 but found vllm==0.29.0!", captured).
+#     vLLM's suffix decoding does not need the plugin.
+ARCTIC_ADVISED = "0.1.1"
+ARCTIC_MIN = (0, 1, 0)
+SUFFIX_DOCS = "docs/usage.md#suffix-decoding"
+# Run in vLLM's Python, never in rigtune's: it imports the package and the suffix tree as vLLM does, builds one, and
+# says which vLLM an enabled plugin would demand. It imports numpy and the extension, never vLLM.
+SUFFIX_PROBE = (
+    "import importlib.metadata as m, json, os, sys\n"
+    "def v(n):\n"
+    "    try:\n"
+    "        return m.version(n)\n"
+    "    except Exception:\n"
+    "        return None\n"
+    "def err(exc):\n"
+    "    return (type(exc).__name__ + ': ' + str(exc))[:300]\n"
+    "out = {'python': sys.version.split()[0], 'arctic_inference': v('arctic_inference'), 'vllm': v('vllm')}\n"
+    "try:\n"
+    "    import arctic_inference\n"
+    "    out['toplevel'] = 'ok'\n"
+    "except BaseException as exc:\n"
+    "    out['toplevel'] = err(exc)\n"
+    "try:\n"
+    "    from arctic_inference.suffix_decoding import SuffixDecodingCache\n"
+    "    SuffixDecodingCache(max_tree_depth=24, max_cached_requests=1)\n"
+    "    out['suffix'] = 'ok'\n"
+    "except BaseException as exc:\n"
+    "    out['suffix'] = err(exc)\n"
+    "if os.environ.get('ARCTIC_INFERENCE_ENABLED') == '1' "
+    "and os.environ.get('ARCTIC_INFERENCE_SKIP_VERSION_CHECK') != '1' and out['toplevel'] == 'ok':\n"
+    "    try:\n"
+    "        from arctic_inference.utils import get_compatible_vllm_version\n"
+    "        out['plugin_vllm'] = get_compatible_vllm_version()\n"
+    "    except BaseException:\n"
+    "        out['plugin_vllm'] = None\n"
+    "print(json.dumps(out))\n")
+
+
+def arctic_install_line(python: str) -> str:
+    """The install line advised for the Python vLLM runs from. arctic-inference's setup.py hands CMake
+    -DPYTHON_EXECUTABLE, which the FindPython its csrc/suffix_decoding/CMakeLists.txt calls does not read, so CMake
+    takes the first Python with headers on PATH. Rerunning the 14 Nov pod's install step in its image (Python 3.9-3.13
+    from deadsnakes) with /usr/bin first on PATH, as the pod's scripts put it, CMake took python3.13 and built
+    _C.cpython-313-x86_64-linux-gnu.so for a vLLM on 3.12, while `import arctic_inference` still worked. CMAKE_ARGS
+    (which setup.py passes on) names the interpreter; --no-cache-dir because pip otherwise reinstalls the wheel it
+    cached from the broken build; --force-reinstall to replace an installed one. Each was checked in that image
+    (docs/benchmarks.md, Limits)."""
+    return f'CMAKE_ARGS="-DPython_EXECUTABLE={python}" {python} -m pip install --no-cache-dir ' \
+           f"--force-reinstall arctic-inference=={ARCTIC_ADVISED}"
+
+
+def run_suffix_probe(python: str, timeout: float = 60.0) -> Dict[str, Any]:
+    """SUFFIX_PROBE's report from `python`, in rigtune's environment (the engine inherits it), run from an empty
+    directory so that nothing in the current one (a directory named arctic_inference) is imported in its place:
+    `python -c` puts the working directory first on sys.path, and -P, which would not, needs Python 3.11. Raises when
+    it cannot be run (OSError, subprocess.TimeoutExpired) or says nothing readable (RuntimeError, ValueError)."""
+    import json
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="rigtune-probe-") as empty:
+        out = subprocess.run([python, "-c", SUFFIX_PROBE], capture_output=True, text=True, timeout=timeout,
+                             cwd=empty)
+    lines = (out.stdout or "").strip().splitlines()
+    if out.returncode != 0 or not lines:
+        tail = ((out.stderr or "").strip().splitlines() or ["no output"])[-1]
+        raise RuntimeError(f"exited {out.returncode}: {tail[:200]}")
+    report = json.loads(lines[-1])
+    if not isinstance(report, dict):
+        raise ValueError("the probe printed no report")
+    return report
+
+
+def _no_paths(text: str) -> str:
+    """`text` with directories dropped from any path in it, so a note in a committed profile names no user's home."""
+    return re.sub(r"(?:[A-Za-z]:)?(?:[\\/][^\s'\"\\/:]+)+[\\/]", "", text)
+
+
+def suffix_refusal(report: Dict[str, Any]) -> Optional[str]:
+    """Why vLLM's suffix decoding would fail to start with the Arctic Inference that `report` (SUFFIX_PROBE's) shows,
+    or None when nothing is wrong. Only a positive finding refuses; what could not be asked is suffix_caveat's.
+    The text names no interpreter path: it goes into the profile, which may be committed."""
+    version, suffix = report.get("arctic_inference"), str(report.get("suffix") or "")
+    toplevel = str(report.get("toplevel") or "")
+    recalibrate = f"see {SUFFIX_DOCS}, then run `rigtune recalibrate`"
+    if suffix == "ok":
+        m = re.match(r"(\d+)\.(\d+)\.(\d+)", version or "")
+        if m and tuple(int(g) for g in m.groups()) < ARCTIC_MIN:
+            return (f"arctic-inference {version} predates 0.1.0, whose suffix tree vLLM's proposer was written "
+                    f"against; {recalibrate}")
+    elif not version and toplevel.startswith("ModuleNotFoundError") and "'arctic_inference'" in toplevel:
+        return f"arctic-inference is not installed in vLLM's Python; {recalibrate}"
+    elif toplevel != "ok":
+        return (f"arctic-inference {version or '(version unknown)'} fails to import in vLLM's Python "
+                f"({_no_paths(toplevel)}); {recalibrate}")
+    else:
+        return (f"arctic-inference {version or '(version unknown)'}'s suffix tree does not load in vLLM's Python "
+                f"({_no_paths(suffix)}), so vLLM would fail in its engine core; rebuild it, {recalibrate}")
+    plugin = plugin_refusal(report)
+    return f"{plugin} (vLLM's suffix decoding does not need the plugin)" if plugin else None
+
+
+def plugin_refusal(report: Dict[str, Any]) -> Optional[str]:
+    """What an enabled arctic-inference plugin does to every vLLM launch, when `report` shows it would refuse this
+    vLLM; None otherwise."""
+    if "plugin_vllm" not in report or report.get("plugin_vllm") == report.get("vllm"):
+        return None
+    version = report.get("arctic_inference")
+    return (f"ARCTIC_INFERENCE_ENABLED=1 turns on arctic-inference{' ' + version if version else ''}'s vLLM plugin, "
+            f"which refuses vLLM {report.get('vllm') or '(version unknown)'} at start-up (it patches "
+            f"vllm=={report.get('plugin_vllm') or '(unknown)'} only), so every vLLM launch would fail; unset it")
+
+
+def suffix_caveat(error: str) -> str:
+    """The note for a check that could not run: the method is offered as before, since a launch that fails costs
+    one trial, while removing a working method could cost rigtune's largest recorded gain."""
+    return f"could not check that arctic-inference loads in vLLM's Python ({error}); suffix decoding offered anyway"
 
 
 def ngram(k: int = NGRAM_TOKENS) -> str:
