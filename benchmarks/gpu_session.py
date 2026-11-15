@@ -42,6 +42,17 @@ the commands need (HF_TOKEN) is exported in the shell that starts the runner, an
 - `touch <root>/STOP` ends the session at the next phase boundary; the runner renames it to
   STOP.seen-<time> when it stops, so the next run goes on.
 - `--dry-run` prints the plan, each phase's state and the command it would run, and runs nothing.
+
+Copy-back. When a directory reaches a final state (a phase done, failed, timed out, skipped or blocked, or an
+attempt set aside as interrupted) the runner writes <dir>/SHA256SUMS (`sha256sum -c` reads it) over every file
+in it, and lists the directory with its state in <root>/index.json. benchmarks/gpu_pull.py, run on the laptop,
+reads that index over SSH and copies each finished directory, verified against its list. A finished directory
+is never written to again, so its list stays true; one recorded as finished but without a list (the runner
+died between the two) gets its list when the next run starts. The index also names the root's own logs
+(session.log, copyback.log, the runner's output), which the puller copies as they are. `--after-phase CMD` also
+runs CMD (with `bash -c`) after each finished directory, with {unit} (its path), {rel} (its path under the root)
+and {root} replaced: a push to storage the user configures, with credentials from the environment only. A
+failing CMD is reported on the console and in <root>/copyback.log, and never fails the phase.
 """
 
 from __future__ import annotations
@@ -70,6 +81,10 @@ MANIFEST = "manifest.json"
 ATTEMPTS = "_attempts"
 LOG = "output.log"
 LOCK = "runner.lock"
+SUMS = "SHA256SUMS"
+INDEX = "index.json"
+FINAL = (DONE, FAILED, TIMEOUT, SKIPPED, BLOCKED, INTERRUPTED)
+NOT_LOGS = (INDEX, LOCK, ".sums-staging")  # root-level files the index does not offer as logs
 # Packages whose versions decide what a phase measured: read from metadata, so nothing is imported.
 PACKAGES = ("rigtune", "vllm", "sglang", "torch", "transformers", "flashinfer-python", "arctic-inference",
             "nvidia-ml-py", "llm-optimizer", "aiconfigurator")
@@ -316,6 +331,26 @@ def is_temporary(name: str) -> bool:
     return name.endswith(".tmp")
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_sums(unit: Path, staging: Path) -> Path:
+    """<unit>/SHA256SUMS: one `sha256  relative/path` line per file, every file but the list itself, sorted by
+    path, in the format sha256sum writes and `sha256sum -c` checks. It is staged outside the unit (`staging`, on
+    the same disk) and renamed in, so the unit never holds a file the list does not name."""
+    lines = [f"{_sha256(p)}  {p.relative_to(unit).as_posix()}"
+             for p in sorted(unit.rglob("*"), key=lambda q: q.relative_to(unit).as_posix())
+             if p.is_file() and p.relative_to(unit).as_posix() != SUMS]
+    staging.write_bytes(("\n".join(lines) + "\n").encode("utf-8") if lines else b"")
+    os.replace(staging, unit / SUMS)
+    return unit / SUMS
+
+
 def _scan(home: Path) -> Dict[str, Tuple[int, int]]:
     out: Dict[str, Tuple[int, int]] = {}
     if home.is_dir():
@@ -330,13 +365,15 @@ class Session:
     def __init__(self, plan: Plan, root: Path, *, python: str = sys.executable,
                  versions: Optional[Callable[[], Dict[str, Optional[str]]]] = None,
                  runner: Optional[Callable[..., Outcome]] = None, now: Callable[[], str] = utc_now,
-                 echo: Callable[[str], None] = print, redo_stale: bool = False):
+                 echo: Callable[[str], None] = print, redo_stale: bool = False,
+                 after_phase: Optional[Union[str, List[str]]] = None):
         self.plan, self.root = plan, Path(root).resolve()
         self.python, self.now, self.echo, self.redo_stale = python, now, echo, redo_stale
         self.versions = versions or (lambda: installed_versions(self.plan.pythons))
         self.runner = runner or self._run_process
         self._current: Optional[Tuple[Path, dict]] = None
         self._locked = False
+        self.after_phase = after_phase
 
     def phase_dir(self, name: str) -> Path:
         return self.root / name
@@ -460,10 +497,60 @@ class Session:
 
     def bare_files(self) -> set:
         """The files a phase that never ran holds."""
-        return {MANIFEST}
+        return {MANIFEST, SUMS}
 
     def after_unit(self, unit: Path) -> None:
-        """Called whenever a directory reaches a final state. The copy-back step hooks in here."""
+        """A directory reached a final state: its checksum list, the index, then the user's push command."""
+        write_sums(unit, self.root / ".sums-staging")
+        self.write_index()
+        if not self.after_phase:
+            return
+        rel = unit.relative_to(self.root).as_posix()
+        argv = _argv(self.after_phase, {"unit": str(unit), "rel": rel, "root": str(self.root),
+                                       "python": self.python})
+        try:
+            got = subprocess.run(argv, capture_output=True, text=True, timeout=1800, stdin=subprocess.DEVNULL,
+                                 env={**os.environ, **self.plan.env})
+            code, text = got.returncode, (got.stdout + got.stderr)
+        except (OSError, subprocess.SubprocessError) as exc:
+            code, text = None, str(exc)
+        with (self.root / "copyback.log").open("a", encoding="utf-8") as fh:
+            fh.write(f"{self.now()} {rel}: exit {code}\n{text}")
+        if code != 0:
+            self.echo(f"COPY-BACK FAILED {rel}: exit {code} (see {self.root / 'copyback.log'}); the phase's "
+                      "files are still on the pod")
+
+    def units(self) -> List[Path]:
+        """Every phase and attempt directory that has a manifest."""
+        dirs = [p for p in self.root.iterdir() if p.is_dir() and p.name != ATTEMPTS]
+        if (self.root / ATTEMPTS).is_dir():
+            dirs += list((self.root / ATTEMPTS).iterdir())
+        return sorted((d for d in dirs if read_manifest(d) is not None), key=lambda d: d.as_posix())
+
+    def write_index(self, finished: bool = False) -> None:
+        """<root>/index.json: every phase and attempt directory with its state and whether its checksum list is
+        written, the root's own logs, and whether the runner got to the end of a full run. The puller copies
+        only directories listed in a final state with their list."""
+        units = []
+        for d in self.units():
+            status = read_manifest(d).get("status")
+            units.append({"path": d.relative_to(self.root).as_posix(), "status": status,
+                          "sums": (d / SUMS).is_file() and status in FINAL})
+        logs = sorted(p.name for p in self.root.iterdir()
+                      if p.is_file() and p.name not in NOT_LOGS and not p.name.startswith("STOP")
+                      and not is_temporary(p.name))
+        write_json(self.root / INDEX, {"session": self.plan.session, "updated_utc": self.now(),
+                                       "finished": finished, "units": units, "logs": logs})
+
+    def repair(self) -> None:
+        """A directory recorded as finished without its checksum list (the runner died between the two) gets
+        its list now: a finished state counts only once the list is written."""
+        for d in self.units():
+            if read_manifest(d).get("status") in FINAL and not (d / SUMS).is_file():
+                self._log(f"REPAIR   {d.relative_to(self.root).as_posix()}: recorded as finished without "
+                          f"{SUMS}; writing it now")
+                write_sums(d, self.root / ".sums-staging")
+        self.write_index()
 
     def _record(self, phase: Phase, status: str, reason: str) -> None:
         d = self.phase_dir(phase.name)
@@ -525,6 +612,7 @@ class Session:
                     "env": dict(self.plan.env), "versions": self.versions()}
         write_json(d / MANIFEST, manifest)
         self._current = (d, manifest)
+        self.write_index()  # the index shows the phase as running from its start
         self._log(f"START    {phase.name}: {' '.join(argv)}")
         try:
             out = self.runner(argv, cwd=d, env=self.env(phase), log=d / LOG, timeout_s=phase.timeout_s)
@@ -590,6 +678,7 @@ class Session:
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock()
         try:
+            self.repair()
             for name in redo:
                 self.redo(name)
             results: Dict[str, str] = {}
@@ -608,7 +697,8 @@ class Session:
             self._unlock()
 
     def finished(self) -> None:
-        """Called when every phase of a full run has had its turn (not when stopped, not under --only)."""
+        """Every phase of a full run has had its turn (not when stopped, not under --only): the index says so."""
+        self.write_index(finished=True)
 
     def redo(self, name: str) -> None:
         """Run a finished phase again on the next run: its directory is moved to _attempts first."""
@@ -664,6 +754,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--redo", nargs="*", default=[], help="run these finished phases again")
     p.add_argument("--redo-stale", action="store_true",
                    help="run again every finished phase whose command the plan has changed since")
+    p.add_argument("--after-phase", default=None, metavar="CMD",
+                   help="run CMD (bash -c) after each phase, {unit} {rel} {root} replaced: a push to storage")
     p = sub.add_parser("status", help="each phase's state, from its manifest")
     p.add_argument("--root", type=Path, required=True)
     a = ap.parse_args(argv)
@@ -676,7 +768,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     except PlanError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    session = Session(plan, a.root, redo_stale=a.redo_stale)
+    session = Session(plan, a.root, redo_stale=a.redo_stale, after_phase=a.after_phase)
     if a.dry_run:
         for line in session.describe():
             print(line)
