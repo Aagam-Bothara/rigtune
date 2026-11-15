@@ -36,7 +36,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Set,
 from rigtune import kvtier
 from rigtune.backends.base import BaseBackend, free_port
 from rigtune.calibrate.measure import MIN_OPEN_LOOP_RATE, run_trial
-from rigtune.calibrate.objectives import Constraints, pick, rank, strict_refusal
+from rigtune.calibrate.objectives import Constraints, pick, rank, resolve_goal, strict_refusal
 from rigtune.calibrate.rate import compose
 from rigtune.calibrate.workload import Workload
 from rigtune.memlog import device_used_mb, merge, parse_log
@@ -633,7 +633,8 @@ class StagedSearch:
                 # A session file's prefill_tokens is its longest possible prompt, mostly history the prefix cache
                 # serves; the roofline would price all of it as uncached prefill and prune what may well win.
                 return None
-            ceiling = self.constraints.ttft_ceiling_ms if self.objective == "balanced" else None
+            ttft = resolve_goal(self.objective, self.constraints).ttft_limit  # the goal's TTFT ceiling, if any
+            ceiling = ttft.bound if ttft is not None else None
             kwargs = {}
             if self.constraints.tpot_ceiling_ms is not None:
                 kwargs["tpot_ceiling_ms"] = self.constraints.tpot_ceiling_ms
@@ -780,8 +781,9 @@ class StagedSearch:
 
         Only a feasible result can lead. Under `balanced`, a configuration that is fast but breaks the TTFT
         ceiling must not push out a slower backend that meets it. A backend's raw tok/s bounds any score it
-        could reach, so dropping on that bound cannot drop a backend that would have won."""
-        if self.objective not in ("throughput", "balanced") or not self.drop_backend_below:
+        could reach, so dropping on that bound cannot drop a backend that would have won; that holds only for a
+        goal that scores tok/s (`throughput`, `balanced`)."""
+        if not self.drop_backend_below or not resolve_goal(self.objective, self.constraints).scores_tok_s:
             return {}
         ok = [r for r in results if r.ok]
         within: Dict[str, float] = {}  # best constrained tok/s per backend (score is -tok/s for both objectives)

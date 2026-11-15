@@ -123,18 +123,23 @@ class Metric:
 
     name: str
     sense: str  # "max" or "min": which way is better
+    # How it moves as load rises, for one configuration: "improves", "worsens" or "unknown". Only a metric that
+    # improves lets a trial stop at the busiest level that meets the limits (enough_level).
+    load: str
     read: Callable[[TrialMetrics], Optional[float]]  # None: not measured at that level
 
 
 # Every metric a goal names, in its own unit (ms). tok_s is read as recorded, never replaced by None, so a
 # throughput floor judges a trial exactly as the presets always have.
 METRICS: Dict[str, Metric] = {m.name: m for m in (
-    Metric("tok_s", "max", lambda m: m.tok_s),
-    Metric("ttft_p95_ms", "min", lambda m: _finite(_ttft_for(m, 95))),
-    Metric("ttft_p50_ms", "min", lambda m: _finite(_ttft(m))),
-    Metric("tpot_ms", "min", lambda m: _finite(m.tpot_ms)),
-    Metric("request_latency_ms", "min", lambda m: _finite(_e2e_latency(m))),
-    Metric("joules_per_token", "min", lambda m: _finite(m.joules_per_token)),
+    Metric("tok_s", "max", "improves", lambda m: m.tok_s),
+    Metric("ttft_p95_ms", "min", "worsens", lambda m: _finite(_ttft_for(m, 95))),
+    Metric("ttft_p50_ms", "min", "worsens", lambda m: _finite(_ttft(m))),
+    Metric("tpot_ms", "min", "worsens", lambda m: _finite(m.tpot_ms)),
+    Metric("request_latency_ms", "min", "worsens", lambda m: _finite(_e2e_latency(m))),
+    # Energy per token can fall as load rises (the card's draw is shared by more tokens) or rise (a busier card
+    # draws more than it adds tokens): no level order settles it.
+    Metric("joules_per_token", "min", "unknown", lambda m: _finite(m.joules_per_token)),
 )}
 
 
@@ -214,6 +219,22 @@ class Goal:
     def meets(self, m: TrialMetrics, bounds: Sequence[float]) -> bool:
         return all(lim.met(m, b) for lim, b in zip(self.limits, bounds))
 
+    @property
+    def improves_with_load(self) -> bool:
+        """Whether the optimised metric gets better as load rises, so the busiest level that meets the limits is
+        the trial's best (enough_level)."""
+        return METRICS[self.optimise].load == "improves"
+
+    @property
+    def scores_tok_s(self) -> bool:
+        """Whether a level's score is its tok/s, negated: what dropping a losing engine on its raw tok/s needs."""
+        return self.optimise == "tok_s"
+
+    @property
+    def ttft_limit(self) -> Optional[Limit]:
+        """The ceiling on a time-to-first-token percentile, if the goal has one."""
+        return next((lim for lim in self.limits if lim.metric in ("ttft_p95_ms", "ttft_p50_ms")), None)
+
 
 def _ttft_metric(percentile: int) -> str:
     return "ttft_p95_ms" if percentile >= 95 else "ttft_p50_ms"
@@ -240,15 +261,16 @@ def resolve_goal(objective: str, cons: Constraints) -> Goal:
 def enough_level(objective: str, cons: Optional[Constraints] = None) -> Optional[Callable[[TrialMetrics], bool]]:
     """Whether one concurrency level settles a trial's score, for measuring levels highest first.
 
-    `throughput` and `balanced` score a trial by the tok/s of its best level that meets the
-    constraints, and tok/s rises with load, so no lower level can beat the first one that meets
-    them. (Not always: n-gram speculation lost throughput as load rose, but only on configurations
-    that lost anyway.) `latency` and `efficiency` can prefer a lower level, so they need every one
-    measured: None.
+    A goal whose metric improves with load (tok/s: `throughput` and `balanced`) scores a trial by its best level
+    that meets the limits, so no lower level can beat the first one that meets them. (Not always: n-gram
+    speculation lost throughput as load rose, but only on configurations that lost anyway.) Any other metric
+    (`latency`, `efficiency`) can prefer a lower level, so it needs every one measured: None.
     """
-    if objective not in ("throughput", "balanced"):
+    if objective not in OBJECTIVES:
         return None
     goal = resolve_goal(objective, cons or Constraints())
+    if not goal.improves_with_load:
+        return None
     bounds = goal.bounds([])
 
     def enough(m: TrialMetrics) -> bool:
@@ -261,23 +283,25 @@ def close_call_level(objective: str, cons: Optional[Constraints] = None,
                      confidence: float = 0.95) -> Optional[Callable[[TrialMetrics], bool]]:
     """Whether a level's tail is too close to its ceiling to judge from its own requests: the ceiling lies inside
     the interval of the percentile it applies to (calibrate/tail.py). Such a level is measured again.
-    Only `balanced` judges a tail against a ceiling, so the rest get None.
+    Only a goal with a TTFT ceiling (`balanced`) judges a tail against one, so the rest get None.
 
     This is a screen, not a guarantee. It uses the widest interval the order statistics can express, whose real
     confidence is `attained_confidence(n, q)` — about 81% for a p95 from 32 requests, because the slowest of 32
     samples exceeds the true p95 only 80.6% of the time. Demanding a true 95% upper bound would take 59 requests
     per level (72 for a two-sided interval), so a level that passes this screen has not been certified at 95%.
     """
-    if objective != "balanced":
+    if objective not in OBJECTIVES:
         return None
-    cons = cons or Constraints()
-    q = 0.95 if cons.ttft_percentile >= 95 else 0.5
+    ceiling = resolve_goal(objective, cons or Constraints()).ttft_limit
+    if ceiling is None:
+        return None
+    q = 0.95 if ceiling.metric == "ttft_p95_ms" else 0.5
 
     def close(m: TrialMetrics) -> bool:
         if not m.ok or not m.ttft_samples_ms:
             return False
         low, high = quantile_interval(m.ttft_samples_ms, q, confidence, unbounded=False)
-        return low <= cons.ttft_ceiling_ms <= high
+        return low <= ceiling.bound <= high
 
     return close
 

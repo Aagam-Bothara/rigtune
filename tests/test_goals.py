@@ -34,3 +34,13 @@ def test_a_missing_value_misses_a_limit_unless_it_counts_as_zero():
     assert Limit("tok_s", ">=", 150.0).excess(m, 150.0) == 50.0
     assert Goal("joules_per_token").score(m) == math.inf
     assert Goal("joules_per_token", energy_fallback=True).score(m) == 1e9 - 100.0
+
+
+def test_the_search_rules_follow_what_the_goal_optimises_and_limits():
+    cons = Constraints(ttft_ceiling_ms=300.0, ttft_percentile=50)
+    rules = {o: (g.improves_with_load, g.scores_tok_s, g.ttft_limit) for o in ("throughput", "latency", "balanced",
+                                                                             "efficiency")
+             for g in [resolve_goal(o, cons)]}
+    assert rules == {"throughput": (True, True, None), "latency": (False, False, None),
+                     "balanced": (True, True, Limit("ttft_p50_ms", "<=", 300.0)),
+                     "efficiency": (False, False, None)}
