@@ -135,38 +135,9 @@ class TrafficWatch:
             prompts = sum(p for p, _ in self.reuse)
             return round(sum(c for _, c in self.reuse) / prompts, 4) if prompts else None
 
-    def record_stream_chunk(self, chunk: bytes) -> None:
-        """Take token counts out of a streamed reply's usage chunk.
-
-        Streamed replies carry no counts unless the request asked for them, and most OpenAI clients stream, so
-        the proxy adds `stream_options: {"include_usage": true}` on the way past and reads the result here.
-        """
-        if not chunk:
-            return
-        for line in chunk.split(b"\n"):
-            line = line.strip()
-            if not line.startswith(b"data:"):
-                continue
-            payload = line[5:].strip()
-            if not payload or payload == b"[DONE]":
-                continue
-            try:
-                body = json.loads(payload)
-            except (ValueError, UnicodeDecodeError):
-                continue
-            usage = body.get("usage") if isinstance(body, dict) else None
-            if not isinstance(usage, dict):
-                continue
-            with self._lock:
-                for key, into in (("prompt_tokens", self.prompt_tokens),
-                                  ("completion_tokens", self.completion_tokens)):
-                    value = usage.get(key)
-                    if isinstance(value, int) and value > 0:
-                        into.append(value)
-            self._record_reuse(usage)
-
     def record_ttft(self, ms: float) -> None:
-        """Time from the request reaching the proxy to the first streamed chunk leaving it.
+        """Time from the request reaching the proxy to the first streamed event carrying generated output (not a
+        role-only or empty delta: the calibration client's rule, measure.generated) beginning to arrive.
 
         Only a streamed reply exposes this: a non-streamed body arrives whole, so its total time is not a
         time to first token and is not recorded as one. This measurement includes queueing and the proxy's

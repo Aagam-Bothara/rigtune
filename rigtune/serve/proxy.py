@@ -12,12 +12,14 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
+import anyio
 import httpx
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from starlette.background import BackgroundTask
 
 from rigtune.models import Profile
+from rigtune.serve.streaming import ClosingStreamingResponse, StreamObserver
 
 logger = logging.getLogger(__name__)
 
@@ -163,49 +165,68 @@ def create_app(
         started = time.perf_counter()
         if watch is not None:
             watch.began()
-        try:
-            upstream = await client.send(upstream_req, stream=True)
-        except httpx.HTTPError as exc:
-            logger.warning("upstream error: %s", exc)
-            if watch is not None:
-                watch.ended()
-            return JSONResponse({"error": {"message": f"backend unavailable: {exc}", "type": "upstream_error"}},
-                                status_code=502)
-        media = upstream.headers.get("content-type", "")
-        if "text/event-stream" in media:
-            # Streamed bytes are never parsed, so a streamed reply counts as a request and toward concurrency,
-            # but carries no token counts; the request is only over once the client has drained it.
-            async def _finish_stream() -> None:
-                await upstream.aclose()
+        upstream: Optional[httpx.Response] = None
+        finished = False
+
+        async def finish() -> None:
+            """Close the upstream and end the request's accounting, once, however the request ends."""
+            nonlocal finished
+            if finished:
+                return
+            finished = True
+            try:
+                with anyio.CancelScope(shield=True):  # Starlette cancels a response's task on disconnect
+                    if upstream is not None:
+                        await upstream.aclose()
+            finally:
                 if watch is not None:
                     watch.ended()
+                    if watch.should_warn():
+                        logger.warning("traffic no longer looks like the calibrated workload: %s; "
+                                       "`rigtune recalibrate` would re-tune for it", "; ".join(watch.findings()))
 
-            async def _tee():
-                """Pass the bytes through untouched, timing the first chunk and reading the usage one."""
-                first = True
-                async for chunk in upstream.aiter_raw():
-                    if watch is not None:
-                        if first:
-                            watch.record_ttft((time.perf_counter() - started) * 1000)
-                        watch.record_stream_chunk(chunk)
-                    first = False
-                    yield chunk
+        try:
+            upstream = await client.send(upstream_req, stream=True)
+            media = upstream.headers.get("content-type", "")
+            if "text/event-stream" in media:
+                # The bytes pass through as they arrive; the observer reads each reply's events from a copy, for
+                # the drift report's time to first token and token counts.
+                observer = StreamObserver(watch, started) if watch is not None else None
+                stream = upstream
 
-            return StreamingResponse(
-                _tee(),
-                status_code=upstream.status_code,
-                headers=_filtered(upstream.headers),
-                media_type="text/event-stream",
-                background=BackgroundTask(_finish_stream),
-            )
-        content = await upstream.aread()
-        await upstream.aclose()
-        if watch is not None:
-            watch.record_response(content, media)
-            watch.ended()
-            if watch.should_warn():
-                logger.warning("traffic no longer looks like the calibrated workload: %s; "
-                               "`rigtune recalibrate` would re-tune for it", "; ".join(watch.findings()))
-        return Response(content=content, status_code=upstream.status_code, headers=_filtered(upstream.headers))
+                async def finish_stream() -> None:
+                    if observer is not None:
+                        observer.finish()
+                    await finish()
+
+                async def tee():
+                    try:
+                        # Decoded: Content-Encoding is dropped from the forwarded headers.
+                        async for chunk in stream.aiter_bytes():
+                            if observer is not None:
+                                observer.feed(chunk)
+                            yield chunk
+                    finally:
+                        await finish_stream()
+
+                return ClosingStreamingResponse(
+                    tee(), close=finish_stream, status_code=upstream.status_code,
+                    headers=_filtered(upstream.headers), media_type="text/event-stream",
+                    background=BackgroundTask(finish_stream),
+                )
+            content = await upstream.aread()
+            if watch is not None:
+                watch.record_response(content, media)
+            await finish()
+            return Response(content=content, status_code=upstream.status_code, headers=_filtered(upstream.headers))
+        except httpx.HTTPError as exc:
+            await finish()
+            logger.warning("upstream error: %s", exc)
+            status = 504 if isinstance(exc, httpx.TimeoutException) else 502
+            return JSONResponse({"error": {"message": f"backend unavailable: {exc}", "type": "upstream_error"}},
+                                status_code=status)
+        except BaseException:
+            await finish()
+            raise
 
     return app

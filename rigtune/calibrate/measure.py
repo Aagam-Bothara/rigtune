@@ -450,6 +450,27 @@ class RequestOutcome:
     skipped: Optional[str] = None  # not a request: "cut" (the next prompt would not fit) or "truncated" (budget spent)
 
 
+# What counts as generated output in a streamed choice, for the time to first token: the answer's text, or the
+# reasoning or tool-call field an engine fills in its place. The serving proxy's observer (serve/streaming.py)
+# applies the same rule, so live and calibrated TTFT time the same event. rigtune passes no --reasoning-parser or
+# tool-call flags to vLLM or SGLang and no --reasoning-format to llama.cpp, and flat workloads go to
+# /v1/completions, whose choices carry text only, so their measurements are unchanged. Session replay goes to
+# /v1/chat/completions, where an engine can return reasoning separately without any flag: vLLM does for gpt-oss
+# (its Harmony format), and llama-server's --reasoning-format defaults to auto, which separates a thinking model's
+# reasoning. For those, a step's TTFT is now the first reasoning token, not the first answer token. Neither case
+# has been checked with rigtune on a GPU.
+OUTPUT_FIELDS = ("content", "reasoning", "reasoning_content", "tool_calls")
+
+
+def generated(choice: Any) -> bool:
+    if not isinstance(choice, dict):
+        return False
+    if choice.get("text"):
+        return True
+    delta = choice.get("delta")
+    return isinstance(delta, dict) and any(delta.get(k) for k in OUTPUT_FIELDS)
+
+
 def _parse_sse_line(line: str) -> Optional[Dict[str, Any]]:
     if not line.startswith("data:"):
         return None
@@ -486,12 +507,12 @@ async def _one_request(
                 choices = obj.get("choices") or []
                 if choices:
                     ch = choices[0]
+                    if first is None and generated(ch):
+                        first = time.perf_counter()
                     text = ch.get("text")
                     if text is None and isinstance(ch.get("delta"), dict):
                         text = ch["delta"].get("content")
                     if text:
-                        if first is None:
-                            first = time.perf_counter()
                         chunks += 1
                         pieces.append(text)
                 usage = obj.get("usage")

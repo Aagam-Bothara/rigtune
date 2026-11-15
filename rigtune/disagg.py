@@ -38,7 +38,7 @@ import httpx
 # Module level on purpose: with postponed annotations FastAPI resolves `request: Request` from the
 # module's globals, so a function-local import leaves it unresolved and every call returns 422.
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from starlette.background import BackgroundTask
 
 from rigtune.backends.base import BaseBackend, Process
@@ -47,6 +47,7 @@ from rigtune.calibrate.objectives import Constraints, pick
 from rigtune.calibrate.workload import Workload
 from rigtune.models import Config, DisaggSpec, GPUInfo, HardwareDescriptor, PreparedModel, Profile, TrialMetrics, TrialResult
 from rigtune.power import PowerSetting, setting_of, with_power
+from rigtune.serve.streaming import ClosingStreamingResponse, ManagedResponse
 from rigtune.serve.supervisor import MISSES_TOLERATED
 
 logger = logging.getLogger(__name__)
@@ -253,11 +254,11 @@ def create_pd_app(prefill_url: str, decode_url: str, profile: Optional[Profile] 
             up = await client.send(req, stream=True)
         except httpx.HTTPError as exc:
             return _err(f"decode engine unavailable: {exc}")
+        managed = ManagedResponse(up)  # closed once, whether the stream ends, fails or is cancelled early
         if "text/event-stream" in up.headers.get("content-type", ""):
-            return StreamingResponse(up.aiter_raw(), status_code=up.status_code, media_type="text/event-stream",
-                                     background=BackgroundTask(up.aclose))
-        content = await up.aread()
-        await up.aclose()
+            return ClosingStreamingResponse(managed.iter_bytes(), close=managed.close, status_code=up.status_code,
+                                            media_type="text/event-stream", background=BackgroundTask(managed.close))
+        content = await managed.read()
         return Response(content=content, status_code=up.status_code, media_type=up.headers.get("content-type"))
 
     @app.post("/v1/completions")

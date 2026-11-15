@@ -63,6 +63,15 @@ def test_calibration_records_the_winners_served_stats(hw_gtx1080, spec, monkeypa
     assert profile.workload_spec["prompt_tokens_seen"] == winner.metrics.prompt_tokens_seen
 
 
+def _stream(watch, reply: bytes) -> None:
+    """One streamed reply, read as the proxy reads it."""
+    from rigtune.serve.streaming import StreamObserver
+
+    observer = StreamObserver(watch, 0.0, time_first=False)
+    observer.feed(reply)
+    observer.finish()
+
+
 def _usage_chunk(prompt, cached=None):
     usage = {"prompt_tokens": prompt, "completion_tokens": 5}
     if cached is not None:
@@ -76,7 +85,7 @@ def test_live_reuse_is_reported_and_never_warned_about():
                           "reuse_achieved": 0.6}, min_requests=1)
     for i in range(60):
         watch.began()
-        watch.record_stream_chunk(_usage_chunk(200, 100 if i % 2 else None))  # SGLang omits a zero count
+        _stream(watch, _usage_chunk(200, 100 if i % 2 else None))  # SGLang omits a zero count
         watch.ended()
     report = watch.report()
     assert report["prefix_reuse"] == {"live": 0.25, "calibrated": 0.6, "replies_counted": 60}
@@ -86,7 +95,7 @@ def test_live_reuse_is_reported_and_never_warned_about():
 
 def test_a_flat_profiles_report_keeps_its_shape():
     watch = TrafficWatch({"name": "flat"})
-    watch.record_stream_chunk(_usage_chunk(9))
+    _stream(watch, _usage_chunk(9))
     watch.record_response(json.dumps({"usage": {"prompt_tokens": 10, "completion_tokens": 2,
                                                 "prompt_tokens_details": {"cached_tokens": 5}}}).encode(),
                           "application/json")

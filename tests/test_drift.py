@@ -274,9 +274,13 @@ def test_a_rate_within_a_factor_of_two_is_not_drift():
 def test_token_counts_are_taken_from_a_streamed_usage_chunk():
     watch = TrafficWatch(CHAT)
     watch.began()
-    watch.record_stream_chunk(b'data: {"choices":[{"delta":{"content":"x"}}]}\n\n')
-    watch.record_stream_chunk(
+    from rigtune.serve.streaming import StreamObserver
+
+    reply = StreamObserver(watch, 0.0, time_first=False)  # what the proxy feeds each streamed reply through
+    reply.feed(b'data: {"choices":[{"delta":{"content":"x"}}]}\n\n')
+    reply.feed(
         b'data: {"choices":[],"usage":{"prompt_tokens":700,"completion_tokens":120}}\n\ndata: [DONE]\n\n')
+    reply.finish()
     watch.ended()
 
     report = watch.report()

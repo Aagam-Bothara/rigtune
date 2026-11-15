@@ -28,7 +28,7 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 # Module level: with postponed annotations FastAPI resolves `request: Request` from module globals.
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from starlette.background import BackgroundTask
 
 from rigtune.backends.base import BaseBackend, Process
@@ -38,6 +38,7 @@ from rigtune.calibrate.workload import Workload
 from rigtune.disagg import ProcessServer, _free_ports, nvidia_gpus
 from rigtune.models import Config, HardwareDescriptor, PreparedModel, Profile, TrialMetrics, TrialResult
 from rigtune.serve.proxy import HOP_BY_HOP, media_refusal
+from rigtune.serve.streaming import ClosingStreamingResponse, ManagedResponse
 
 logger = logging.getLogger(__name__)
 
@@ -123,16 +124,15 @@ def create_lb_app(upstreams: List[str], profile: Optional[Profile] = None,
             logger.warning("load balancer: replica %d unavailable: %s", i, exc)
             return JSONResponse({"error": {"message": f"replica {i} unavailable: {exc}", "type": "upstream_error"}},
                                 status_code=502)
-
-        async def close() -> None:
-            await up.aclose()
+        except BaseException:  # cancelled while connecting: the replica's slot is still released
             _release(i)
-
+            raise
+        # Closed and released once, whether the stream ends, fails or is cancelled before its first chunk.
+        managed = ManagedResponse(up, on_close=lambda: _release(i))
         if "text/event-stream" in up.headers.get("content-type", ""):
-            return StreamingResponse(up.aiter_raw(), status_code=up.status_code, media_type="text/event-stream",
-                                     background=BackgroundTask(close))
-        content = await up.aread()
-        await close()
+            return ClosingStreamingResponse(managed.iter_bytes(), close=managed.close, status_code=up.status_code,
+                                            media_type="text/event-stream", background=BackgroundTask(managed.close))
+        content = await managed.read()
         return Response(content=content, status_code=up.status_code, media_type=up.headers.get("content-type"))
 
     return app
