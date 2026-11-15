@@ -661,6 +661,61 @@ def selfcheck(
 
 
 @app.command()
+def conformance(
+    engine: str = typer.Argument(..., help="vllm or sglang"),
+    model: str = typer.Option("Qwen/Qwen2.5-0.5B-Instruct", "--model", help="The small model most checks launch"),
+    hybrid_model: Optional[str] = typer.Option(None, "--hybrid-model", help="A hybrid-attention model with its own MTP "
+                                               "head, e.g. Qwen/Qwen3.5-9B: adds C10 and MTP to C06"),
+    multimodal_model: Optional[str] = typer.Option(None, "--multimodal-model", help="A multimodal checkpoint for "
+                                                   "vLLM's text-only launch (C08)"),
+    out: Path = typer.Option(Path("conformance"), "--out", help="Where the record and the engine logs go"),
+    only: Optional[str] = typer.Option(None, "--only", help="Comma-separated check ids to run, e.g. C01,C04"),
+    startup_timeout: float = typer.Option(900.0, "--startup-timeout", help="Seconds each launch may take to start"),
+) -> None:
+    """Check on this machine's GPU that an installed engine release does what rigtune plans for, and write the record
+    that adds it to the checked releases. Exits 0 when the release is certified. Has never run on a GPU."""
+    from rigtune import conformance as cf
+    from rigtune.backends import registry
+    from rigtune.hardware import probe as _probe
+
+    if engine not in ("vllm", "sglang"):
+        err.print(f"[red]conformance checks vllm or sglang, not {engine!r}[/]")
+        raise typer.Exit(2)
+    hw = _probe()
+    if hw.gpu is None or hw.gpu.vendor != "nvidia":
+        err.print("[red]rigtune conformance needs an NVIDIA GPU: every check but the probe launches the engine[/]")
+        raise typer.Exit(2)
+    found = hw.backends.get(engine)
+    if found is None or not found.available:
+        err.print(f"[red]{engine} is not available here: {found.reason if found else 'not found'}[/]")
+        raise typer.Exit(2)
+    roles = {"small": model, "hybrid": hybrid_model, "multimodal": multimodal_model}
+    backend = registry()[engine]
+    run = cf.Conformance(engine, backend, hw, _conformance_models(backend, hw, roles), out,
+                         startup_timeout=startup_timeout, reporting=registry(report_reuse=True)[engine],
+                         only=[c.strip() for c in only.split(",") if c.strip()] if only else None)
+
+    def progress(r) -> None:
+        colour = {"pass": "green", "fail": "red", "skip": "yellow"}[r.status]
+        console.print(f"[{colour}]{r.status:4}[/] {r.id} {r.name}" + (f": {r.detail}" if r.detail else ""),
+                      highlight=False)
+
+    results = run.run(progress=progress)
+    facts = backend.facts()
+    version = (facts.version if facts is not None and facts.version else None) or hw.backend_version(engine) or "unknown"
+    rec = cf.record(engine, version, hw, results, facts, {k: v for k, v in roles.items() if v})
+    path = cf.write(out, rec)
+    verdict = "certified" if rec["certified"] else "not certified (C01 to C05 must pass and C07 must not fail)"
+    console.print(f"{engine} {version} on {rec['card']}: {verdict}. Record: {path}")
+    raise typer.Exit(0 if rec["certified"] else 1)
+
+
+def _conformance_models(backend, hw, roles: dict) -> dict:
+    """PreparedModel per role ("small", "hybrid", "multimodal") for the models given."""
+    return {role: backend.prepare(ModelSpec(hf_id=hf_id), hw) for role, hf_id in roles.items() if hf_id}
+
+
+@app.command()
 def probe(
     as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
     engines: bool = typer.Option(False, "--engines", help="Also ask vLLM and SGLang, in their own Python, what they "

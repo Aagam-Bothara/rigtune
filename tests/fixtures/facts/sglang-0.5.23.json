@@ -1,4 +1,37 @@
 {
+ "arch_sets": {
+  "mamba_extra_buffer": [
+   "BailingMoeV2_5ForCausalLM",
+   "BailingMoeV3ForCausalLM",
+   "BailingMoeV3VLForConditionalGeneration",
+   "FalconH1ForCausalLM",
+   "Glm5NextForConditionalGeneration",
+   "GraniteMoeHybridForCausalLM",
+   "InklingForConditionalGeneration",
+   "InklingForConditionalGenerationMTP",
+   "InternS2PreviewForConditionalGeneration",
+   "KimiK3ForConditionalGeneration",
+   "KimiLinearForCausalLM",
+   "MiniCPMV4_6ForConditionalGeneration",
+   "MiniCPMV4_7ForConditionalGeneration",
+   "NemotronHForCausalLM",
+   "NemotronHPuzzleForCausalLM",
+   "NemotronH_Omni_Reasoning_V3",
+   "Qwen3NextForCausalLM",
+   "Qwen3_5ForCausalLM",
+   "Qwen3_5ForConditionalGeneration",
+   "Qwen3_5MoeForCausalLM",
+   "Qwen3_5MoeForConditionalGeneration",
+   "Qwen4ExpForConditionalGeneration"
+  ],
+  "swa_sink": [
+   "GptOssForCausalLM",
+   "GraniteMoeSWAForCausalLM",
+   "GraniteSWAForCausalLM",
+   "IQuestQ1ForCausalLM",
+   "IQuestQ1MTP"
+  ]
+ },
  "archs": [
   "AfmoeForCausalLM",
   "ApertusForCausalLM",
@@ -1173,6 +1206,7 @@
   "watermark"
  ],
  "sources": {
+  "arch_sets": "python/sglang/srt/arg_groups/overrides.py:403 _MAMBA_EXTRA_BUFFER_ARCHS and python/sglang/srt/configs/model_config.py:88 SWA_SINK_ARCHS",
   "archs": "python/sglang/srt/models/*.py: the classes each module's top-level EntryClass names (models/registry.py import_model_classes)",
   "env_vars": "python/sglang/srt/environ.py class Envs (line 251)",
   "flags --enable-cache-report": "python/sglang/srt/arg_groups/fields/serving.py:196",

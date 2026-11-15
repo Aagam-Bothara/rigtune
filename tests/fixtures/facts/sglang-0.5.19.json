@@ -1,4 +1,28 @@
 {
+ "arch_sets": {
+  "mamba_extra_buffer": [
+   "BailingMoeV2_5ForCausalLM",
+   "BailingMoeV3ForCausalLM",
+   "FalconH1ForCausalLM",
+   "GraniteMoeHybridForCausalLM",
+   "InternS2PreviewForConditionalGeneration",
+   "KimiK3ForConditionalGeneration",
+   "KimiLinearForCausalLM",
+   "MiniCPMV4_6ForConditionalGeneration",
+   "NemotronHForCausalLM",
+   "NemotronHPuzzleForCausalLM",
+   "Qwen3NextForCausalLM",
+   "Qwen3_5ForCausalLM",
+   "Qwen3_5ForConditionalGeneration",
+   "Qwen3_5MoeForCausalLM",
+   "Qwen3_5MoeForConditionalGeneration"
+  ],
+  "swa_sink": [
+   "GptOssForCausalLM",
+   "GraniteMoeSWAForCausalLM",
+   "GraniteSWAForCausalLM"
+  ]
+ },
  "archs": [
   "AfmoeForCausalLM",
   "ApertusForCausalLM",
@@ -942,6 +966,7 @@
   "video_config"
  ],
  "sources": {
+  "arch_sets": "python/sglang/srt/arg_groups/overrides.py:519 _MAMBA_EXTRA_BUFFER_ARCHS and python/sglang/srt/configs/model_config.py:54 SWA_SINK_ARCHS",
   "archs": "python/sglang/srt/models/*.py: the classes each module's top-level EntryClass names (models/registry.py import_model_classes)",
   "env_vars": "python/sglang/srt/environ.py class Envs (line 257)",
   "flags --enable-cache-report": "python/sglang/srt/server_args.py:1353",
