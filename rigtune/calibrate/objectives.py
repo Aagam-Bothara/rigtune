@@ -1,12 +1,16 @@
-"""The four objectives. All are constrained argmax; no weighted score formula in v1.
+"""Goals: one metric to optimise within limits. Every objective is a constrained argmax; there is no weighted score.
 
-| objective   | rule                                   |
-|-------------|----------------------------------------|
-| throughput  | max tok/s                              |
-| latency     | min request latency (TTFT + TPOT x tokens) s.t. tok/s >= floor |
-| balanced    | max tok/s  s.t. TTFT p95 <= ceiling    |
-| efficiency  | min J/tok  s.t. tok/s >= floor         |
-| efficiency at --arrival-rate λ | min J/request at λ  s.t. λ sustainable, TTFT p95 <= ceiling |
+| objective   | goal (resolve_goal)                                                            |
+|-------------|--------------------------------------------------------------------------------|
+| throughput  | max tok_s                                                                      |
+| latency     | min request_latency_ms (TTFT + TPOT x tokens); tok_s >= floor                  |
+| balanced    | max tok_s; ttft_p95_ms (or ttft_p50_ms) <= ceiling                             |
+| efficiency  | min joules_per_token; tok_s >= floor (tok/s ordering without energy readings) |
+| efficiency at --arrival-rate λ | min J/request at λ  s.t. λ sustainable, TTFT p95 <= ceiling (_rank_at_rate) |
+| custom      | the goal in Constraints.goal, e.g. `min joules_per_token; power_w<=250`         |
+
+The TPOT ceiling, when set, is a limit of every goal. The metrics a goal can name are in METRICS; a custom goal
+that says what a preset says is that preset (rigtune/goals.py), so `custom` is only ever a goal no preset expresses.
 
 Floors default to a fraction of the best observed tok/s; the ceiling defaults to an absolute
 TTFT. If nothing satisfies the constraint, the least-violating candidate is chosen and the

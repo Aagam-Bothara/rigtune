@@ -128,6 +128,34 @@ Because most trials die there, and dying early is cheap. Trials run their heavie
 cannot beat the leader, which cut 29–45% off calibration across the Llama runs and changed no pick
 ([evidence](benchmarks.md#measuring-the-busiest-level-first)).
 
+## Why one metric within limits, not a weighted score?
+
+Because a weight has no unit anyone can check. "0.6 × tok/s + 0.4 × (1 / TTFT)" mixes tokens per second with
+milliseconds, so its pick moves with the weights' scale and nobody can say whether a 3% throughput gain is worth
+40 ms of tail latency without the answer already in mind. A limit is a number an operator already has, a TTFT
+SLO, a power budget, a price, and a pick within it can be checked against it. So a goal is one metric to optimise
+and any number of limits ([usage](usage.md#stating-your-own-goal)): still the constrained argmax the four presets
+always were, and the presets are four such goals, built from the same fields, scoring exactly as before (every
+recorded calibration table, under each preset and seven sets of constraints, ranks with `==` the same as a frozen
+copy of the old code, `tests/test_preset_pins.py`). When nothing meets every limit a custom goal picks what misses
+the fewest, then what is least far past them relative to each bound: excesses in milliseconds and watts do not add
+up either. The presets keep summing each excess in its own unit, a second convention kept so that no preset pick
+moves. A goal a preset says is that preset, with its cache file, so no question is calibrated twice; and what the
+limits cost is shown, from the recorded trials, rather than folded into a score
+([trade-off table](usage.md#what-the-limits-cost-the-trade-off-table)).
+
+## Why do most custom goals measure every level?
+
+Because only a metric that improves with load lets the busiest level that meets the limits settle a trial. Tokens
+per second rises with load, so for a goal optimising `tok_s` (or `cost_per_mtok` at an hourly price alone, which
+is that price over tok/s) no quieter level can beat the first one that meets every limit, and stopping there
+skipped 35% of calibration time in the replay that checked it, changing no score and no pick
+([evidence](benchmarks.md#measuring-the-busiest-level-first)). Time to first token, time per token and request
+latency get worse with load, and energy per token and cost with an energy price can move either way, so for those
+a quieter level may win and an early stop could miss the winner; measuring every level never does, at about half
+as long again per trial. Stopping bottom-up for metrics that worsen with load would be sound on the same argument
+mirrored, but it has not been checked on recorded calibrations the way the top-down stop was, so it is not used.
+
 ## Why score energy per request at an arrival rate?
 
 Because joules per token measured closed-loop describes a server that is never idle, and most servers are. The
