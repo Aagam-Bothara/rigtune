@@ -35,6 +35,11 @@ UNITS: Dict[str, Dict[str, float]] = {
 KIND = {"ttft_p95_ms": "time", "ttft_p50_ms": "time", "tpot_ms": "time", "request_latency_ms": "time",
         "power_w": "power", "mem_mb": "memory"}
 
+# The accuracy gate's limit (accuracy_gate.py): not a per-level metric but a loss certified on --eval-set, so it
+# sets --max-accuracy-loss rather than joining the goal. In accuracy points; `1%` is one point too.
+ACCURACY = "accuracy_loss"
+DEFAULT_MAX_LOSS = 3.0  # --max-accuracy-loss's default (pipeline.SearchOptions)
+
 _LIMIT = re.compile(r"\s*(?P<metric>[A-Za-z0-9_]+)\s*(?P<op><=|>=|=<|=>|<|>|=)?\s*(?P<rest>.*?)\s*")
 _VALUE = re.compile(r"(?P<num>\d+(?:\.\d*)?|\.\d+)\s*(?P<unit>[a-z%]*)")
 
@@ -66,8 +71,10 @@ def parse_limit(text: str) -> Limit:
     if op is None and not rest:
         raise GoalError(f"{text!r} has no bound: quote the limit, --limit \"{text}>=N\"; unquoted, the shell took "
                         "`>` (or `<`) as a redirect")
+    if name == ACCURACY:
+        return _accuracy_limit(text, op, rest)
     if name not in METRICS:
-        raise GoalError(f"unknown metric {name!r}; --limit takes one of {_names()}")
+        raise GoalError(f"unknown metric {name!r}; --limit takes one of {_names()}, {ACCURACY}")
     metric = METRICS[name]
     wanted = "<=" if metric.sense == "min" else ">="
     if op in ("<", ">", "=", None):
@@ -98,12 +105,26 @@ def parse_limit(text: str) -> Limit:
     return Limit(name, op, round(number * scale, 9))
 
 
+def _accuracy_limit(text: str, op: Optional[str], rest: str) -> Limit:
+    if op != "<=" and op != "=<":
+        raise GoalError(f"{text!r}: {ACCURACY} is better lower, so its limit is <=")
+    v = _VALUE.fullmatch(rest.lower())
+    if v is None or v["unit"] not in ("", "%", "points", "point"):
+        raise GoalError(f"{text!r}: {ACCURACY} is in accuracy points, e.g. \"{ACCURACY}<=1\" (1% is one point)")
+    points = float(v["num"])
+    if not 0 < points < 100:
+        raise GoalError(f"{text!r}: a loss in accuracy points, above 0 and below 100")
+    return Limit(ACCURACY, "<=", points)
+
+
 @dataclass(frozen=True)
 class Resolved:
     objective: str  # a preset's name, or custom
     constraints: Constraints
     ttft_percentile: int  # for the search options, whose cache key names it under balanced
     line: str  # what the run says before it starts: the goal, and whether a preset says the same
+    # The accuracy gate's tolerance, in points: --max-accuracy-loss, or an accuracy_loss limit.
+    max_accuracy_loss: float = DEFAULT_MAX_LOSS
 
 
 def _same(stated: Dict[str, Limit], lim: Limit, how: str) -> None:
@@ -117,19 +138,36 @@ def _same(stated: Dict[str, Limit], lim: Limit, how: str) -> None:
 def resolve(objective: Optional[str], optimise: Optional[str], limits: Sequence[str], *,
             ttft_ceiling: Optional[float], ttft_percentile: int, tok_s_floor: Optional[float],
             tpot_ceiling: Optional[float], workload_ttft_ms: float, workload_tpot_ms: Optional[float],
-            arrival_rate: Optional[float] = None, strict: bool = False) -> Resolved:
+            arrival_rate: Optional[float] = None, strict: bool = False, eval_set: Optional[str] = None,
+            max_accuracy_loss: float = DEFAULT_MAX_LOSS) -> Resolved:
     """The objective and constraints of a goal stated with --optimise or --limit.
 
     With --optimise, the older --ttft-ceiling, --tok-s-floor and --tpot-ceiling state limits of that goal, and a goal a
     preset says is that preset. With --objective (balanced when neither is given) the older flags keep the meaning
     they have always had for that preset, and each --limit becomes the preset's own setting where it has one (_added).
 
-    The workload's TPOT ceiling applies to every goal unless a limit or --tpot-ceiling replaces it."""
+    The workload's TPOT ceiling applies to every goal unless a limit or --tpot-ceiling replaces it. An accuracy_loss
+    limit is the accuracy gate's tolerance, --max-accuracy-loss with --eval-set, and no part of the goal: a --limit
+    that holds only it leaves the preset and the older flags exactly as without it."""
     if optimise is not None and objective is not None:
         raise GoalError("--optimise states the goal; leave out --objective, which names a preset one")
     stated: Dict[str, Limit] = {}
     for text in limits:
         _same(stated, parse_limit(text), "two --limit options")
+    accuracy = stated.pop(ACCURACY, None)
+    if accuracy is not None:
+        if not eval_set:
+            raise GoalError(f"{ACCURACY} is certified on labelled items: add --eval-set gsm8k (or a JSONL file of "
+                            "them)")
+        if max_accuracy_loss not in (DEFAULT_MAX_LOSS, accuracy.bound):
+            raise GoalError(f"{ACCURACY} is limited twice, differently (--limit and --max-accuracy-loss)")
+        max_accuracy_loss = accuracy.bound
+
+    def finish(r: Resolved) -> Resolved:
+        graded = (f", with answers graded on {eval_set} to lose at most {max_accuracy_loss:g} points"
+                  if accuracy is not None else "")
+        return dataclasses.replace(r, line=r.line + graded, max_accuracy_loss=max_accuracy_loss)
+
     if ttft_percentile < 95 and "ttft_p95_ms" in stated:
         raise GoalError("--ttft-percentile 50 judges the median, and the limit names the 95th percentile: limit "
                         "ttft_p50_ms, or leave out --ttft-percentile")
@@ -141,7 +179,7 @@ def resolve(objective: Optional[str], optimise: Optional[str], limits: Sequence[
     base = dict(ttft_ceiling_ms=workload_ttft_ms, ttft_percentile=ttft_percentile, tpot_ceiling_ms=tpot_ms,
                 arrival_rate=arrival_rate, strict=strict)
     if optimise is None:
-        return _added(objective or "balanced", stated, base, ttft_ceiling, tok_s_floor, from_workload)
+        return finish(_added(objective or "balanced", stated, base, ttft_ceiling, tok_s_floor, from_workload))
     if ttft_ceiling is not None:
         _same(stated, Limit(ttft_metric(ttft_percentile), "<=", ttft_ceiling), "--limit and --ttft-ceiling")
     if tok_s_floor is not None:
@@ -159,8 +197,8 @@ def resolve(objective: Optional[str], optimise: Optional[str], limits: Sequence[
     elif preset_name is None:
         base.update(goal=format_goal(goal))
     said = f"the {preset_name} preset" if preset_name is not None else "a custom goal, cached under its own name"
-    return Resolved(preset_name or CUSTOM, Constraints(**base), pct,
-                    _line(goal, tpot_ms, from_workload, preset_name, said))
+    return finish(Resolved(preset_name or CUSTOM, Constraints(**base), pct,
+                           _line(goal, tpot_ms, from_workload, preset_name, said)))
 
 
 def _added(preset: str, stated: Dict[str, Limit], base: Dict[str, Any], ttft_ceiling: Optional[float],

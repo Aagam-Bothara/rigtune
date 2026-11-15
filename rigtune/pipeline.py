@@ -1113,6 +1113,60 @@ def check_distributed_options(opts: SearchOptions, hw: HardwareDescriptor, layou
                          "once, so it would not run the rounds asked for")
 
 
+POWER_METRICS = ("joules_per_token", "power_w")  # read from NVML's power readings, and from nothing else
+
+
+def power_reading_problem(hw: HardwareDescriptor) -> Optional[str]:
+    """Why NVML cannot read the power of the GPU a single-engine trial runs on, or None when one reading succeeds."""
+    gpu = hw.gpu
+    if gpu is None or gpu.vendor != "nvidia":
+        return "no NVIDIA GPU is visible"
+    try:
+        import pynvml  # type: ignore
+    except ImportError:
+        return "pynvml is not installed (pip install nvidia-ml-py)"
+    try:
+        pynvml.nvmlInit()
+    except Exception as exc:
+        return f"NVML did not start ({exc})"
+    try:
+        pynvml.nvmlDeviceGetPowerUsage(pynvml.nvmlDeviceGetHandleByIndex(gpu.index))
+    except Exception as exc:
+        return f"GPU {gpu.index} gives no power readings ({exc})"
+    finally:
+        try:
+            pynvml.nvmlShutdown()
+        except Exception:
+            pass
+    return None
+
+
+def check_goal_measurable(objective: str, constraints: Optional[Constraints], opts: SearchOptions,
+                          hw: HardwareDescriptor, layout: str = "single", phases: str = "unified",
+                          power_probe: Optional[Callable[[HardwareDescriptor], Optional[str]]] = None,
+                          power: bool = True) -> None:
+    """Refuse, once the hardware is probed and before any weights download, a custom goal this machine cannot
+    measure or this version cannot calibrate. The presets are never refused here: `efficiency` without power
+    readings still orders by tok/s, as it always has. `power=False` leaves out the power reading, for a caller that
+    may serve a cached profile and so measure nothing."""
+    if objective != CUSTOM:
+        return
+    goal = resolve_goal(objective, effective_constraints(constraints, None, opts))
+    where = distributed_arrangement(hw, layout, phases)
+    if where is not None:
+        raise OptionRefused(f"a custom goal is calibrated for one engine on one GPU; {where} is not offered with "
+                            "one yet. Use --layout single and --phases unified, or a preset objective")
+    if opts.arrival_rate is not None:
+        raise OptionRefused("--arrival-rate scores energy per request under --objective efficiency only, not a "
+                            "custom goal")
+    needs = [name for name in (goal.optimise, *(lim.metric for lim in goal.limits)) if name in POWER_METRICS]
+    if needs and power:
+        problem = (power_probe or power_reading_problem)(hw)
+        if problem is not None:
+            raise OptionRefused(f"the goal reads the GPU's power ({', '.join(dict.fromkeys(needs))}), but {problem}; "
+                                "a custom goal never falls back to another metric")
+
+
 def resolve_profile(
     spec: ModelSpec,
     objective: str = "balanced",
@@ -1144,6 +1198,7 @@ def resolve_profile(
         raise RuntimeError("choose either --phases (disaggregated prefill/decode) or --layout (replicas, tp), not both")
     if not skip_calibration:
         check_distributed_options(opts, hw, layout, phases)
+        check_goal_measurable(objective, constraints, opts, hw, layout, phases, power=False)
     if phases != "unified" and not skip_calibration:
         return _resolve_phased(spec, objective, force_backend, recalibrate, workload, constraints, progress, hw,
                                on_stage, power_mode, phases, kv_connector, opts)
@@ -1156,6 +1211,8 @@ def resolve_profile(
         if _usable(cached, opts, force_backend, constraints, workload):
             say("cache hit")
             return cached
+    if not skip_calibration:  # about to measure: a goal that reads power needs it (a cache hit measures nothing)
+        check_goal_measurable(objective, constraints, opts, hw)
     say("select")
     candidates, reg = select(hw, spec, force=force_backend, workload=workload, report_reuse=opts.report_reuse)
     if not candidates:

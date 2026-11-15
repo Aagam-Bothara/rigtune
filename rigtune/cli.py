@@ -222,23 +222,27 @@ def _constraints(ttft_ceiling: Optional[float], tok_s_floor: Optional[float], wo
 
 def _goal(objective: Optional[str], optimise: Optional[str], limits: Optional[List[str]],
           ttft_ceiling: Optional[float], ttft_percentile: int, tok_s_floor: Optional[float],
-          tpot_ceiling: Optional[float], wl, arrival_rate: Optional[float], strict: bool):
-    """(objective, constraints, TTFT percentile for the search options): a preset named by --objective (balanced
-    when none is), or a goal stated with --optimise and --limit, which is a preset when one says the same thing
-    (rigtune/goals.py). Refused before anything is probed; a stated goal is said once before calibration."""
+          tpot_ceiling: Optional[float], wl, arrival_rate: Optional[float], strict: bool,
+          eval_set: Optional[str] = None, max_accuracy_loss: float = 3.0):
+    """(objective, constraints, TTFT percentile and accuracy-loss tolerance for the search options): a preset named
+    by --objective (balanced when none is), or a goal stated with --optimise and --limit, which is a preset when one
+    says the same thing (rigtune/goals.py). Refused before anything is probed; a stated goal is said once before
+    calibration."""
     if optimise is None and not limits:
         return (objective or "balanced", _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile,
-                                                      arrival_rate, strict=strict), ttft_percentile)
+                                                      arrival_rate, strict=strict), ttft_percentile,
+                max_accuracy_loss)
     from rigtune.goals import GoalError, resolve
 
     try:
         r = resolve(objective, optimise, limits or [], ttft_ceiling=ttft_ceiling, ttft_percentile=ttft_percentile,
                     tok_s_floor=tok_s_floor, tpot_ceiling=tpot_ceiling, workload_ttft_ms=wl.ttft_ceiling_ms,
-                    workload_tpot_ms=wl.tpot_ceiling_ms, arrival_rate=arrival_rate, strict=strict)
+                    workload_tpot_ms=wl.tpot_ceiling_ms, arrival_rate=arrival_rate, strict=strict,
+                    eval_set=eval_set, max_accuracy_loss=max_accuracy_loss)
     except GoalError as exc:
         raise typer.BadParameter(str(exc), param_hint="--optimise/--limit") from None
     err.print(r.line, style="dim", markup=False, highlight=False)
-    return r.objective, r.constraints, r.ttft_percentile
+    return r.objective, r.constraints, r.ttft_percentile, r.max_accuracy_loss
 
 
 def _power_mode(value: str) -> str:
@@ -781,11 +785,18 @@ def bench(
     """Run calibration and print the table; do not serve."""
     from rigtune import cache as profile_cache
     from rigtune.hardware import probe as _probe
-    from rigtune.pipeline import calibrate, check_distributed_options, prepare_and_plan, select
+    from rigtune.pipeline import (
+        calibrate,
+        check_distributed_options,
+        check_goal_measurable,
+        prepare_and_plan,
+        select,
+    )
 
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
-    objective, cons, ttft_percentile = _goal(objective, optimise, limit, ttft_ceiling, ttft_percentile,
-                                             tok_s_floor, tpot_ceiling, wl, arrival_rate, strict_constraints)
+    objective, cons, ttft_percentile, max_accuracy_loss = _goal(
+        objective, optimise, limit, ttft_ceiling, ttft_percentile, tok_s_floor, tpot_ceiling, wl, arrival_rate,
+        strict_constraints, eval_set, max_accuracy_loss)
     _check_rate(objective, arrival_rate)
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)
@@ -802,6 +813,7 @@ def bench(
                  confirm_rounds=confirm_rounds, min_requests=min_requests)
     try:  # as resolve_profile does: refused before the weights download and the search runs
         check_distributed_options(opts, hw, layout, phases)
+        check_goal_measurable(objective, cons, opts, hw, layout, phases)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from None
     if layout != "single" and opts.kv_tier != "off":  # as pipeline._resolve_layout does
@@ -881,8 +893,9 @@ def recalibrate(
     from rigtune.pipeline import resolve_profile
 
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
-    objective, cons, ttft_percentile = _goal(objective, optimise, limit, ttft_ceiling, ttft_percentile,
-                                             tok_s_floor, tpot_ceiling, wl, arrival_rate, strict_constraints)
+    objective, cons, ttft_percentile, max_accuracy_loss = _goal(
+        objective, optimise, limit, ttft_ceiling, ttft_percentile, tok_s_floor, tpot_ceiling, wl, arrival_rate,
+        strict_constraints, eval_set, max_accuracy_loss)
     _check_rate(objective, arrival_rate)
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)
@@ -999,8 +1012,9 @@ def compare(
     from rigtune.pipeline import prepare_and_plan, resolve_profile, select
 
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
-    objective, cons, ttft_percentile = _goal(objective, optimise, limit, ttft_ceiling, ttft_percentile,
-                                             tok_s_floor, tpot_ceiling, wl, arrival_rate, strict_constraints)
+    objective, cons, ttft_percentile, max_accuracy_loss = _goal(
+        objective, optimise, limit, ttft_ceiling, ttft_percentile, tok_s_floor, tpot_ceiling, wl, arrival_rate,
+        strict_constraints, eval_set, max_accuracy_loss)
     _check_rate(objective, arrival_rate)
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)
@@ -1415,8 +1429,9 @@ def serve(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from None
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
-    objective, cons, ttft_percentile = _goal(objective, optimise, limit, ttft_ceiling, ttft_percentile,
-                                             tok_s_floor, tpot_ceiling, wl, arrival_rate, strict_constraints)
+    objective, cons, ttft_percentile, max_accuracy_loss = _goal(
+        objective, optimise, limit, ttft_ceiling, ttft_percentile, tok_s_floor, tpot_ceiling, wl, arrival_rate,
+        strict_constraints, eval_set, max_accuracy_loss)
     _check_rate(objective, arrival_rate)
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)

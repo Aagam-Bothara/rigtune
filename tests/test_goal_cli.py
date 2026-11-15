@@ -47,30 +47,30 @@ def _key(objective, cons, pct):
 ])
 def test_a_goal_a_preset_says_is_that_preset_with_its_profile(stated, legacy):
     new, old = _stated(**stated), _stated(**legacy)
-    assert new == old and _key(*new) == _key(*old)
+    assert new == old and _key(*new[:3]) == _key(*old[:3])
 
 
 def test_no_new_option_is_the_balanced_default_exactly_as_before():
-    objective, cons, pct = _stated()
-    assert (objective, pct) == ("balanced", 95)
+    objective, cons, pct, loss = _stated()
+    assert (objective, pct, loss) == ("balanced", 95, 3.0)
     assert cons == cli._constraints(None, None, WL, None, 95, None, strict=False)
     assert _key(objective, cons, pct) == {"ttft": "p95"}
 
 
 def test_a_share_of_the_best_throughput_other_than_half_is_a_preset_with_its_own_floor():
-    objective, cons, _ = _stated(optimise="joules_per_token", limits=["tok_s>=70%best"])
+    objective, cons, _, _ = _stated(optimise="joules_per_token", limits=["tok_s>=70%best"])
     assert objective == "efficiency" and cons.tok_s_floor_frac == 0.7 and cons.goal is None
     assert "limits" in _key(objective, cons, 95)
 
 
 def test_any_other_goal_is_custom_with_its_canonical_text():
-    objective, cons, pct = _stated(optimise="joules_per_token", limits=["ttft_p95_ms<=0.8s", "tok_s>=200"])
+    objective, cons, pct, _ = _stated(optimise="joules_per_token", limits=["ttft_p95_ms<=0.8s", "tok_s>=200"])
     assert objective == CUSTOM and cons.goal == "min joules_per_token; tok_s>=200; ttft_p95_ms<=800"
     assert (cons.tpot_ceiling_ms, cons.ttft_ceiling_ms, pct) == (50.0, 500.0, 95)  # the workload's
     key = _key(objective, cons, pct)
     assert key["optimise"] == "joules_per_token" and set(key) == {"optimise", "limits"}
     # Added to a preset: balanced's own TTFT ceiling stays, plus the limit.
-    objective, cons, _ = _stated(objective="balanced", limits=["mem_mb<=20GiB"])
+    objective, cons, _, _ = _stated(objective="balanced", limits=["mem_mb<=20GiB"])
     assert (objective, cons.goal) == (CUSTOM, "max tok_s; mem_mb<=20480; ttft_p95_ms<=500")
 
 
@@ -179,6 +179,7 @@ def test_serve_looks_up_the_profile_bench_saved_for_the_same_goal(monkeypatch, h
     monkeypatch.setattr(rigtune.pipeline, "prepare_and_plan", lambda *a, **k: plan)
     monkeypatch.setattr(rigtune.pipeline, "calibrate", calibrate)
     monkeypatch.setattr(rigtune.pipeline, "resolve_profile", resolve_profile)
+    monkeypatch.setattr(rigtune.pipeline, "power_reading_problem", lambda hw: None)  # as on a GPU that reads power
     argv = ["x/y", "--optimise", "joules_per_token", "--limit", "power_w<=250", "--limit", "ttft_p50_ms<=0.4s"]
     out = runner.invoke(cli.app, ["bench", *argv])
     assert isinstance(out.exception, Stop)
