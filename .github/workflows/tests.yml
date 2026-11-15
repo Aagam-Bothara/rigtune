@@ -18,8 +18,27 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install -e ".[dev]"
+      # The direct runtime dependencies at the versions the suite last passed with (constraints/core.txt).
+      - run: pip install -c constraints/core.txt -e ".[dev]"
       - run: ruff check rigtune tests benchmarks
+      # Type-checked: the two serving modules added with the opt-in limits, not the codebase as a whole.
+      - run: python -m mypy --follow-imports=skip --ignore-missing-imports rigtune/serve/limits.py rigtune/serve/streaming.py
+      - run: pytest
+
+  # The same suite on the newest releases the pyproject bounds allow, so a dependency release that breaks rigtune
+  # shows here before it reaches users, while the pinned job above stays reproducible.
+  test-unpinned:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install --upgrade -e ".[dev]"
       - run: pytest
 
   package:

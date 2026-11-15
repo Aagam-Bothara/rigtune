@@ -26,3 +26,5 @@
 - `rigtune serve` has an optional bearer API key and opt-in limits: `--max-in-flight N|measured` with a bounded
   queue, `--idle-timeout`, `--max-body-mb` and `--body-timeout`. All are off by default, so serving is unchanged.
 - `starlette` and `anyio` are declared as direct dependencies (fastapi already installed them).
+- CI pins the direct runtime dependencies (`constraints/core.txt`), keeps an unpinned job beside it, and
+  type-checks the two new serving modules with mypy.

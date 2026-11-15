@@ -43,7 +43,8 @@ nvml = ["nvidia-ml-py>=12.535.133"]
 # it from git: pip install "llmtrace @ git+https://github.com/Aagam-Bothara/llmtrace.git"
 # ruff is pinned: its default rules change between releases (0.16 added pyupgrade), so an unpinned
 # linter passed locally and failed in CI on the same code.
-dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "ruff==0.15.0"]
+# mypy is pinned for the same reason; CI runs it on the serving modules rigtune.serve.limits and .streaming only.
+dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "ruff==0.15.0", "mypy==1.19.1"]
 
 [project.urls]
 Homepage = "https://github.com/Aagam-Bothara/rigtune"

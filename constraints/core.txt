@@ -1,0 +1,15 @@
+# Exact versions of rigtune's direct runtime dependencies, as the CPU test suite passed with them on 14 November
+# 2026 (Windows, Python 3.13; Linux, Python 3.10 and 3.13). CI's pinned job installs with `pip install -c` this file;
+# its unpinned job installs the newest releases the pyproject bounds allow, so a new release that breaks rigtune
+# shows there first. This is not a lock of every transitive dependency, and engine, CUDA and torch environments are
+# provisioned separately.
+pydantic==2.11.9
+typer==0.21.1
+rich==14.3.1
+httpx==0.28.1
+fastapi==0.141.1
+starlette==0.48.0
+anyio==4.10.0
+uvicorn==0.40.0
+psutil==7.2.2
+huggingface_hub==1.33.0
