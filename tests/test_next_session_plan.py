@@ -386,7 +386,7 @@ def test_a_dry_run_of_the_plan_lists_every_phase_pending(plan, tmp_path, capsys)
     path.write_text(json.dumps(plan), encoding="utf-8")
     assert gs.main(["run", "--plan", str(path), "--root", str(tmp_path / "session"), "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert out.count("[pending]") == len(plan["phases"]) == 41 and not (tmp_path / "session").exists()
+    assert out.count("[pending]") == len(plan["phases"]) == 46 and not (tmp_path / "session").exists()
 
 
 def test_a_root_that_shell_commands_would_split_is_refused(tmp_path, capsys):

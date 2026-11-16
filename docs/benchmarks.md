@@ -606,3 +606,25 @@ As a separate manual G6 negative control, launch Gemma E2B as a plain draft for
 refuse it before launch. Recheck the engine assumption if SGLang refuses its map.
 None of this series proves new speedups. Predictions in the planning notes are
 hypotheses; publish measured acceptance, memory and quality beside any speed claim.
+
+
+### Kernel settings and start-up cost: not yet measured (K0-K5)
+
+`--kernel`, the start-up record and every rule behind them have run only against fake engines and hand-made log
+lines. The predictions below were written before any measurement. The session plan runs K0 to K4
+(`benchmarks/next_session_plan.py`); each check prints confirmed, refuted or undecided.
+
+| Check | Evidence required | Refuted when |
+|---|---|---|
+| K0 | Every launched trial has start-up seconds in the ledger; every vLLM trial that became ready has its graph-capture line read. Predicted: cold vLLM start 60-240 s, capture 5-40 s and 0.2-1.5 GiB | A ready vLLM trial with no line read: the patterns do not match the installed release |
+| K1 | The CUDA-graph modes vLLM said it changed, by release and speculation. Predicted: none under speculation on 0.33 below SM90; PIECEWISE on 0.29 with FlashInfer | A change `rigtune/kernels.py` calls impossible, or none where it expects one |
+| K2 | SGLang with `cgmax=64` against its leader at 64 users, on a 35-60 GB card (default cap 32). Predicted: +10% or more at 64 users, peak memory up by under 0.3 GiB | Under 3% at 64 users; out of memory at the same fraction; peak memory up by more than twice the planned term |
+| K3 | vLLM 0.33 with `attn=TRITON_ATTN` against its leader. Predicted: within 5% and not adopted | Adopted with more than 5%; or it cannot start with the leader's KV cache (then that is a rule to add) |
+| K4 | A configuration launched twice: the second launch loads its compiled graphs from vLLM's cache, except under `ngram_gpu` on the V1 runner. `O=1` within noise of the default | A second launch of one configuration that compiled again |
+| K5 | By hand: vLLM's `benchmarks/kernels/benchmark_moe.py --tune` on a card with no shipped MoE config finishes within 60 minutes and writes a config | Over 60 minutes, or no file |
+
+The automatic search over kernel settings and the MoE tuner are not built. They are built only if K2 shows 3% or
+more, K3 more than 5%, or a config from K5 gains 2% or more by hand; otherwise this table, filled in, closes the
+question and `--kernel` stays as the manual instrument. Also unmeasured: SGLang's start-up log lines (only its
+start-up seconds are recorded), the doubled graph term with a second model, and Triton attention with an fp8 KV
+cache on Ampere.

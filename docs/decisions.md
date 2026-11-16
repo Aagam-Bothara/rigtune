@@ -398,3 +398,21 @@ unknown. Assistant heads share target embeddings and have their own variant chec
 The engine contracts were checked in vLLM 0.29/0.33 and SGLang 0.5.19/0.5.23.
 A table proposes; revision-pinned evidence decides. Table mode remains the default
 until the planned cross-engine GPU check succeeds.
+
+
+## Why is a kernel setting tried only when named, and why does a tie lose?
+
+Engines expose attention backends, CUDA-graph modes, compile levels and kernel choices. Reading their source
+suggests most are worth nothing on most cards: the defaults are already chosen per card, and the two cases with a
+predicted gain (SGLang's decode cap at high load, a tuned MoE config) are specific. A search over all of them
+would spend calibration time on trials expected to tie. So one setting is tried when the user names it
+(`--kernel`), as a full trial judged by the objective like any other change, and the automatic search waits for a
+measurement that justifies it.
+
+A tie loses because a kernel setting is one more thing that can break on the next engine release, and an attention
+backend can change outputs slightly. Without a measured gain there is nothing to set against that.
+
+rigtune passes a setting only when the engine's own Python confirmed it has it, and there is no fallback that
+reads the engine's source: a second reader per release is where earlier misreadings came from. Rules about what an
+engine refuses or does anyway hold only for the releases they were read in; elsewhere the setting is tried and
+the engine's log, kept in the trial's start-up record, says what it actually ran.

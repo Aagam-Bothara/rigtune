@@ -277,3 +277,21 @@ counts and peak-memory logs with the session. The G1?G8 checklist in benchmarks.
 is still unmeasured. These phases do not establish speedups by merely completing;
 use held-out Dolly at eight users, a 500 ms p95 ceiling and three interleaved runs.
 Hub ids are used in session commands, avoiding local path rewriting by Git Bash.
+
+
+## Kernel checks
+
+Five phases follow the calibrations (K0 to K4 in benchmarks.md). `k0-startup` and `k1-rewrites` read the trial
+ledgers the calibrations already wrote: nothing is launched. `k2-sglang-cap`, `k3-vllm-triton` and
+`k4-compile-cache` each recalibrate the kernel model (`--kernel-model`, by default the session's dense model) with
+one `--kernel` setting under a 20-minute budget, then compare the setting's trial with its leader.
+
+Each check prints one line starting `confirmed`, `refuted` or `undecided` into the phase's `result.txt`, and the
+phase passes only on `confirmed`. A failed kernel phase is therefore a result to read, not a broken run: `refuted`
+means the prediction was wrong, `undecided` that nothing could be compared (the setting was not tried, a trial
+did not finish, or no log line was read). `k2-sglang-cap` means most on a 35-60 GB card, where SGLang's default
+cap is 32; on a 24 GB card with SGLang 0.5.23 the default is already 48.
+
+K5, the MoE tuner, is run by hand if time allows:
+`timeout 3600 python <vLLM source>/benchmarks/kernels/benchmark_moe.py --model <MoE model> --tp-size 1 --tune
+--save-dir <phase dir>/moe`. It needs vLLM's source tree and `ray`.

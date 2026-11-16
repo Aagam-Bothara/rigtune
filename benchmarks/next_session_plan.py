@@ -352,6 +352,49 @@ def build(a: argparse.Namespace) -> dict:
             "llm-optimizer and AIConfigurator, on held-out prompts, scored win/tie/loss with answers graded; a "
             "row file that is missing is named in rows-missing.txt",
             needs=[f"cal-{m}"], timeout_s=6 * 3600)
+    # Kernel settings and start-up cost (docs/benchmarks.md, "Not yet measured"): what the ledger recorded of every
+    # calibration's start-ups, then one named setting at a time on the kernel model's leader. Each check prints
+    # confirmed, refuted or undecided and exits 0 only for confirmed, so an undecided check never reads as a pass.
+    check = f"{py} {bench}/next_session_plan.py"
+    cals = [f"cal-{slug(model)}" for model in a.models]
+    ledgers = " ".join(f"{{root}}/{c}/rigtune-home/ledger" for c in cals)
+    phase("k0-startup", f"{check} --check-startup {ledgers} | tee {{out}}/startup.txt",
+          "P1: every launched trial has its start-up seconds in the ledger, and every vLLM trial that became ready "
+          "has its graph-capture line read; refuted by a ready vLLM trial with no line read (the patterns are wrong "
+          "for the installed release)", needs=cals, timeout_s=600)
+    phase("k1-rewrites", f"{check} --check-startup {ledgers} --startup-mode rewrites | tee {{out}}/rewrites.txt",
+          "P2: which CUDA-graph modes vLLM said it changed, per release and speculation; on 0.33 below SM90 none is "
+          "expected under speculation. A table to read against rigtune.kernels' rules, not a pass or fail of them",
+          needs=["k0-startup"], timeout_s=600)
+    k, ksid = a.kernel_model, safe_id(a.kernel_model)
+    has_kernel = f"{rig} recalibrate --help | grep -e --kernel > /dev/null"  # not -q: see pipefail
+    k_profile = f"P=$(ls -t {{out}}/rigtune-home/profiles/*/{ksid}/*.json | head -1) && [ -n \"$P\" ]"
+    k_budget = f"--budget {a.goal_budget_min}m"
+    busy = f"--workload high-concurrency --workload-file {cal_file} --objective throughput {k_budget}"
+    phase("k2-sglang-cap", CLEAN + (
+        f"{rig} recalibrate {k} {busy} --backend sglang --kernel cgmax=64 > {{out}}/recalibrate.log 2>&1; "
+        f"tail -5 {{out}}/recalibrate.log; {k_profile} && "
+        f"{check} --check-kernel \"$P\" --setting cgmax=64 --level 64 --min-gain 0.03 | tee {{out}}/result.txt"),
+        "P3: SGLang's decode CUDA-graph cap raised to 64 on a card whose default is lower gains 3% or more at 64 "
+        "users (predicted +10% on a 35-60 GB card); refuted under 3%, or by an out-of-memory at the same fraction. "
+        "On a 24 GB card with 0.5.23 the default is already 48: a weak test there",
+        needs=["k0-startup"], requires=f"{has_kernel} && [ -n \"${{SGLANG_PYTHON:-}}\" ]",
+        timeout_s=a.goal_budget_min * 60 + 3600)
+    phase("k3-vllm-triton", CLEAN + (
+        f"{rig} recalibrate {k} {cal_opts.replace(f'--budget {a.cal_budget_min}m', k_budget)} --backend vllm "
+        f"--kernel attn=TRITON_ATTN > {{out}}/recalibrate.log 2>&1; tail -5 {{out}}/recalibrate.log; "
+        f"{k_profile} && {check} --check-kernel \"$P\" --setting attn=TRITON_ATTN --max-abs 0.05 "
+        "| tee {out}/result.txt"),
+        "P4: on vLLM 0.33 Triton attention is within 5% of the leader and is not adopted; refuted by a larger "
+        "difference (the stage's value was underestimated) or by a failure to start (then a rule, not a trial)",
+        needs=["k0-startup"], requires=has_kernel, timeout_s=a.goal_budget_min * 60 + 3600)
+    phase("k4-compile-cache", CLEAN + (
+        f"{rig} recalibrate {k} {cal_opts.replace(f'--budget {a.cal_budget_min}m', '--budget 10m')} --backend vllm "
+        f"--kernel O=1 > {{out}}/recalibrate.log 2>&1; tail -5 {{out}}/recalibrate.log; "
+        f"{check} --check-startup {{out}}/rigtune-home/ledger --startup-mode cache | tee {{out}}/result.txt"),
+        "P5: a configuration launched again loads its compiled graphs from vLLM's cache, except under ngram_gpu on "
+        "the V1 runner; refuted by a second launch of one configuration that compiled again",
+        needs=["k0-startup"], requires=has_kernel, timeout_s=3600)
     plan: Dict = {"session": a.session, "home": "rigtune-home", "phases": phases,
                   "notes": "written by benchmarks/next_session_plan.py; see docs/gpu-session.md"}
     if a.hf_home:
@@ -372,10 +415,136 @@ def check_drafts(directory: Path, method: str) -> int:
         return 1
 
 
+def _ledger_trials(directories: List[Path]) -> List[dict]:
+    """Every trial record of the ledgers under `directories`, read with the ledger's own reader (which skips a line
+    that was cut short or changed)."""
+    from rigtune import ledger
+
+    out: List[dict] = []
+    for directory in directories:
+        for path in sorted(directory.rglob("*.jsonl")):
+            out += [r for r in ledger.read(path) if r.get("type") == "trial"]
+    return out
+
+
+def check_startup(directories: List[Path], mode: str = "seconds") -> int:
+    """What the ledger recorded of engine start-ups. Prints a verdict and returns 0 only for `confirmed`; an empty
+    ledger, or one in which nothing was read from any log, is `undecided` (1), never a pass. `refuted` is 2."""
+    trials = [t for t in _ledger_trials(directories) if (t.get("outcome") or {}).get("launched")]
+    if not trials:
+        print("undecided: no launched trial in the ledger")
+        return 1
+    ready = [t for t in trials if (t.get("startup") or {}).get("seconds") is not None]
+    vllm = [t for t in ready if (t.get("engine") or {}).get("name") == "vllm"]
+    read = [t for t in vllm if "capture" in t["startup"].get("parsed", [])]
+    if mode == "rewrites":
+        seen: Dict[tuple, int] = {}
+        for t in vllm:
+            spec = (t.get("trial") or {}).get("config", {}).get("spec_decode")
+            key = ((t.get("engine") or {}).get("version"), "speculating" if spec else "plain",
+                   ",".join(t["startup"].get("rewrites", [])) or "none")
+            seen[key] = seen.get(key, 0) + 1
+        for (version, spec, rewrites), n in sorted(seen.items(), key=str):
+            print(f"vLLM {version} {spec}: {n} trials, changed: {rewrites}")
+        if not read:
+            print("undecided: no vLLM start-up log was read, so an empty list of changes says nothing")
+            return 1
+        print(f"confirmed: {len(vllm)} vLLM start-ups recorded what the engine changed")
+        return 0
+    if mode == "cache":
+        by_config: Dict[str, List[dict]] = {}
+        for t in vllm:
+            by_config.setdefault(t.get("config_key", ""), []).append(t)
+        again = [(key, runs[1:]) for key, runs in by_config.items() if len(runs) > 1 and "ngram_gpu" not in key]
+        later = [t["startup"].get("compile_cached") for _, runs in again for t in runs]
+        if False in later:
+            print(f"refuted: {later.count(False)} later launches of a configuration compiled again")
+            return 2
+        if True not in later:
+            print("undecided: no configuration was launched twice with its compile lines read")
+            return 1
+        print(f"confirmed: {later.count(True)} later launches loaded their graphs from the compile cache")
+        return 0
+    missing = [t for t in trials if "startup" not in t]
+    if missing:
+        print(f"refuted: {len(missing)} of {len(trials)} launched trials have no start-up record")
+        return 2
+    if not vllm:
+        print(f"undecided: {len(ready)} start-ups timed, none of them vLLM's, so no log line was looked for")
+        return 1
+    if len(read) < len(vllm):
+        print(f"refuted: {len(vllm) - len(read)} of {len(vllm)} ready vLLM trials had no graph-capture line read")
+        return 2
+    seconds = sorted(t["startup"]["seconds"] for t in ready)
+    capture = sorted(t["startup"]["capture_s"] for t in read)
+    print(f"confirmed: {len(ready)} start-ups timed, median {seconds[len(seconds) // 2]:.0f} s; "
+          f"{len(read)} vLLM graph captures read, median {capture[len(capture) // 2]:.0f} s")
+    return 0
+
+
+def check_kernel(profile: dict, setting: str, level: Optional[int] = None, min_gain: Optional[float] = None,
+                 max_abs: Optional[float] = None) -> int:
+    """A --kernel trial against the leader it was built on, from a profile's calibration table: tok/s overall or at
+    `level` users. Prints a verdict and returns 0 for `confirmed`, 2 for `refuted`, 1 for `undecided` (the setting
+    was not tried, its trial or its leader's did not finish, or the level was not measured)."""
+    from rigtune.kernels import canonical
+
+    wanted = canonical(setting)
+    table = profile.get("calibration_table") or []
+    tried = [r for r in table if r.get("stage") == "kernels" and (r.get("config") or {}).get("kernels") == wanted]
+    if not tried:
+        notes = [n for n in profile.get("notes") or [] if n.startswith("kernel setting")]
+        print(f"undecided: {wanted} was not tried" + (f" ({notes[0]})" if notes else ""))
+        return 1
+    row = tried[-1]
+    if row.get("error") or not row.get("launched", True):
+        print(f"undecided: the trial with {wanted} did not finish: {str(row.get('error'))[:160]}")
+        return 1
+    base = {k: v for k, v in row["config"].items() if k != "kernels"}
+    leaders = [r for r in table if {k: v for k, v in (r.get("config") or {}).items() if k != "kernels"} == base
+               and not (r.get("config") or {}).get("kernels") and not r.get("error")]
+
+    def tok_s(r: dict) -> Optional[float]:
+        m = r.get("metrics") or {}
+        if level is not None:
+            m = (m.get("by_concurrency") or {}).get(str(level)) or {}
+        return m.get("tok_s") or None
+
+    if not leaders or tok_s(leaders[-1]) is None or tok_s(row) is None:
+        print(f"undecided: no finished trial of the leader without {wanted}"
+              + (f" at {level} users" if level is not None else ""))
+        return 1
+    gain = tok_s(row) / tok_s(leaders[-1]) - 1
+    adopted = (profile.get("config") or {}).get("kernels") == wanted
+    said = f"{wanted}: {gain:+.1%} tok/s" + (f" at {level} users" if level is not None else "") + \
+        (", adopted" if adopted else ", not adopted")
+    if min_gain is not None:
+        ok = gain >= min_gain
+        print(f"{'confirmed' if ok else 'refuted'}: {said} (a gain of {min_gain:.0%} or more was predicted)")
+        return 0 if ok else 2
+    if max_abs is not None:
+        ok = abs(gain) <= max_abs
+        print(f"{'confirmed' if ok else 'refuted'}: {said} (within {max_abs:.0%} either way was predicted)")
+        return 0 if ok else 2
+    print(f"undecided: {said}; no prediction was given to judge it by")
+    return 1
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--out", type=Path, help="where to write the plan")
     ap.add_argument("--check-drafts", type=Path)
+    ap.add_argument("--check-startup", type=Path, nargs="+", metavar="LEDGER_DIR",
+                    help="say what the trial ledgers under these folders recorded of engine start-ups")
+    ap.add_argument("--startup-mode", choices=("seconds", "rewrites", "cache"), default="seconds")
+    ap.add_argument("--check-kernel", type=Path, metavar="PROFILE",
+                    help="compare a --kernel trial with its leader in this profile's calibration table")
+    ap.add_argument("--setting", help="the kernel setting --check-kernel looks for, as given to --kernel")
+    ap.add_argument("--level", type=int, help="compare at this many users instead of overall")
+    ap.add_argument("--min-gain", type=float)
+    ap.add_argument("--max-abs", type=float)
+    ap.add_argument("--kernel-model", default="google/gemma-4-12B-it",
+                    help="the model the kernel phases recalibrate (k2 to k4)")
     ap.add_argument("--expected-method", choices=("assist", "draft", "mtp"))
     ap.add_argument("--pick-jpt", type=Path, metavar="PROFILE",
                     help="print the J/token a profile's pick measured and write no plan (g3-balanced runs this)")
@@ -408,6 +577,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         if a.expected_method is None:
             ap.error("--check-drafts needs --expected-method")
         return check_drafts(a.check_drafts, a.expected_method)
+    if a.check_startup is not None:
+        return check_startup(a.check_startup, a.startup_mode)
+    if a.check_kernel is not None:
+        if a.setting is None:
+            ap.error("--check-kernel needs --setting")
+        try:
+            profile = json.loads(a.check_kernel.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"undecided: the profile could not be read ({type(exc).__name__})")
+            return 1
+        return check_kernel(profile, a.setting, a.level, a.min_gain, a.max_abs)
     if a.pick_jpt is not None:
         value = pick_jpt(json.loads(a.pick_jpt.read_text(encoding="utf-8")))
         if value is None:

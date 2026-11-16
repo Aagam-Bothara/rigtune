@@ -343,6 +343,51 @@ Read it as a record, not a prediction. Only configurations the search tried are 
 
 Dropping the TTFT ceiling would have bought 1.5% more throughput on what was measured, inside the noise; the TPOT ceiling cost nothing.
 
+### Kernel settings (`--kernel`)
+
+`--kernel K=V` on `bench`, `recalibrate`, `compare` and `serve` names one engine kernel or compiler setting. After
+the other stages, each tuned engine's leader is tried once with it, as a full trial that appears in the calibration
+table. It is kept only if it beats the leader on the objective's own score within its limits; a setting that only
+ties loses, like any other optional strategy. **None of this has run on hardware.**
+
+| Key | vLLM | SGLang |
+|---|---|---|
+| `attn` | `--attention-backend` (e.g. `TRITON_ATTN`) | `--attention-backend` (e.g. `triton`) |
+| `attnp`, `attnd` | | `--prefill-attention-backend`, `--decode-attention-backend` |
+| `cg` | CUDA-graph mode (`FULL`, `PIECEWISE`, ...) | `--cuda-graph-backend-decode` |
+| `cgp` | | `--cuda-graph-backend-prefill` |
+| `cgmax` | largest capture size | `--cuda-graph-max-bs-decode` |
+| `cgpmax` | | `--cuda-graph-max-bs-prefill` |
+| `cgsizes` | capture sizes, joined by `+` (`1+2+4+8`) | |
+| `O` | `--optimization-level` | |
+| `mode`, `gp`, `pass.<flag>` | compilation mode, graph partition, one compilation pass | |
+| `tc`, `tcmax` | | `--enable-torch-compile`, `--torch-compile-max-bs` |
+
+Several settings go together as `--kernel attn=TRITON_ATTN,cg=FULL`; they are tried as one change. On vLLM the
+compilation settings are passed as one `--compilation-config` value.
+
+A setting is launched only when:
+
+- **The engine probe confirmed it.** rigtune asks the engine's own Python which flags, modes and fields it has
+  (`rigtune probe --engines` shows the answers). With the probe off, or with no answer, the setting is not
+  tried and the note says it was not asked. It is never passed on a guess.
+- **No rule says the engine refuses it.** For vLLM 0.29 to 0.33, an attention backend that does not list the
+  configuration's KV-cache type is not tried.
+- **It is a change.** `O=2`, `O=3` and `cg=FULL_AND_PIECEWISE` are vLLM's defaults; an SGLang `cgmax` equal to the
+  cap it picks for the card is no change. These rules hold for the releases they were read in (vLLM 0.29 to 0.33,
+  SGLang 0.5.19 to 0.5.23); on another release the setting is tried and the engine decides.
+- **It fits.** Raising SGLang's `cgmax` above the card's default adds 2 MiB per unit to the memory plan (twice with
+  a second model), SGLang's own figure for its CUDA graphs.
+
+When it is not launched, a note in the profile says which of these applied. An engine that refuses the setting at
+start-up is recorded with the failure kind `kernel_refused`. `--kernel` is not tried under `--layout` or `--phases`.
+The setting is part of the profile's cache key, so serve the profile with the same `--kernel`.
+
+Every launched trial's start-up cost is recorded in the trial ledger beside the trial: seconds from launch to the
+first healthy answer, and for vLLM the CUDA-graph capture time and size, the seconds spent compiling, whether the
+compile cache was hit, and any CUDA-graph mode vLLM said it changed. A value whose log line was not found is left
+empty, never 0. Profiles do not carry it.
+
 ### The trial ledger
 
 A profile keeps the pick and the trials behind it until the next calibration of the same request replaces it. Every calibration that launches engines also appends each trial, as it ends, to `~/.rigtune/ledger/<hardware hash>/<model>.jsonl` (under `RIGTUNE_HOME` if set): failed trials with their cause (`oom_startup`, `load_failure`, `request_failures`, ...), the trials the search skipped for its `--budget`, and, once the pick is made, the profile itself and the trials that make up its table. Each record is one JSON line, appended and never rewritten, with a schema number and an id (the sha256 of the rest of the record), so a line cut short by a crash or changed by accident afterwards is found and skipped (the id detects accidents, not tampering: see [SECURITY.md](../SECURITY.md)). A local model's file is named by its folder's last part and a hash of its path. It is on by default and changes nothing about the search: the same trials run and the same configuration is picked with it or without it. The profile gains one field, `calibration_id`, naming its calibration in the ledger. `RIGTUNE_LEDGER` set to `off`, `0`, `false`, `no`, `none` or `disabled` (in any case) turns it off; `RIGTUNE_LEDGER=<dir>` keeps it elsewhere. Two calibrations can write to one ledger at once (each record is written under a lock, which a writer waits up to a minute for), and a write that fails, such as on a full disk, is logged once and never fails a trial; a profile whose own record could not be written names no calibration. The test suite turns the ledger off for every test.

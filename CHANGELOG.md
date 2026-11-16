@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `--kernel K=V` on `bench`, `recalibrate`, `compare` and `serve` tries one named engine kernel setting (an
+  attention backend, a CUDA-graph mode or cap, a compile level) on each tuned engine's leader and keeps it only on
+  a measured win ([kernel settings](docs/usage.md#kernel-settings---kernel)). Opt-in and unmeasured: without it
+  nothing changes.
+- The trial ledger records each launched trial's start-up cost beside the trial: seconds to the first healthy
+  answer, and for vLLM the CUDA-graph capture time and size, compile seconds, compile-cache hit, and any
+  CUDA-graph mode the engine said it changed. Profiles are written exactly as before.
+- New failure kind `kernel_refused`, for an engine that exits at start-up naming a kernel setting.
+- `rigtune probe --engines` asks vLLM one more question (its graph and compile settings), so each install is
+  asked again once.
 - Every calibration that launches engines appends each of its trials to a trial ledger,
   `~/.rigtune/ledger/<hardware hash>/<model>.jsonl`, and the profile records its `calibration_id` there
   ([the trial ledger](docs/usage.md#the-trial-ledger)). On by default; `RIGTUNE_LEDGER=off` turns it off. It
