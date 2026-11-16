@@ -802,7 +802,9 @@ class VllmBackend(BaseBackend):
         if cfg.spec_head_quant and os.environ.get("VLLM_USE_V2_MODEL_RUNNER") == "0":
             return "quantized MTP output heads require Model Runner V2"
         if cfg.kernels is not None:
-            return kernels.vllm_unconfirmed(kernels.parse(cfg.kernels), _engine_facts())
+            facts, settings = _engine_facts(), kernels.parse(cfg.kernels)
+            return (kernels.vllm_unconfirmed(settings, facts)
+                    or kernels.vllm_refusal(settings, cfg.kv_dtype, facts.version))
         return None
 
     def known_failure(self, cfg: Config) -> Optional[str]:

@@ -239,3 +239,120 @@ def sglang_args(settings: Dict[str, str]) -> List[str]:
         else:
             args += [flag, value]
     return args
+
+
+# ---------------------------------------------------------------------------- what an engine refuses or changes
+#
+# Rules read in the engines' source, each for the releases named; outside them, or with a version that cannot be
+# read, a rule says nothing: the setting is neither refused nor called the same as the default, it may be tried,
+# and what the engine logged it changed (the trial's start-up record) decides. An error inside a rule is raised,
+# never turned into a refusal.
+
+VLLM_RULES = ((0, 29), (0, 33))  # the vLLM releases the rules below were read in, first and last
+SGLANG_RULES = ((0, 5, 19), (0, 5, 23))
+
+# vLLM: the KV-cache types each general attention backend lists (supported_kv_cache_dtypes), the same lists in
+# v0.29.0 / v0.33.0: v1/attention/backends/flash_attn.py:83 / 290, flashinfer.py:410 / 573, triton_attn.py:294 / 326,
+# flex_attention.py:96 both. FLASH_ATTN's fp8 types also need FA3 or FA4 on the card; that is left to the engine.
+VLLM_ATTN_KV = {
+    "FLASH_ATTN": ("auto", "float16", "bfloat16", "fp8", "fp8_e4m3"),
+    "FLASHINFER": ("auto", "float16", "bfloat16", "fp8", "fp8_e4m3", "fp8_e5m2", "nvfp4", "nvfp4_4over6"),
+    "TRITON_ATTN": ("auto", "float16", "bfloat16", "fp8", "fp8_e4m3", "fp8_e5m2", "int4_per_token_head",
+                    "int8_per_token_head", "fp8_per_token_head"),
+    "FLEX_ATTENTION": ("auto", "float16", "bfloat16"),
+}
+# vLLM's CUDA-graph mode at its default optimisation level: FULL_AND_PIECEWISE at O2 and O3
+# (config/vllm.py:301, 324 / 311, 332); "O3: Currently the same as -O2" (:121-122 / 143-144).
+VLLM_DEFAULT_CG = "FULL_AND_PIECEWISE"
+VLLM_DEFAULT_O = ("2", "3")
+
+
+def release(version: Optional[str], parts: int) -> Optional[Tuple[int, ...]]:
+    """The first `parts` numbers of an engine version, or None when it does not start with that many."""
+    out: List[int] = []
+    for piece in (version or "").split("."):
+        digits = "".join(ch for ch in piece[:4] if ch.isdigit()) if piece[:1].isdigit() else ""
+        if not digits or len(out) == parts:
+            break
+        out.append(int(digits))
+    return tuple(out) if len(out) == parts else None
+
+
+def _within(version: Optional[str], bounds: Tuple[Tuple[int, ...], Tuple[int, ...]]) -> Optional[Tuple[int, ...]]:
+    rel = release(version, len(bounds[0]))
+    return rel if rel is not None and bounds[0] <= rel <= bounds[1] else None
+
+
+def vllm_refusal(settings: Dict[str, str], kv_dtype: str, version: Optional[str]) -> Optional[str]:
+    """Why vLLM would refuse `settings` with this KV-cache type, where a rule read for its release says so."""
+    if _within(version, VLLM_RULES) is None:
+        return None
+    attn = settings.get("attn")
+    if attn in VLLM_ATTN_KV and kv_dtype not in VLLM_ATTN_KV[attn]:
+        return (f"vLLM's {attn} attention does not take a {kv_dtype} KV cache "
+                f"(it lists {', '.join(VLLM_ATTN_KV[attn])})")
+    return None
+
+
+def vllm_same_as_default(settings: Dict[str, str], version: Optional[str], attention: Optional[str] = None,
+                         speculating: bool = False, capability: Optional[Tuple[int, int]] = None) -> Optional[str]:
+    """Why every one of `settings` is what vLLM does anyway, naming each rule; None when any setting is not, or when
+    no rule was read for this release. `attention` is the attention backend when the launch fixes one, `speculating`
+    whether the config proposes more than one token a step, `capability` the card's. Only certain equivalences are claimed: cg=FULL on a backend without full
+    support becomes FULL_AND_PIECEWISE or FULL_DECODE_ONLY depending on how the model is compiled
+    (config/compilation.py:1393-1419 @0.33), which is not known here, so it is left to be tried."""
+    if _within(version, VLLM_RULES) is None or not settings:
+        return None
+    level_is_default = settings.get("O", VLLM_DEFAULT_O[0]) in VLLM_DEFAULT_O
+    why: List[str] = []
+    for key, value in sorted(settings.items()):
+        if key == "O" and value in VLLM_DEFAULT_O:
+            why.append(f"O={value} is vLLM's default optimisation level (O3 is the same as O2)")
+        elif key == "cg" and value == VLLM_DEFAULT_CG and level_is_default:
+            why.append(f"cg={value} is vLLM's default CUDA-graph mode at that level")
+        elif (key == "cg" and value == "PIECEWISE" and level_is_default and speculating
+              and attention == "FLASHINFER" and capability is not None and capability < (10, 0)
+              and release(version, 2) == (0, 29)):
+            # 0.29 only: below SM100 FlashInfer supports full graphs for single-token decode alone
+            # (v1/attention/backends/flashinfer.py:974-1015), so speculation is given PIECEWISE
+            # (config/compilation.py:1448-1465). 0.33 keeps full graphs there (flashinfer.py:1187-1191).
+            why.append("cg=PIECEWISE is what vLLM 0.29 already runs with FlashInfer under speculation on this card")
+        else:
+            return None
+    return "; ".join(why)
+
+
+def sglang_default_decode_cap(vram_mib: float, batch: int, tp: int, version: Optional[str]) -> Optional[int]:
+    """The decode CUDA-graph batch cap SGLang picks for a card when none is given, or None where no rule was read.
+
+    arg_groups/memory_hook.py, by the card's memory in MiB, for tp < 4 / tp >= 4:
+      under 20 GiB 8; under 35 GiB 24 / 80 on 0.5.19 (:74-87) and 48 / 160 on 0.5.23 (:101-117); under 60 GiB
+      32 / 160 (:88-101 / 118-131); under 160 GiB 256 / 512; above 512.
+    0.5.23 then lowers a default cap to --max-running-requests (:182-188), which rigtune always passes as the
+    batch; 0.5.19 has no such step."""
+    rel = _within(version, SGLANG_RULES)
+    if rel is None or vram_mib <= 0:
+        return None
+    wide = tp >= 4
+    if vram_mib < 20 * 1024:
+        cap = 8
+    elif vram_mib < 35 * 1024:
+        cap = (160 if wide else 48) if rel >= (0, 5, 23) else (80 if wide else 24)
+    elif vram_mib < 60 * 1024:
+        cap = 160 if wide else 32
+    elif vram_mib < 160 * 1024:
+        cap = 512 if wide else 256
+    else:
+        cap = 512
+    return min(cap, batch) if rel >= (0, 5, 23) else cap
+
+
+def sglang_same_as_default(settings: Dict[str, str], vram_mib: float, batch: int, tp: int,
+                           version: Optional[str]) -> Optional[str]:
+    """Why `settings` are what SGLang does anyway: a decode cap equal to the one it would pick for this card."""
+    if set(settings) != {"cgmax"}:
+        return None
+    default = sglang_default_decode_cap(vram_mib, batch, tp, version)
+    if default is not None and int(settings["cgmax"]) == default:
+        return f"cgmax={default} is the decode cap SGLang picks for this card and batch"
+    return None
