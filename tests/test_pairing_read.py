@@ -130,3 +130,37 @@ def test_no_network_at_import(monkeypatch):
         raise AssertionError("network at import")
     monkeypatch.setattr("socket.socket", forbidden)
     importlib.reload(p)
+
+
+def write_weights(path, counts=(5, 7)):
+    """A valid small safetensors file, with mixed BF16 and F32 tensors."""
+    import struct
+    offset, header = 0, {}
+    for i, count in enumerate(counts):
+        width, dtype = (2, "BF16") if i % 2 == 0 else (4, "F32")
+        end = offset + count * width
+        header[f"weight{i}"] = {"dtype": dtype, "shape": [count], "data_offsets": [offset, end]}
+        offset = end
+    data = json.dumps(header).encode()
+    path.write_bytes(struct.pack("<Q", len(data)) + data + b"\0" * offset)
+
+
+def test_local_counts_tensor_elements_not_file_bytes(tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"torch_dtype": "bfloat16"}))
+    write_weights(tmp_path / "model.safetensors")
+    assert p.read_files(str(tmp_path)).num_params == 12
+
+
+def test_incomplete_sharded_weights_leave_parameter_count_unread(tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"torch_dtype": "bfloat16"}))
+    write_weights(tmp_path / "model-00001-of-00002.safetensors")
+    (tmp_path / "model.safetensors.index.json").write_text(json.dumps({
+        "metadata": {"total_size": 2000},
+        "weight_map": {"weight0": "model-00001-of-00002.safetensors", "weight1": "model-00002-of-00002.safetensors"}}))
+    assert p.read_files(str(tmp_path)).num_params is None
+
+
+def test_malformed_weight_header_is_not_a_known_parameter_count(tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"torch_dtype": "bfloat16"}))
+    (tmp_path / "model.safetensors").write_bytes(b"not a tensor file")
+    assert p.read_files(str(tmp_path)).num_params is None

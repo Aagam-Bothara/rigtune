@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -228,6 +229,63 @@ def _template(root: Path) -> Optional[str]:
     return None
 
 
+def _local_params(root: Path, weights: List[Path]) -> Optional[int]:
+    """Count actual tensor elements only when every declared shard is present and valid."""
+    from rigtune.introspect import SAFETENSORS_DTYPE_BYTES
+    if not weights:
+        return None
+    try:
+        index = root / "model.safetensors.index.json"
+        mapping = _json(index).get("weight_map") if index.is_file() else None
+        if index.is_file() and (not isinstance(mapping, dict) or not mapping
+                                or set(mapping.values()) != {f.name for f in weights}):
+            return None
+        if mapping is None:
+            shards = [re.search(r"-(\d+)-of-(\d+)\.safetensors$", f.name) for f in weights]
+            if any(shards) and (not all(shards) or {int(s[2]) for s in shards} != {len(weights)}
+                                or {int(s[1]) for s in shards} != set(range(1, len(weights) + 1))):
+                return None
+        total, names = 0, set()
+        for path in weights:
+            file_size = path.stat().st_size
+            with path.open("rb") as fh:
+                prefix = fh.read(8)
+                length = int.from_bytes(prefix, "little")
+                if len(prefix) != 8 or not 0 < length <= min(100_000_000, file_size - 8):
+                    return None
+                header = json.loads(fh.read(length))
+            if not isinstance(header, dict):
+                return None
+            spans = []
+            for name, tensor in header.items():
+                if name == "__metadata__":
+                    continue
+                if name in names or not isinstance(tensor, dict) or (mapping is not None and mapping.get(name) != path.name):
+                    return None
+                shape, offsets = tensor.get("shape"), tensor.get("data_offsets")
+                width = SAFETENSORS_DTYPE_BYTES.get(tensor.get("dtype"))
+                if (not isinstance(shape, list) or any(type(d) is not int or d < 0 for d in shape)
+                        or not isinstance(offsets, list) or len(offsets) != 2
+                        or any(type(d) is not int or d < 0 for d in offsets) or width is None):
+                    return None
+                count = math.prod(shape)
+                if offsets[1] - offsets[0] != count * width:
+                    return None
+                spans.append(tuple(offsets))
+                names.add(name)
+                total += count
+            end = 0
+            for start, stop in sorted(spans):
+                if start != end:
+                    return None
+                end = stop
+            if end != file_size - 8 - length:
+                return None
+        if mapping is not None and names != set(mapping):
+            return None
+        return total or None
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
 def _shards_missing(root: Path, weights: List[Path]) -> bool:
     """Whether the directory holds only some of its weight files: a shard its index names, or one a present shard's
     own name counts (`-00001-of-00003`), is absent. A cache snapshot keeps whatever was downloaded so far."""
@@ -261,10 +319,7 @@ def _from_directory(root: Path, repo: Optional[str] = None, sha: Optional[str] =
         entries = sorted({*weights, *(f for f in root.iterdir() if f.suffix in (".json", ".jinja"))})
         sha = hashlib.sha256(json.dumps([(f.name, _hash_file(f)) for f in entries]).encode()).hexdigest()
         repo = local_alias(str(root), sha)
-    cfg = text_config(config)
-    dtype = cfg.get("torch_dtype", cfg.get("dtype"))
-    elem = {"float16": 2, "bfloat16": 2, "float32": 4}.get(dtype)
-    params = size // elem if size and elem and not config.get("quantization_config") else None
+    params = _local_params(root, weights) if not text_config(config).get("quantization_config") else None
     return PairFiles(repo=repo, sha=sha, config=config, size_bytes=size, num_params=params,
                      tokenizer_bytes=ts, tokenizer_sha256=digest,
                      token_ids=_tokens(tokenizer) if digest else None, template_sha256=_template(root), source=source)
@@ -420,6 +475,58 @@ def save_record(target: PairFiles, second: PairFiles, kind: str, verdict: PairVe
     return path
 
 
+def immutable_revision(revision: Optional[str]) -> bool:
+    return bool(revision and re.fullmatch(r"[a-f0-9]{40}", revision))
+
+
+def _commit_cached(repo: str, sha: str) -> bool:
+    try:
+        return read_files(repo, "cache", revision=sha).sha == sha
+    except HubLookupError:
+        return False
+
+
+def pin_target(spec, *, draft: Optional[str] = None, hub: str = "on", notes: Optional[List[str]] = None):
+    """Resolve one target commit before any backend prepares its architecture or grid.
+
+    Offline, kept pair evidence may name the commit, but only one whose files are in the local cache: an engine
+    cannot be launched at a commit that was never downloaded. Otherwise the target stays unpinned, with a note."""
+    if is_local(spec.hf_id) or immutable_revision(spec.revision):
+        return spec
+    source = "cache" if hub_off(hub) else "hub"
+    try:
+        files = read_files(spec.hf_id, source, revision=spec.revision)
+        if immutable_revision(files.sha):
+            return spec.model_copy(update={"revision": files.sha})
+    except HubLookupError:
+        pass
+    if source == "cache" and spec.revision in (None, "main"):
+        from rigtune.speculative import candidates_for
+        records = [r for kind, repo in candidates_for(spec.hf_id, draft) if not is_local(repo)
+                   for r in kept_pairs(spec.hf_id, repo, kind)]
+        records = sorted((r for r in records if immutable_revision(r.target.sha)),
+                         key=lambda r: r.checked_at, reverse=True)
+        for sha in dict.fromkeys(r.target.sha for r in records):
+            if _commit_cached(spec.hf_id, sha):
+                return spec.model_copy(update={"revision": sha})
+        if records and notes is not None:
+            notes.append(f"{spec.hf_id}: kept pair evidence names commit {records[0].target.sha[:12]}, whose files "
+                         "are not in the local cache; the target is left unpinned")
+    return spec  # baseline planning can continue, but must not offer an unpinned verified pair
+
+
+def _merge_kept(fresh: Optional[PairFiles], kept: PairFiles) -> PairFiles:
+    if fresh is None:
+        return kept.model_copy(deep=True)
+    if fresh.repo != kept.repo or fresh.sha != kept.sha:
+        return fresh
+    fill = {k: v for k, v in kept.model_dump().items() if getattr(fresh, k) is None and v is not None}
+    # Never attach an old map to a newly conflicting tokenizer hash, even in a corrupt cache.
+    if fresh.tokenizer_sha256 and fresh.tokenizer_sha256 != kept.tokenizer_sha256:
+        fill.pop("token_ids", None)
+    return fresh.model_copy(update=fill)
+
+
 def discover(prepared, engine: str, ctx: int = 4096, *, draft: Optional[str] = None,
              hub: str = "on", version: Optional[str] = None) -> List[str]:
     """Check proposed repositories, record outcomes, retain at most two plain drafts."""
@@ -442,21 +549,30 @@ def discover(prepared, engine: str, ctx: int = 4096, *, draft: Optional[str] = N
     for kind, repo in proposed:
         label = local_alias(repo, "unread00") if is_local(repo) else repo
         second = None
+        problem = "offline"
         try:
             second = read_files(repo, source)
             if target is None:
                 raise HubLookupError("offline")
             read_tokenizers(target, second, source=source)
         except HubLookupError as exc:
+            problem = exc.why
+        # A successful cache read can still lack weights, tokenizer bytes or Hub metadata.
+        # Fill those gaps from evidence for these exact commits. Mutable directories never qualify.
+        if source == "cache" and not is_local(repo) and not is_local(prepared.spec.hf_id):
             record = kept_pair(prepared.spec.hf_id, repo, kind,
                                target.sha if target else prepared.spec.revision,
-                               second.sha if second else None) if source == "cache" else None
-            # A local directory is mutable; never reuse its old bytes when it cannot be read.
-            if record is None or is_local(repo) or is_local(prepared.spec.hf_id):
-                notes.append(f"{engine}: {label} not checked: {exc.why}; no usable kept evidence")
-                continue
-            target, second = record.target, record.second
-            notes.append(f"{engine}: {label} kept evidence used, not rechecked against the Hub; run rigtune recalibrate with --hub on")
+                               second.sha if second else None)
+            if record is not None:
+                merged_target = _merge_kept(target, record.target)
+                merged_second = _merge_kept(second, record.second)
+                if merged_target != target or merged_second != second:
+                    notes.append(f"{engine}: {label} kept evidence used, not rechecked against the Hub; "
+                                 "run rigtune recalibrate with --hub on")
+                target, second = merged_target, merged_second
+        if target is None or second is None:
+            notes.append(f"{engine}: {label} not checked: {problem}; no usable kept evidence")
+            continue
         verdict = check_pair(target, second, kind, ctx, engine=engine)
         path = save_record(target, second, kind, verdict)
         label = second.repo
@@ -500,6 +616,13 @@ def hub_off(hub: str = "on") -> bool:
 
 def kept_pair(target_repo: str, second_repo: str, kind: str, target_sha: Optional[str] = None,
               second_sha: Optional[str] = None) -> Optional[PairRecord]:
+    records = kept_pairs(target_repo, second_repo, kind, target_sha, second_sha)
+    return records[0] if records else None
+
+
+def kept_pairs(target_repo: str, second_repo: str, kind: str, target_sha: Optional[str] = None,
+               second_sha: Optional[str] = None) -> List[PairRecord]:
+    """Every kept record of the pair, newest check first."""
     from rigtune.paths import pairs_dir
     records = []
     for path in pairs_dir().glob("*.json"):
@@ -508,7 +631,7 @@ def kept_pair(target_repo: str, second_repo: str, kind: str, target_sha: Optiona
                 and (target_sha is None or target_sha == record.target.sha)
                 and (second_sha is None or second_sha == record.second.sha)):
             records.append(record)
-    return max(records, key=lambda r: r.checked_at) if records else None
+    return sorted(records, key=lambda r: r.checked_at, reverse=True)
 
 
 def restore_local_paths(model, draft: Optional[str]) -> bool:
@@ -532,6 +655,20 @@ def redact_paths(text: str, paths: Dict[str, str]) -> str:
     for alias, path in paths.items():
         text = text.replace(json.dumps(path)[1:-1], alias).replace(path, alias)
     return text
+
+
+def redact_trial(trial, paths: Dict[str, str]):
+    """Remove supplied private directories before a result reaches progress or a ledger."""
+    if not paths:
+        return trial
+    if trial.error:
+        trial.error = redact_paths(trial.error, paths)
+    def metrics(value):
+        value.errors = [redact_paths(error, paths) for error in value.errors]
+        for level in value.by_concurrency.values():
+            metrics(level)
+    metrics(trial.metrics)
+    return trial
 
 
 def extra_weights(cfg, model) -> int:

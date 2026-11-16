@@ -54,6 +54,7 @@ def test_assistant_is_offered_only_with_all(backend, monkeypatch, prepared_vllm,
 
 def test_conformance_can_request_verified_pairs(prepared_vllm, hw_a100, tmp_path, monkeypatch):
     from rigtune.conformance import Conformance, CheckResult
+    prepared_vllm.spec.revision = "a" * 40
     class Backend(vl.VllmBackend):
         def find_second_models(self, model):
             return []

@@ -372,6 +372,10 @@ class BaseBackend:
                              f"{v.batch}{floor}")
         return out, notes
 
+    def config_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
+        """A model-dependent restriction, enforced at search and launch boundaries."""
+        return None
+
     def known_failure(self, cfg: Config) -> Optional[str]:
         """Why `cfg` is expected to fail at start-up or under load, so the search does not try it. Default: never."""
         return None

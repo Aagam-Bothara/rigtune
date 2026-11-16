@@ -872,6 +872,9 @@ def plan(
     wl = _workload(workload, workload_file, sessions, session_pool, session_turns, history, session_system)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
+    if drafts == "verified" or draft:
+        from rigtune.pairing import pin_target
+        spec = pin_target(spec, draft=draft, hub=hub)
     candidates, reg = select(hw, spec, force=backend)
     if not candidates:
         err.print("[red]no candidate backends for this machine/model[/]")
@@ -981,6 +984,9 @@ def bench(
     _check_min_requests(min_requests, wl)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
+    if drafts == "verified" or draft:
+        from rigtune.pairing import pin_target
+        spec = pin_target(spec, draft=draft, hub=hub)
     candidates, reg = select(hw, spec, force=backend, workload=wl, report_reuse=report_reuse)
     if not candidates:
         err.print("[red]no candidate backends for this machine/model[/]")
@@ -1258,6 +1264,9 @@ def compare(
                  confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub), layout=layout)
     view.stop()
     _print_profile(profile)
+    # Compare the checked target commit, including stock rows prepared on another backend.
+    if profile.prepared is not None and profile.prepared.spec.revision:
+        spec = profile.prepared.spec
     candidates, reg = select(hw, spec, force=backend, workload=eval_wl, report_reuse=report_reuse)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
                                quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,

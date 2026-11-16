@@ -375,7 +375,7 @@ def combination_fits(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: 
         if c.backend == "sglang" and small_gpu and (c.prefill_budget or 0) >= 8192:
             return False
         pm = plan.prepared.get(c.backend)
-        if pm is None or reg[c.backend].known_failure(c):
+        if pm is None or reg[c.backend].known_failure(c) or reg[c.backend].config_refusal(c, pm):
             return False
         if c.kv_tier is not None and tier_refusal(hw, reg[c.backend], pm, c) is not None:
             return False  # a combination may carry a tier to a config its engine or the host cannot give one
@@ -636,7 +636,7 @@ def kv_variants_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "P
         mm = be.memory_model(hw)
 
         def fits(x: Config) -> bool:
-            if be.known_failure(x):
+            if be.known_failure(x) or be.config_refusal(x, pm):
                 return False
             try:
                 return estimate(hw, pm, x, mm).feasible
@@ -841,6 +841,11 @@ def prepare_and_plan(
     """
     result = PlanResult(hw=hw, spec=spec, candidates=list(candidates))
     min_ctx = workload.min_ctx if workload else 0
+    verified = drafts == "verified" or bool(draft)
+    if verified:
+        from rigtune.pairing import pin_target
+        spec = pin_target(spec, draft=draft, hub=hub, notes=result.notes)
+        result.spec = spec
     for name in candidates:
         backend = reg[name]
         try:
@@ -848,7 +853,7 @@ def prepare_and_plan(
             if quants is not None and allowed == []:
                 raise RuntimeError(f"none of --quant {','.join(quants)} is available on {name}")
             prepared = backend.prepare(spec, hw, quants=allowed)
-            prepared.drafts_mode = "verified" if drafts == "verified" or draft else "table"
+            prepared.drafts_mode = "verified" if verified else "table"
             from rigtune.pairing import hub_off
             if speculative_all and not (prepared.drafts_mode == "verified" and hub_off(hub)):
                 result.notes += backend.find_second_models(prepared)
@@ -862,7 +867,14 @@ def prepare_and_plan(
                 )
             kept = memory_plan(hw, prepared, grid, backend.memory_model(hw))
             if prepared.drafts_mode == "verified" and kept:
-                result.notes += backend.find_pairs(prepared, min(c.ctx for c, _ in kept), draft=draft, hub=hub, hw=hw)
+                from rigtune.pairing import immutable_revision, is_local
+                if is_local(spec.hf_id) or immutable_revision(spec.revision):
+                    result.notes += backend.find_pairs(prepared, min(c.ctx for c, _ in kept), draft=draft, hub=hub, hw=hw)
+                else:
+                    result.notes.append(f"{name}: second models not checked: target revision could not be pinned "
+                                        "before preparation")
+                    if hub_off(hub):
+                        result.notes.append(f"{name}: Hub not asked; run rigtune recalibrate with --hub on to recheck")
             result.prepared[name] = prepared
             result.feasible[name] = kept
             result.considered[name] = len(grid)
@@ -892,14 +904,17 @@ def _profile_for(
     served: Optional[object] = None,
 ) -> Profile:
     launch = backend.launch_spec(cfg, prepared, 0)
-    from rigtune.pairing import redact_paths
-    launch.args = [redact_paths(arg, prepared.spec_paths) for arg in launch.args]
+    from rigtune.pairing import immutable_revision, redact_paths, redact_trial
+    private_paths = {alias: path for pm in [prepared, *(prepared_all or {}).values()]
+                     for alias, path in pm.spec_paths.items()}
+    launch.args = [redact_paths(arg, private_paths) for arg in launch.args]
     workload = workload or get_workload("default")
     return Profile(
         rigtune_version=__version__,
         hardware_hash=hardware_hash(hw),
         hardware=hw,
         model_id=spec.hf_id,
+        model_revision=prepared.spec.revision if immutable_revision(prepared.spec.revision) else None,
         objective=objective,
         workload=workload.name,
         workload_spec=workload.spec(served),
@@ -910,9 +925,10 @@ def _profile_for(
         prepared_all=dict(prepared_all or {}),
         launch_args=launch.args,
         launch_env=launch.env,
-        calibration_table=list(table or []),
+        # The ledger keys recorded trials by object identity; keep those same results.
+        calibration_table=[redact_trial(t, private_paths) for t in (table or [])],
         llmtrace_version=llmtrace_version(),
-        notes=list(notes or []),
+        notes=[redact_paths(n, private_paths) for n in (notes or [])],
     )
 
 
@@ -1088,7 +1104,7 @@ def calibrate(
     profile.power_mode = power_mode
     profile.options = opts.key(objective, constraints, workload)
     profile.calibration_constraints = dataclasses.asdict(constraints)
-    profile.model_revision = resolve_revision(spec)
+    profile.model_revision = profile.model_revision or resolve_revision(prepared.spec)
     # Drift compares live latency with the ceilings the pick was scored against, which a caller may have set. A
     # custom goal was scored against its own TTFT limit, or none.
     ttft = constraints.ttft_ceiling_ms
@@ -1256,6 +1272,9 @@ def resolve_profile(
     if not skip_calibration:  # about to measure: a goal that reads power needs it (a cache hit measures nothing)
         check_goal_measurable(objective, constraints, opts, hw)
     say("select")
+    if opts.drafts == "verified" or opts.draft:
+        from rigtune.pairing import pin_target
+        spec = pin_target(spec, draft=opts.draft, hub=opts.hub)
     candidates, reg = select(hw, spec, force=force_backend, workload=workload, report_reuse=opts.report_reuse)
     if not candidates:
         raise RuntimeError("no backend supports this machine/model; run `rigtune probe` for details")

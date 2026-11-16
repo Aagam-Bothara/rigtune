@@ -163,6 +163,13 @@ class Conformance:
         self.poll = poll  # seconds between readiness checks of a launch
         self.launches = 0
         self.drafts, self.draft, self.hub = drafts, draft, hub
+        if drafts == "verified" or draft:
+            from rigtune.pairing import pin_target
+            self.models = dict(models)
+            for role, model in models.items():
+                pinned = pin_target(model.spec, draft=draft, hub=hub)
+                if pinned.revision != model.spec.revision:
+                    self.models[role] = backend.prepare(pinned, hw, quants=list(model.weights_bytes) or None)
         self.http = httpx.Client(timeout=120.0)  # one client for the run: each new one loads the CA store
 
     # ---- launching
@@ -225,7 +232,10 @@ class Conformance:
         missing = facts.unanswered()
         data = {"unanswered": {k: facts.errors.get(k, "") for k in missing}, "disagreements": disagree,
                 "checks": {k: {"probe": p, "source": s} for k, (p, s) in plain.items()}, "seconds": facts.seconds}
-        problems = ([f"not answered: {', '.join(missing)}"] if missing else []) + \
+        # A newly optional experimental capability does not revoke a legacy baseline
+        # certification. Its absence stays in the record and withholds head quantization.
+        required_missing = [k for k in missing if k != "spec_fields"]
+        problems = ([f"not answered: {', '.join(required_missing)}"] if required_missing else []) + \
             ([f"the probe and the source disagree on {', '.join(disagree)}"] if disagree else [])
         return CheckResult("C01", name, "fail" if problems else "pass", "; ".join(problems), data)
 
@@ -300,12 +310,15 @@ class Conformance:
                 continue
             model = self.models[role]
             model.drafts_mode = "verified" if self.drafts == "verified" or self.draft else "table"
-            from rigtune.pairing import hub_off
+            from rigtune.pairing import hub_off, immutable_revision, is_local
             notes = ([] if model.drafts_mode == "verified" and hub_off(self.hub)
                      else self.backend.find_second_models(model))
             base = self.base(role)
             if model.drafts_mode == "verified":
-                notes += self.backend.find_pairs(model, base.ctx, draft=self.draft, hub=self.hub, hw=self.hw)
+                if is_local(model.spec.hf_id) or immutable_revision(model.spec.revision):
+                    notes += self.backend.find_pairs(model, base.ctx, draft=self.draft, hub=self.hub, hw=self.hw)
+                else:
+                    notes.append("second models not checked: target revision was not pinned before preparation")
             # min_batch=1: an MTP setting that does not fit at the default batch is tried at the largest that does.
             variants = self.backend.spec_variants(base, model, self.hw, all_methods=True, min_batch=1)
             if role == "hybrid":  # the hybrid model is here for its own head; the small one covers the rest

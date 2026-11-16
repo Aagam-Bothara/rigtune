@@ -125,6 +125,14 @@ def test_a_failed_check_never_stops_the_rest(run_for, monkeypatch):
     assert not cf.certified(results)
 
 
+def test_optional_head_field_stays_unanswered_without_revoking_baseline_conformance(run_for):
+    run, facts, _ = run_for("vllm", "0.33.0", only=["C01"])
+    assert facts.spec_fields is None and not facts.answered("spec_fields")
+    result, = run.run()
+    assert result.status == "pass"
+    assert "spec_fields" in result.data["unanswered"]
+
+
 def test_a_check_that_raises_is_a_failed_check(run_for, monkeypatch):
     run, facts, hw = run_for("vllm", "0.33.0", only=["C04", "C11"])
 

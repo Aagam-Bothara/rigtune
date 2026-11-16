@@ -926,12 +926,15 @@ def compare(
             progress(label, None)
         try:
             launch = backend.launch_spec(cfg, models[cfg.backend], 0)
-            row.launch_args = launch.args
+            from rigtune.pairing import redact_paths
+            row.launch_args = [redact_paths(arg, models[cfg.backend].spec_paths) for arg in launch.args]
             if origin is not None:  # with provenance, the environment each engine was launched with too
                 row.launch_env = dict(launch.env)
         except Exception:
             pass
         tr = runner.run(cfg, f"compare:{label}")
+        from rigtune.pairing import redact_trial
+        tr = redact_trial(tr, models[cfg.backend].spec_paths)
         spare = added[label].fallback if label in added else None
         if spare is not None and first and not tr.launched:
             swapped[label] = spare

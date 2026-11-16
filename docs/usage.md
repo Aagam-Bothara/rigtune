@@ -504,6 +504,7 @@ checking. Local directories are hashed (including weights); portable aliases go 
 profiles, while the supplied directory stays private. Supply the same directory when
 serving a cached profile; changed contents require recalibration. Quantized second
 models and unfamiliar loader families are not certified by this implementation.
+Local parameter counts require valid safetensors headers and every declared shard.
 
 `--hub off` uses local files, the HF cache or kept pair evidence for pairing. The
 same applies with `HF_HUB_OFFLINE=1`. Reused evidence says **not rechecked** and prints
@@ -512,6 +513,17 @@ out of the profile cache key. Use `rigtune recalibrate ... --hub on` to revisit 
 offline profile. Target weights must already be available to run fully offline;
 set `HF_HUB_OFFLINE=1` for the engine processes too. Optional EAGLE3/MTP discovery is
 skipped in offline verified searches if it has not already been recorded.
+Offline, the target is pinned only to a commit whose files are in the local cache;
+when kept evidence names a commit that was never downloaded, the target stays
+unpinned, no pair is offered and the profile's notes say so. A cache snapshot
+holding only some of a model's weight shards gives no size, so that pair is not
+checked from it.
+
+A verified profile is cached under the model as you named it, not under the commit
+it pinned, so the next `serve`, `bench` or `compare` finds it. The pinned commit is
+recorded in the profile and the engine is launched at it until `rigtune recalibrate`
+checks again. Profiles calibrated in table mode keep the file names and contents
+they had before these options existed.
 
 ```sh
 rigtune bench Qwen/Qwen3-8B --backend vllm --drafts verified
@@ -528,5 +540,12 @@ MTP heads. Its own checkpoint's MTP head remains the applicable method.
 vLLM budgets verified draft weights at the target dtype; its draft KV is unplanned.
 SGLang leaves weight room outside its memory fraction; its shared pool estimate
 still needs the GPU checks below. A vocabulary rejection is `draft_refused`, even
-in table mode; a second-repository access failure is `draft_unavailable`. A refuted
+in table mode; a second-repository access failure is `draft_unavailable`, named
+only from the download error's own text and never beside an out-of-memory failure.
+Only verified mode stops launching a pair that failed to start; table mode launches
+every candidate it always did. A refuted
 positive check is blocked only on the engine release that contradicted it.
+
+The optional fp8 MTP output-head trial requires vLLM 0.33+, a positive probe answer,
+and a card with native fp8 support. It requires Model Runner V2; explicitly setting
+`VLLM_USE_V2_MODEL_RUNNER=0` withholds the trial and explains why.

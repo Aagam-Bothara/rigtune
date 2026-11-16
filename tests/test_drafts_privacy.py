@@ -70,3 +70,42 @@ def test_disaggregated_profile_names_the_alias_not_the_directory(spec, monkeypat
     text = shown_and_saved(profile, monkeypatch)
     assert ALIAS in " ".join(profile.launch_args) and ALIAS in text
     assert not leaks(text, PRIVATE[form])
+
+
+class _Refusing:
+    """Every multi-GPU trial fails with an engine error that names the directory."""
+
+    def __init__(self, private):
+        self.error = f"failed to start (rc=1)\nOSError: cannot read {private}/config.json"
+
+    def _failed(self, cfg, stage, **kw):
+        from rigtune.models import TrialMetrics, TrialResult
+        return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False, error=self.error, **kw)
+
+    def run_replicas(self, cfg, gpus, stage):
+        return self._failed(cfg, stage, replicas=len(gpus))
+
+    def run(self, cfg, stage):
+        decode = getattr(cfg, "decode", None)  # a prefill/decode pair, or one tensor-parallel engine
+        return self._failed(decode or cfg, stage, **({"disagg": cfg} if decode is not None else {}))
+
+
+@pytest.mark.usefixtures("no_network", "tmp_home")
+@pytest.mark.parametrize("form", list(PRIVATE))
+@pytest.mark.parametrize("arrangement", ["layout", "phases"])
+def test_failed_multi_gpu_trials_are_scrubbed_in_progress_notes_and_table(spec, monkeypatch, form, arrangement):
+    monkeypatch.setattr(D, "connector_available", lambda pkg: True)
+    hw, reg, base = local_draft_pick(spec, "vllm", PRIVATE[form])
+    failing, seen = _Refusing(PRIVATE[form]), []
+
+    def progress(stage, cfg, res):
+        seen.append(res.error if res is not None else "")
+
+    if arrangement == "layout":
+        profile = calibrate_layout(hw, "throughput", base, reg, "auto", replica_runner=failing, tp_runner=failing,
+                                   progress=progress)
+    else:
+        profile = D.calibrate_disaggregated(hw, spec, "throughput", base, reg, phases="auto", runner=failing,
+                                            progress=progress)
+    assert any(ALIAS in error for error in seen) and any("failed" in note for note in profile.notes)
+    assert not leaks("\n".join(seen) + shown_and_saved(profile, monkeypatch), PRIVATE[form])

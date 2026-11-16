@@ -42,6 +42,15 @@ def test_not_on_ampere(capable, hw_a100):
     assert not any(c.spec_head_quant for c in vl.VllmBackend().spec_variants(vcfg(), with_head(), hw_a100, True))
 
 
+def test_v1_override_withholds_head_quantization(capable, hw_rtx4090, monkeypatch):
+    monkeypatch.setenv("VLLM_USE_V2_MODEL_RUNNER", "0")
+    be, pm, cfg = vl.VllmBackend(), with_head(), vcfg(batch=8)
+    assert not any(c.spec_head_quant for c in be.spec_variants(cfg, pm, hw_rtx4090, True))
+    assert any("Model Runner V2" in note for note in be.spec_notes(cfg, pm, hw_rtx4090, True))
+    with pytest.raises(ValueError, match="Model Runner V2"):
+        be.launch_spec(cfg.model_copy(update={"spec_decode": "mtp:1", "spec_head_quant": "fp8"}), pm, 8000)
+
+
 def test_json_carries_fp8(capable):
     cfg = vcfg(spec_decode="mtp:1", spec_head_quant="fp8")
     args = vl.VllmBackend().launch_spec(cfg, with_head(), 8000).args

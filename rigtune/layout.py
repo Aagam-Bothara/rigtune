@@ -359,6 +359,8 @@ def calibrate_layout(
                  if base.config.kv_tier is not None else [])
 
     def _record(res: TrialResult) -> None:
+        from rigtune.pairing import redact_trial
+        res = redact_trial(res, model.spec_paths)  # before progress, the table or a note can show its error
         results.append(res)
         if progress:
             progress("layout", res.config, res)

@@ -64,12 +64,13 @@ def test_refuted_record_blocks_only_that_engine_release(prepared_vllm, monkeypat
 
 
 def test_local_draft_checked_from_its_directory(tmp_path, prepared_vllm, monkeypatch):
+    from tests.test_pairing_read import write_weights
     for name, count in [("target", 80), ("draft", 10)]:
         root = tmp_path / "private-person" / name
         root.mkdir(parents=True)
         config = pair().config
         (root / "config.json").write_text(json.dumps(config))
-        (root / "model.safetensors").write_bytes(b"x" * count)
+        write_weights(root / "model.safetensors", (count,))
         (root / "tokenizer.json").write_text(json.dumps({"model": {"vocab": {"a": 0}}}))
     pm = prepared_vllm
     pm.spec.hf_id = str(tmp_path / "private-person" / "target")

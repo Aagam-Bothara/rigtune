@@ -410,6 +410,12 @@ class SubprocessTrialRunner:
         return self.run(cfg, stage, arrival_rate=rate)
 
     def run(self, cfg: Config, stage: str, arrival_rate: Optional[float] = None) -> TrialResult:
+        from rigtune.pairing import redact_trial
+        result = self._run(cfg, stage, arrival_rate)
+        model = self.models[cfg.backend]
+        return redact_trial(result, getattr(model, "spec_paths", {}))
+
+    def _run(self, cfg: Config, stage: str, arrival_rate: Optional[float] = None) -> TrialResult:
         backend = self.backends[cfg.backend]
         model = self.models[cfg.backend]
         port = free_port()
@@ -484,7 +490,11 @@ class SubprocessTrialRunner:
             return TrialResult(config=cfg, stage=stage, metrics=metrics, error=err, memory=observation,
                                failure_kind="request_failures" if err else None)
         except Exception as exc:
-            logger.exception("trial %s crashed", cfg.key())
+            if getattr(model, "spec_paths", {}):
+                from rigtune.pairing import redact_paths
+                logger.error("trial %s crashed: %s", cfg.key(), redact_paths(str(exc), model.spec_paths))
+            else:
+                logger.exception("trial %s crashed", cfg.key())
             return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False, error=str(exc),
                                memory=observation, failure_kind="crashed")
         finally:
@@ -510,6 +520,8 @@ class SubprocessTrialRunner:
         """
         backend = self.backends[base.backend]
         model = self.models[base.backend]
+        from rigtune.pairing import redact_paths, redact_trial
+        private_paths = getattr(model, "spec_paths", {})
         port = free_port()
         log_path = None
         if self.log_dir:
@@ -528,7 +540,7 @@ class SubprocessTrialRunner:
             proc = backend.launch(base.model_copy(update={"power_limit_w": None, "sm_clock_mhz": None}), model,
                                   port, log_path=log_path)
             if not proc.wait_ready(timeout=self.startup_timeout):
-                err = f"failed to start (rc={proc.returncode()})\n{proc.tail_log(20)}"
+                err = redact_paths(f"failed to start (rc={proc.returncode()})\n{proc.tail_log(20)}", private_paths)
                 return [TrialResult(config=with_power(base, s), stage=stage, metrics=TrialMetrics(), launched=False,
                                     error=err, failure_kind="startup_other") for s in settings]
             for i, s in enumerate(settings):
@@ -548,9 +560,13 @@ class SubprocessTrialRunner:
                         res = TrialResult(config=cfg, stage=stage, metrics=metrics, error=err,
                                           failure_kind="request_failures" if err else None)
                     except Exception as exc:
-                        logger.exception("power point %s crashed", cfg.key())
+                        if private_paths:
+                            logger.error("power point %s crashed: %s", cfg.key(), redact_paths(str(exc), private_paths))
+                        else:
+                            logger.exception("power point %s crashed", cfg.key())
                         res = TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=str(exc),
                                           failure_kind="crashed")
+                res = redact_trial(res, private_paths)
                 results.append(res)
                 if progress:
                     progress(stage, cfg, res)

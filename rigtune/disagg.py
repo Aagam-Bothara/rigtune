@@ -724,12 +724,13 @@ def calibrate_disaggregated(
         runner = DisaggTrialRunner(backend, model, hw, workload, log_dir=log_dir,
                                    power_for_gpu=(lambda i: power_controller or controller_for(i))
                                    if power_mode != "off" else None)
+    from rigtune.pairing import redact_trial
     t0 = time.monotonic()
     results: List[TrialResult] = []
     for p in pairs:
         if progress:
             progress("pd", p.decode, None)
-        res = runner.run(p, "pd")
+        res = redact_trial(runner.run(p, "pd"), model.spec_paths)  # before progress, the table or a note shows it
         results.append(res)
         if progress:
             progress("pd", p.decode, res)
@@ -751,7 +752,8 @@ def calibrate_disaggregated(
             points, sweep = [], None
             notes.append(f"decode-GPU power stage skipped: {exc}")
         if sweep is not None and len(points) > 1:
-            results += sweep(best.disagg, points, "pd-power", progress=progress)
+            results += [redact_trial(r, model.spec_paths)
+                        for r in sweep(best.disagg, points, "pd-power", progress=progress)]
             best, _ = pick(results, objective, constraints)
             notes.append(f"decode-GPU power setting: {setting_of(best.config).label()}")
 

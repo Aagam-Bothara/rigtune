@@ -775,12 +775,18 @@ class VllmBackend(BaseBackend):
         variants = [cfg.model_copy(update={"spec_decode": speculative.mtp(k), "spec_head_quant": None})
                     for k in speculative.MTP_TOKENS]
         facts = _engine_facts()
+        head_notes = []
         if (_vllm_version() >= (0, 33) and hw.gpu is not None and hw.gpu.cc >= (8, 9)
                 and "fp8" in self.precisions(hw) and facts is not None and facts.answered("spec_fields")
                 and "draft_lm_head_quantization" in facts.spec_fields):
-            variants.append(cfg.model_copy(update={"spec_decode": "mtp:1", "spec_head_quant": "fp8"}))
+            if os.environ.get("VLLM_USE_V2_MODEL_RUNNER") == "0":
+                head_notes.append("vllm: quantized MTP output head not offered: it requires Model Runner V2, "
+                                  "disabled by VLLM_USE_V2_MODEL_RUNNER=0")
+            else:
+                variants.append(cfg.model_copy(update={"spec_decode": "mtp:1", "spec_head_quant": "fp8"}))
         variants = [v for v in variants if v.key() != cfg.key() and self.known_failure(v) is None]
-        return self.own_head_fit(variants, model, hw, min_batch)
+        fitted, notes = self.own_head_fit(variants, model, hw, min_batch)
+        return fitted, notes + head_notes
 
     def _offers_mtp(self, cfg: Config, model: PreparedModel) -> bool:
         """The checkpoint's own MTP head: its weights were found (find_second_models), the vLLM that will run can
@@ -788,6 +794,14 @@ class VllmBackend(BaseBackend):
         pre-quantized repository's."""
         return (speculative.MTP_KEY in model.spec_repos and cfg.quant not in PREQUANTIZED
                 and model.arch.architecture in _mtp_archs())
+
+    def config_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
+        if (model.drafts_mode == "verified" and cfg.kv_dtype == AMPERE_FP8_KV
+                and (cfg.spec_decode or "").startswith(("draft:", "assist:"))):
+            return "verified pairs excluded from the measured failing fp8_e5m2 FlashInfer combination"
+        if cfg.spec_head_quant and os.environ.get("VLLM_USE_V2_MODEL_RUNNER") == "0":
+            return "quantized MTP output heads require Model Runner V2"
+        return None
 
     def known_failure(self, cfg: Config) -> Optional[str]:
         """Why `cfg` is expected to fail, when it is. On an A40, vLLM 0.29's draft model on the fp8 KV cache through
@@ -864,6 +878,9 @@ class VllmBackend(BaseBackend):
     # ---- launch
 
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:
+        refusal = self.config_refusal(cfg, model)
+        if refusal:
+            raise ValueError(refusal)
         args = [
             *vllm_serve_head(model.hf_paths.get(cfg.quant) or model.hf_path or model.spec.hf_id),
             # A stable name even when a 4-bit checkpoint repository is what gets loaded.
