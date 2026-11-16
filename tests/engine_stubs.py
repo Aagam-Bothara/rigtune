@@ -59,7 +59,25 @@ VLLM = {
     "vllm/distributed/kv_transfer/kv_connector/v1/offloading_connector.py": (
         "from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorBase_V1, SupportsHMA\n"
         "class OffloadingConnector(KVConnectorBase_V1, SupportsHMA):\n    pass\n"),
+    "vllm/config/compilation.py": (
+        "import enum\nfrom dataclasses import dataclass\n"
+        "class CompilationMode(enum.IntEnum):\n    NONE = 0\n    STOCK_TORCH_COMPILE = 1\n"
+        "    DYNAMO_TRACE_ONCE = 2\n    VLLM_COMPILE = 3\n"
+        "class CUDAGraphMode(enum.Enum):\n    NONE = 0\n    PIECEWISE = 1\n    FULL = 2\n"
+        "    FULL_DECODE_ONLY = (FULL, NONE)\n    FULL_AND_PIECEWISE = (FULL, PIECEWISE)\n"
+        "@dataclass\nclass PassConfig:\n    fuse_norm_quant: bool = False\n    eliminate_noops: bool = True\n"
+        "@dataclass\nclass CompilationConfig:\n    mode: int = 3\n    cudagraph_mode: int = 0\n"
+        "    cudagraph_capture_sizes: list = None\n    max_cudagraph_capture_size: int = None\n"),
+    "vllm/config/vllm.py": (
+        "from enum import IntEnum\n"
+        "class OptimizationLevel(IntEnum):\n    O0 = 0\n    O1 = 1\n    O2 = 2\n    O3 = 3\n"),
     "vllm/v1/__init__.py": "",
+    "vllm/v1/attention/__init__.py": "",
+    "vllm/v1/attention/backends/__init__.py": "",
+    "vllm/v1/attention/backends/registry.py": (
+        "from enum import Enum\n"
+        "class AttentionBackendEnum(Enum):\n    FLASH_ATTN = 'a'\n    TRITON_ATTN = 'b'\n    FLASHINFER = 'c'\n"
+        "    FLEX_ATTENTION = 'd'\n"),
     "vllm/v1/kv_offload/__init__.py": "",
     "vllm/v1/kv_offload/base.py": "offload_prompt_only = True\n",
     "vllm/v1/kv_offload/cpu/__init__.py": "",

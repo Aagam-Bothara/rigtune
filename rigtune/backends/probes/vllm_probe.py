@@ -10,6 +10,11 @@ What is asked, and where each release keeps it (read at v0.29.0 and v0.33.0):
   libs          the libraries rigtune records beside an engine (rigtune.hardware.ENGINE_LIBS).
   spec_methods  config/speculative.py SpeculativeMethod, a Literal of Literals (line 71 / 74), flattened.
   kv_dtypes     config/cache.py CacheDType (line 39 / 44).
+  kernel        the graph and compile settings --compilation-config takes, which the parser cannot show:
+                config/compilation.py CompilationMode (line 37 both), CUDAGraphMode (53 both), PassConfig
+                (107 / 114) and CompilationConfig (398 / 383); config/vllm.py OptimizationLevel (110 / 132);
+                v1/attention/backends/registry.py AttentionBackendEnum (34 both). Names only: what a card supports
+                cannot be asked with no GPU visible.
   flags         the parser `vllm serve` builds: entrypoints/cli/main.py makes a FlexibleArgumentParser and calls
                 ServeSubcommand().subparser_init on its subparsers (entrypoints/cli/serve.py, line 158 / 161).
   features      the KV offloading tier: OffloadingConnector and whether it is SupportsHMA
@@ -113,6 +118,29 @@ def kv_dtypes():
     return sorted(set(literal_values(CacheDType)))
 
 
+def field_names(cls):
+    from dataclasses import fields, is_dataclass
+
+    if is_dataclass(cls):
+        return sorted(f.name for f in fields(cls))
+    if hasattr(cls, "model_fields"):
+        return sorted(cls.model_fields)
+    raise TypeError(cls.__name__ + " fields could not be read")
+
+
+def kernel():
+    from vllm.config.compilation import CompilationConfig, CompilationMode, CUDAGraphMode, PassConfig
+    from vllm.config.vllm import OptimizationLevel
+    from vllm.v1.attention.backends.registry import AttentionBackendEnum
+
+    return {"cudagraph_modes": list(CUDAGraphMode.__members__),
+            "compilation_modes": list(CompilationMode.__members__),
+            "compilation_fields": field_names(CompilationConfig),
+            "pass_fields": field_names(PassConfig),
+            "attention_backends": list(AttentionBackendEnum.__members__),
+            "opt_levels": list(OptimizationLevel.__members__)}
+
+
 def module_source(name):
     """A module's source as this Python imports it. A module that fails to import fails the whole answer, which then
     says why: read as empty, it would answer False for what it holds, and that False would beat the source check."""
@@ -141,6 +169,7 @@ def main():
     emit("spec_methods", spec_methods)
     emit("spec_fields", spec_fields)
     emit("kv_dtypes", kv_dtypes)
+    emit("kernel", kernel)
     emit("flags", flags)
     emit("features", features)
     emit("archs", archs)

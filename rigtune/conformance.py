@@ -234,7 +234,7 @@ class Conformance:
                 "checks": {k: {"probe": p, "source": s} for k, (p, s) in plain.items()}, "seconds": facts.seconds}
         # A newly optional experimental capability does not revoke a legacy baseline
         # certification. Its absence stays in the record and withholds head quantization.
-        required_missing = [k for k in missing if k != "spec_fields"]
+        required_missing = [k for k in missing if k not in ("spec_fields", "kernel")]
         problems = ([f"not answered: {', '.join(required_missing)}"] if required_missing else []) + \
             ([f"the probe and the source disagree on {', '.join(disagree)}"] if disagree else [])
         return CheckResult("C01", name, "fail" if problems else "pass", "; ".join(problems), data)

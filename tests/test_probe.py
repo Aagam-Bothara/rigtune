@@ -102,7 +102,8 @@ def test_no_engine_at_all_answers_nothing_and_says_why(tmp_path, monkeypatch):
 
 def test_an_interpreter_that_cannot_run_is_reported_for_every_key(tmp_path):
     f = ef.run_probe("vllm", str(tmp_path / "no-such-python"))
-    assert set(f.unanswered()) == {"spec_methods", "spec_fields", "kv_dtypes", "flags", "features", "archs"}
+    assert set(f.unanswered()) == {"spec_methods", "spec_fields", "kv_dtypes", "kernel", "flags", "features",
+                                  "archs"}
     assert all(e.startswith("the probe could not run") for e in f.errors.values())
 
 

@@ -42,7 +42,8 @@ MARK = "RIGTUNE-PROBE "
 PROBES = Path(__file__).parent / "probes"
 SCRIPTS = {"vllm": "vllm_probe.py", "sglang": "sglang_probe.py"}
 # What each probe is asked, in the order it answers. "done" closes a probe that ran to the end.
-KEYS = {"vllm": ("version", "libs", "spec_methods", "spec_fields", "kv_dtypes", "flags", "features", "archs"),
+KEYS = {"vllm": ("version", "libs", "spec_methods", "spec_fields", "kv_dtypes", "kernel", "flags", "features",
+                 "archs"),
         "sglang": ("version", "libs", "spec_methods", "flags", "request_fields", "env_vars", "arch_sets", "archs")}
 
 
@@ -57,6 +58,8 @@ class EngineFacts(BaseModel):
     spec_methods: Optional[List[str]] = None  # the engine's own names: vLLM's methods, SGLang's algorithms
     spec_fields: Optional[List[str]] = None  # vLLM SpeculativeConfig fields; None = unanswered
     kv_dtypes: Optional[List[str]] = None  # vLLM
+    # vLLM: the names its graph and compile settings take, one list per KERNEL_PARTS entry; None = unanswered
+    kernel: Optional[Dict[str, List[str]]] = None
     request_fields: Optional[List[str]] = None  # SGLang: ChatCompletionRequest's fields
     env_vars: Optional[List[str]] = None  # SGLang: the variables its environ.py declares
     arch_sets: Optional[Dict[str, List[str]]] = None  # SGLang: architecture sets its memory rules test
@@ -92,7 +95,12 @@ def enabled() -> bool:
 # Answers that must not be empty: a release that renamed what the probe reads (a Literal turned into an Enum, a
 # registry with another method) would otherwise report none, and an empty list would take every method or
 # architecture away rather than leave the question to the source checks.
-NON_EMPTY = ("flags", "archs", "spec_methods", "kv_dtypes", "request_fields", "env_vars", "arch_sets", "features")
+NON_EMPTY = ("flags", "archs", "spec_methods", "kv_dtypes", "request_fields", "env_vars", "arch_sets", "features",
+             "kernel")
+# The lists a `kernel` answer holds. One that is missing or empty makes the whole answer none: a release that renamed
+# an enum must not read as "this engine has no CUDA-graph modes".
+KERNEL_PARTS = ("cudagraph_modes", "compilation_modes", "compilation_fields", "pass_fields", "attention_backends",
+                "opt_levels")
 TIMED_OUT = "no answer within"
 
 
@@ -143,6 +151,9 @@ def parse(engine: str, stdout: str, why_missing: str) -> EngineFacts:
             continue
         if key in NON_EMPTY and not answers[key]:
             errors[key] = "an empty answer, taken as none"
+            continue
+        if key == "kernel" and (lacking := [p for p in KERNEL_PARTS if not answers[key].get(p)]):
+            errors[key] = f"an empty answer, taken as none: {', '.join(lacking)}"
             continue
         data[key] = answers[key] if key == "version" else _scrub(answers[key])
     return EngineFacts.model_validate({**data, "errors": _scrub(errors)})
@@ -196,7 +207,8 @@ SOURCES = {
     "vllm": ("config/speculative.py", "config/cache.py", "entrypoints/cli/serve.py", "engine/arg_utils.py",
              "entrypoints/common/cli_args.py", "entrypoints/launchers/cli_args.py", "model_executor/models",
              "model_executor/models/registry.py", "distributed/kv_transfer/kv_connector/v1/offloading_connector.py",
-             "v1/kv_offload/base.py"),
+             "v1/kv_offload/base.py", "config/compilation.py", "config/vllm.py",
+             "v1/attention/backends/registry.py"),
     "sglang": ("srt/server_args.py", "srt/arg_groups", "srt/arg_groups/fields", "srt/speculative/spec_info.py",
                "srt/speculative/spec_registry.py", "srt/environ.py", "srt/entrypoints/openai/protocol.py",
                "srt/models", "srt/models/registry.py"),
