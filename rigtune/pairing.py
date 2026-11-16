@@ -7,7 +7,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import tempfile
+import time
+from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 
@@ -314,3 +318,77 @@ def read_tokenizers(target: PairFiles, second: PairFiles, *, source: str = "hub"
             raise
         except Exception as exc:
             raise _lookup_error(exc, source) from None
+
+
+class PairRecord(BaseModel):
+    target: PairFiles
+    second: PairFiles
+    kind: str
+    verdict: PairVerdict
+    checked_at: str
+    refuted_by: List[str] = Field(default_factory=list)
+
+
+def _safe_files(files: PairFiles) -> PairFiles:
+    # Raw HF configs sometimes embed _name_or_path and machine-specific auto_map
+    # values. Keep only the facts the pure check consumes, never those paths.
+    cfg = text_config(files.config)
+    keys = ("architectures", "model_type", "vocab_size", "max_position_embeddings",
+            "torch_dtype", "dtype", "quantization_config", "num_hidden_layers")
+    cfg = {k: cfg[k] for k in keys if k in cfg}
+    from rigtune.backends.facts import _scrub
+    cfg = _scrub(cfg)
+    repo = files.repo
+    if repo and is_local(repo):
+        repo = local_alias(repo, files.sha or hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest())
+    return files.model_copy(update={"repo": repo, "config": cfg})
+
+
+def record_path(target: PairFiles, second: PairFiles, kind: str) -> Path:
+    from rigtune.paths import pairs_dir
+    a, b = _safe_files(target), _safe_files(second)
+    key = json.dumps([a.repo, a.sha, b.repo, b.sha, kind], separators=(",", ":"))
+    return pairs_dir() / (hashlib.sha256(key.encode()).hexdigest()[:24] + ".json")
+
+
+def load_record(path: Path) -> Optional[PairRecord]:
+    try:
+        record = PairRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        if record.verdict.status not in ("ok", "refused") or not record.target.sha or not record.second.sha:
+            return None
+        return record
+    except (OSError, ValueError):
+        return None
+
+
+def _write_record(path: Path, record: PairRecord) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stage = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         suffix=".tmp", delete=False) as fh:
+            stage = Path(fh.name)
+            fh.write(record.model_dump_json())
+        for attempt in range(3):
+            try:
+                os.replace(stage, path)
+                break
+            except PermissionError:  # short Windows reader/antivirus locks
+                if attempt == 2:
+                    raise
+                time.sleep(.02 * (attempt + 1))
+    finally:
+        if stage is not None:
+            stage.unlink(missing_ok=True)
+
+
+def save_record(target: PairFiles, second: PairFiles, kind: str, verdict: PairVerdict) -> Optional[Path]:
+    if verdict.status not in ("ok", "refused"):
+        return None
+    path = record_path(target, second, kind)
+    previous = load_record(path)
+    record = PairRecord(target=_safe_files(target), second=_safe_files(second), kind=kind,
+                        verdict=verdict, checked_at=datetime.now(timezone.utc).isoformat(),
+                        refuted_by=previous.refuted_by if previous else [])
+    _write_record(path, record)
+    return path

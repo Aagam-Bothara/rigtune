@@ -156,6 +156,11 @@ def tmp_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_pair_records(tmp_path, monkeypatch):
+    monkeypatch.setenv("RIGTUNE_PAIRS", str(tmp_path / "pairs"))
+
+
+@pytest.fixture(autouse=True)
 def _no_hf_token(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     os.environ.setdefault("HF_HUB_OFFLINE", "1")

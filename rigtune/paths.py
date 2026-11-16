@@ -26,3 +26,8 @@ def home() -> Path:
         return Path(given)
     current, former = Path.home() / ".rigtune", Path.home() / f".{FORMER}"
     return former if former.is_dir() and not current.exists() else current
+
+
+def pairs_dir() -> Path:
+    """Checked second-model evidence; independently relocatable for offline sites."""
+    return Path(env("PAIRS")) if env("PAIRS") else home() / "pairs"
