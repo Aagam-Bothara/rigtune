@@ -630,6 +630,13 @@ class SglangBackend(BaseBackend):
             gpu_memory_utilization=0.88,
         )
 
+    def kernels_same_as_default(self, cfg: Config, hw: HardwareDescriptor) -> Optional[str]:
+        if cfg.kernels is None:
+            return None
+        vram_mib = (hw.gpu.vram_total_bytes if hw.gpu else 0) / (1024 * 1024)
+        return kernels.sglang_same_as_default(kernels.parse(cfg.kernels), vram_mib, cfg.batch, cfg.tp,
+                                              self.version(hw))
+
     def config_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
         if cfg.kernels is not None:  # each setting must be one the parser of the SGLang that will run reported
             return kernels.sglang_unconfirmed(kernels.parse(cfg.kernels), _engine_facts())

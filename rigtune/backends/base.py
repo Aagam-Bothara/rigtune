@@ -376,6 +376,11 @@ class BaseBackend:
         """A model-dependent restriction, enforced at search and launch boundaries."""
         return None
 
+    def kernels_same_as_default(self, cfg: Config, hw: HardwareDescriptor) -> Optional[str]:
+        """Why `cfg`'s kernel settings are what this engine does anyway, so trying them would measure nothing; None
+        when they are a change, or when no rule says. Default: no rule."""
+        return None
+
     def known_failure(self, cfg: Config) -> Optional[str]:
         """Why `cfg` is expected to fail at start-up or under load, so the search does not try it. Default: never."""
         return None

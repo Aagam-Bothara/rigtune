@@ -96,6 +96,8 @@ class SearchOptions:
     drafts: str = "table"
     draft: Optional[str] = None
     hub: str = "on"
+    # --kernel: one engine kernel setting (rigtune.kernels) tried on each tuned engine's leader as a full trial.
+    kernel: Optional[str] = None
     prefix_cache: bool = True  # keep prefix caching on, and tune it for shared-prefix workloads
     phase_tuning: bool = True  # the prefill-knob stage
     combine: bool = True  # combinations of the strategies that were promising on their own
@@ -152,6 +154,9 @@ class SearchOptions:
             from rigtune.pairing import is_local, read_files
             identity = read_files(self.draft).sha if is_local(self.draft) else self.draft
             out["draft"] = hashlib.sha256(str(identity).encode()).hexdigest()[:16]
+        if self.kernel:  # the setting in its one spelling, hashed: short, and safe in a file name on every system
+            from rigtune.kernels import canonical
+            out["kernel"] = hashlib.sha256(canonical(self.kernel).encode()).hexdigest()[:16]
         if self.quants is not None:
             out["quant"] = "+".join(self.quants)
         if not self.kv_quant:
@@ -462,6 +467,37 @@ def gpu_pool_bytes(leader: TrialResult, hw: HardwareDescriptor, pm: PreparedMode
         return 0, "unknown"
     reserved = int(c.gpu_memory_utilization * hw.gpu.vram_total_bytes)
     return max(0, reserved - pm.weights_for(c.quant) - mm.runtime_workspace), "planned"
+
+
+def kernel_variants_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult", setting: str):
+    """--kernel: (leader trial) -> ([the leader's config with the named kernel setting], None), or ([], why not).
+
+    Nothing is launched for a setting the engine probe did not confirm, one a rule read in the engine's source
+    says it refuses, one that is what the engine does anyway, or one whose config no longer fits in memory; the
+    note says which. Whether a setting that is tried gets adopted is the objective's call, on its full trial."""
+    from rigtune import kernels
+
+    canonical = kernels.canonical(setting)
+    fits = combination_fits(hw, reg, plan)
+
+    def fn(leader: TrialResult) -> Tuple[List[Config], Optional[str]]:
+        c = leader.config
+        be, pm = reg[c.backend], plan.prepared.get(c.backend)
+        lead = f"kernel setting {canonical} not tried on {c.backend}"
+        if pm is None or c.backend not in ("vllm", "sglang"):
+            return [], f"{lead}: kernel settings are rendered for vLLM and SGLang on a GPU only"
+        variant = c.model_copy(update={"kernels": canonical})
+        refusal = be.config_refusal(variant, pm)
+        if refusal:
+            return [], f"{lead}: {refusal}"
+        same = be.kernels_same_as_default(variant, hw)
+        if same:
+            return [], f"{lead}: {same}, so there is no change to measure"
+        if not fits(variant):
+            return [], f"{lead}: with it the leader's configuration no longer fits in memory"
+        return [variant], None
+
+    return fn
 
 
 def tier_variants_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult", objective: str,
@@ -1076,6 +1112,7 @@ def calibrate(
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
                                             if phase_tuning and opts.phase_tuning else None),
                           tier_variants=tier_fn, startup_failure=startup_failure_fn(hw, reg, plan),
+                          kernel_variants=kernel_variants_fn(hw, reg, plan, opts.kernel) if opts.kernel else None,
                           on_skip=ledger.trial if ledger is not None else None)
     t0 = time.monotonic()
     try:
@@ -1254,6 +1291,9 @@ def resolve_profile(
     opts = options or SearchOptions()
     if phases != "unified" and layout != "single":
         raise RuntimeError("choose either --phases (disaggregated prefill/decode) or --layout (replicas, tp), not both")
+    if opts.kernel and (phases != "unified" or layout != "single"):
+        raise RuntimeError("--kernel tries one setting on a single engine's leader; it is not tried under --layout "
+                           "or --phases. Calibrate the single engine with it first.")
     if not skip_calibration:
         check_distributed_options(opts, hw, layout, phases)
         check_goal_measurable(objective, constraints, opts, hw, layout, phases, power=False)

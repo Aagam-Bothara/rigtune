@@ -797,6 +797,10 @@ class StagedSearch:
     _noted_contenders: set = field(default_factory=set)
     _spec_tried: set = field(default_factory=set)  # engines whose speculation stage has run (decide_after_spec)
     _tier_tried: set = field(default_factory=set)  # engines whose tier stage has run
+    # --kernel: (an engine's leader trial) -> (that config with the named kernel setting, or nothing and why).
+    # None, the default, adds no stage, no trial and no note.
+    kernel_variants: Optional[Callable[[TrialResult], Tuple[List[Config], Optional[str]]]] = None
+    _kernel_tried: set = field(default_factory=set)  # engines whose kernel stage has run
     _text_only: set = field(default_factory=set)  # engines whose multimodal profiling failed: trials run text-only
     _startup_notes: List[str] = field(default_factory=list)
     # Speculation kinds not launched again: suffix decoding, after a trial showed Arctic Inference unusable
@@ -1155,7 +1159,7 @@ class StagedSearch:
 
     # Config fields a single-dimension stage may change (plus `extra`, compared key by key).
     _DELTA_FIELDS = ("batch", "n_batch", "prefill_budget", "kv_dtype", "prefix_cache", "spec_decode",
-                     "kv_tier", "spec_head_quant")
+                     "kv_tier", "spec_head_quant", "kernels")
     # Changed together with the speculation setting only: SGLang lowers the memory fraction to leave a second
     # model room, and a combination that carries the speculation over must carry the lower fraction with it.
     _SPEC_MEMORY_FIELDS = ("gpu_memory_utilization", "gmu_before_spec")
@@ -1380,6 +1384,7 @@ class StagedSearch:
             for name, fn in self.variant_stages:
                 self.stage_variants(name, fn, backend=base.backend)
             self.stage_tier(base.backend)
+            self.stage_kernels(base.backend)
             if self.combine:
                 self.stage_combinations(base)
             return
@@ -1398,6 +1403,7 @@ class StagedSearch:
                 if name != "spec":
                     self.stage_variants(name, fn, backend=base.backend, spec=spec)
             self.stage_tier(base.backend)  # once per engine: on its best speculation setting's leader
+            self.stage_kernels(base.backend)  # likewise
             if self.combine:
                 self.stage_combinations(start.config, spec=spec, limit=limit)
 
@@ -1451,6 +1457,23 @@ class StagedSearch:
         for v in variants:
             self._run(v, "tier")
             self._variant_log.append(("tier", leader.config, v))
+
+    def stage_kernels(self, backend: str) -> None:
+        """One named kernel setting (--kernel) on the engine's leader, once per engine, as a full trial. The
+        setting is not launched when the engine would refuse it or it changes nothing, with a note saying which;
+        the objective then judges it like any other change, and one that only ties loses (objectives._strategies)."""
+        if self.kernel_variants is None or backend in self._kernel_tried:
+            return
+        self._kernel_tried.add(backend)
+        leader = self._leader(backend)
+        if leader is None:
+            return
+        variants, note = self.kernel_variants(leader)  # an error in a rule is raised, not read as "refused"
+        if note:
+            self.notes.append(note)
+        for v in variants:
+            self._run(v, "kernels")
+            self._variant_log.append(("kernels", leader.config, v))
 
     def stage_explore(self) -> None:
         """Stage 3g: configurations of the leading engine and precision drawn at random from explore_space,

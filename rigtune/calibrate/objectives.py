@@ -493,7 +493,8 @@ def _strategies(r: TrialResult) -> int:
     """
     c = r.config
     return sum((c.kv_dtype != "auto", c.spec_decode is not None, c.prefill_budget is not None,
-                bool({"cache_reuse", "kv_unified"} & set(c.extra)), c.kv_tier is not None))
+                bool({"cache_reuse", "kv_unified"} & set(c.extra)), c.kv_tier is not None,
+                c.kernels is not None))
 
 
 def _joules(x: Ranked) -> float:

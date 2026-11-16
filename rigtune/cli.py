@@ -443,7 +443,8 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
           kv_tier: str = "off",
           arrival_rate: Optional[float] = None, rate_check: str = "on",
           confirm_rounds: int = 1, min_requests: Optional[int] = None, eval_attempts: int = 3,
-          drafts: str = "table", draft: Optional[str] = None, hub: str = "on"):
+          drafts: str = "table", draft: Optional[str] = None, hub: str = "on",
+          kernel: Optional[str] = None):
     from rigtune.pipeline import SearchOptions
 
     if eval_set:
@@ -462,7 +463,7 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
         kv_tier=kv_tier,
         arrival_rate=arrival_rate, rate_check=rate_check == "on",
         confirm_rounds=confirm_rounds, min_requests=min_requests, eval_attempts=eval_attempts,
-        drafts=drafts, draft=draft, hub=hub,
+        drafts=drafts, draft=draft, hub=hub, kernel=kernel,
     )
 
 
@@ -477,6 +478,23 @@ DRAFTS_OPT = typer.Option("table", "--drafts", callback=_drafts,
 DRAFT_OPT = typer.Option(None, "--draft", help="Extra draft repository or directory; enables verified checking.")
 HUB_OPT = typer.Option("on", "--hub", callback=_on_off,
                        help="off: pair evidence from local files/cache only (also HF_HUB_OFFLINE=1).")
+
+
+def _kernel(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    from rigtune.kernels import canonical
+
+    try:
+        return canonical(value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--kernel") from None
+
+
+KERNEL_OPT = typer.Option(
+    None, "--kernel", callback=_kernel,
+    help="Try one engine kernel setting on each tuned engine's leader, e.g. cgmax=64 (SGLang's decode CUDA-graph "
+         "cap) or attn=TRITON_ATTN (vLLM). Kept only if it measurably wins. Has not run on hardware.")
 
 
 KV_TIER_OPT = typer.Option(
@@ -943,6 +961,7 @@ def bench(
     speculative: str = SPEC_OPT,
     drafts: str = DRAFTS_OPT,
     draft: Optional[str] = DRAFT_OPT,
+    kernel: Optional[str] = KERNEL_OPT,
     hub: str = HUB_OPT,
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
@@ -995,7 +1014,8 @@ def bench(
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
                  eval_attempts=eval_attempts,
                  report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
-                 confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub)
+                 confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub,
+                 kernel=kernel)
     try:  # as resolve_profile does: refused before the weights download and the search runs
         check_distributed_options(opts, hw, layout, phases)
         check_goal_measurable(objective, cons, opts, hw, layout, phases)
@@ -1059,6 +1079,7 @@ def recalibrate(
     speculative: str = SPEC_OPT,
     drafts: str = DRAFTS_OPT,
     draft: Optional[str] = DRAFT_OPT,
+    kernel: Optional[str] = KERNEL_OPT,
     hub: str = HUB_OPT,
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
@@ -1099,7 +1120,8 @@ def recalibrate(
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
                  eval_attempts=eval_attempts,
                  report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
-                 confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub), layout=layout)
+                 confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub,
+                 kernel=kernel), layout=layout)
     view.stop()
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
@@ -1180,6 +1202,7 @@ def compare(
     speculative: str = SPEC_OPT,
     drafts: str = DRAFTS_OPT,
     draft: Optional[str] = DRAFT_OPT,
+    kernel: Optional[str] = KERNEL_OPT,
     hub: str = HUB_OPT,
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
@@ -1261,7 +1284,8 @@ def compare(
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
                  eval_attempts=eval_attempts,
                  report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
-                 confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub), layout=layout)
+                 confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub,
+                 kernel=kernel), layout=layout)
     view.stop()
     _print_profile(profile)
     # Compare the checked target commit, including stock rows prepared on another backend.
@@ -1604,6 +1628,7 @@ def serve(
     speculative: str = SPEC_OPT,
     drafts: str = DRAFTS_OPT,
     draft: Optional[str] = DRAFT_OPT,
+    kernel: Optional[str] = KERNEL_OPT,
     hub: str = HUB_OPT,
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
@@ -1692,7 +1717,8 @@ def serve(
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
                  eval_attempts=eval_attempts,
                  report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
-                 confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub), layout=layout)
+                 confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub,
+                 kernel=kernel), layout=layout)
     view.stop()
     _print_profile(profile)
     if profile.prepared is None:

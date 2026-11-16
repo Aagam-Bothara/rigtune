@@ -807,6 +807,16 @@ class VllmBackend(BaseBackend):
                     or kernels.vllm_refusal(settings, cfg.kv_dtype, facts.version))
         return None
 
+    def kernels_same_as_default(self, cfg: Config, hw: HardwareDescriptor) -> Optional[str]:
+        if cfg.kernels is None:
+            return None
+        settings = kernels.parse(cfg.kernels)
+        # The attention backend the launch fixes, when it fixes one; otherwise vLLM chooses by card and is not known.
+        attention = settings.get("attn") or cfg.extra.get("attention_backend") or KV_ATTENTION.get(cfg.kv_dtype)
+        return kernels.vllm_same_as_default(settings, self.version(hw), attention=attention,
+                                            speculating=bool(cfg.spec_decode),
+                                            capability=hw.gpu.compute_capability if hw.gpu else None)
+
     def known_failure(self, cfg: Config) -> Optional[str]:
         """Why `cfg` is expected to fail, when it is. On an A40, vLLM 0.29's draft model on the fp8 KV cache through
         FlashInfer (the Ampere route) failed most requests with "CUDA error: an illegal memory access", each working
