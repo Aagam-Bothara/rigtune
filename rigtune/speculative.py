@@ -525,7 +525,9 @@ def vllm_config(spec: str, revision: Optional[str] = None) -> Dict[str, object]:
     return out
 
 
-def sglang_config(spec: str, model_path: Optional[str] = None, revision: Optional[str] = None) -> List[str]:
+def sglang_config(spec: str, model_path: Optional[str] = None, revision: Optional[str] = None, *,
+                   draft_revision: Optional[str] = None, draft_quantization: Optional[str] = None,
+                   draft_path: Optional[str] = None) -> List[str]:
     """SGLang's launch flags for a spec (flags as in SGLang 0.5.19's server_args.py). `model_path` and `revision`
     are the target's, used only by an MTP head.
 
@@ -557,9 +559,14 @@ def sglang_config(spec: str, model_path: Optional[str] = None, revision: Optiona
         return out + ["--speculative-num-steps", str(k), "--speculative-eagle-topk", "1",
                       "--speculative-num-draft-tokens", str(k + 1)]
     if kind in SECOND_MODEL:
-        return ["--speculative-algorithm", "EAGLE3" if kind == "eagle3" else "STANDALONE",
-                "--speculative-draft-model-path", str(model_id), "--speculative-num-steps", str(k),
-                "--speculative-eagle-topk", "1", "--speculative-num-draft-tokens", str(k + 1)]
+        out = ["--speculative-algorithm", "EAGLE3" if kind == "eagle3" else "STANDALONE",
+               "--speculative-draft-model-path", draft_path or str(model_id), "--speculative-num-steps", str(k),
+               "--speculative-eagle-topk", "1", "--speculative-num-draft-tokens", str(k + 1)]
+        if draft_revision:
+            out += ["--speculative-draft-model-revision", draft_revision]
+        if draft_quantization:
+            out += ["--speculative-draft-model-quantization", draft_quantization]
+        return out
     raise ValueError(f"SGLang has no {kind} speculative decoding")
 
 

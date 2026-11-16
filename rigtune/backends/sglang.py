@@ -552,7 +552,7 @@ class SglangBackend(BaseBackend):
             elif found:
                 notes.append(f"sglang: EAGLE3 head {found[0]} not tried, its size could not be read")
         draft = speculative.draft_for(prepared.spec.hf_id)
-        if "draft" in methods and draft:
+        if "draft" in methods and draft and prepared.drafts_mode == "table":
             try:
                 size = speculative.repo_bytes(draft)
             except Exception as exc:
@@ -571,6 +571,12 @@ class SglangBackend(BaseBackend):
         for n in notes:
             logger.warning(n)
         return notes
+
+    def find_pairs(self, prepared: PreparedModel, ctx: int = 4096, *, draft: Optional[str] = None,
+                   hub: str = "on", hw: Optional[HardwareDescriptor] = None) -> List[str]:
+        from rigtune.pairing import discover
+        return discover(prepared, self.name, ctx, draft=draft, hub=hub,
+                        version=self.version(hw) if hw else None)
 
     supports_tp = True
 
@@ -637,7 +643,11 @@ class SglangBackend(BaseBackend):
             args += ["--disable-radix-cache"]
         revision = model.spec.revision if cfg.quant not in INT4_METHODS else None
         if cfg.spec_decode:  # the path and revision are read by an MTP head only: the target's own
-            args += speculative.sglang_config(cfg.spec_decode, model_path=path, revision=revision)
+            kind, second, _ = speculative.parse(cfg.spec_decode)
+            args += speculative.sglang_config(
+                cfg.spec_decode, model_path=path, revision=revision,
+                draft_revision=model.spec_revisions.get(second), draft_path=model.spec_paths.get(second),
+                draft_quantization="unquant" if second in model.spec_revisions else None)
         if cfg.tp > 1:
             args += ["--tp-size", str(cfg.tp)]
         if revision:
@@ -739,7 +749,11 @@ class SglangBackend(BaseBackend):
         if hw is not None:
             if "eagle3" in methods and "eagle3" in model.spec_repos:
                 specs.append(speculative.eagle3(model.spec_repos["eagle3"], speculative.EAGLE3_TOKENS))
-            if "draft" in methods and "draft" in model.spec_repos:
+            if "draft" in methods and model.drafts_mode == "verified":
+                from rigtune.pairing import eligible_pairs
+                specs += [speculative.draft(p["repo"], speculative.DRAFT_TOKENS_SGLANG)
+                          for p in eligible_pairs(model, "draft", cfg.ctx)]
+            elif "draft" in methods and "draft" in model.spec_repos:
                 specs.append(speculative.draft(model.spec_repos["draft"], speculative.DRAFT_TOKENS_SGLANG))
         out: List[Config] = []
         for s in specs:
