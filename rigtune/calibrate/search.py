@@ -88,12 +88,50 @@ STARTUP_CAUSES = (MM_PROFILING_FAILED, LOAD_FAILED, SUFFIX_FAILED, ARCTIC_PLUGIN
 #   crashed            the trial itself raised (an exception in rigtune, a full disk for a tier)
 #   skipped_budget     not launched: --budget was spent
 #   skipped_blocked    not launched: its speculation method failed to start earlier in the calibration
+#   kernel_refused     the engine exited at start-up naming a kernel setting of the config (Config.kernels)
 FAILURE_KINDS = ("oom_startup", "mm_profiling", "load_failure", "suffix_unusable", "arctic_plugin", "startup_other",
                  "power_unavailable", "request_failures", "crashed", "skipped_budget", "skipped_blocked",
-                 "draft_refused", "draft_unavailable")
+                 "draft_refused", "draft_unavailable", "kernel_refused")
 _CAUSE_KINDS = {MM_PROFILING_FAILED: "mm_profiling", LOAD_FAILED: "load_failure", SUFFIX_FAILED: "suffix_unusable",
                 ARCTIC_PLUGIN_FAILED: "arctic_plugin", SUFFIX_TRIAL_ERROR: "startup_other"}
 BUDGET_SKIPPED = "skipped: calibration budget reached"
+KERNEL_REFUSED = "the engine refused a kernel setting"
+
+# How an engine says it will not start with a kernel setting. Whole phrases, read in vLLM v0.29.0 / v0.33.0:
+#   "Selected backend X is not valid for this configuration. Reason: ..."      platforms/cuda.py:423-429 / 439-445
+#   "CUDAGraphMode.X is not supported with ..." raised by the resolver         config/compilation.py:1399-1410, 1473
+#                                                                              / 1400-1411, 1488
+# The resolver logs the same opening as a warning when it only changes the mode; that line ends
+# "; setting cudagraph_mode=NAME" and is no refusal. An argparse error counts when it names a flag this config's
+# kernel settings rendered (both engines; SGLang's choices are argparse's). vLLM's free-memory check at start-up and
+# an out-of-memory during graph capture name no setting and are not refusals of one.
+_BACKEND_INVALID = re.compile(r"Selected backend \S+ is not valid for this configuration\. Reason: [^\n]{0,300}")
+_CG_UNSUPPORTED = re.compile(r"CUDAGraphMode\.[A-Z_]+ is not supported with [^\n]{0,300}")
+_ARG_ERROR = re.compile(r"error: argument (--[a-z0-9-]+)(?:/\S+)?: [^\n]{0,300}")
+
+
+def kernel_startup_refusal(cfg: Config, log: str) -> Optional[str]:
+    """The line in which the engine refused one of `cfg`'s kernel settings at start-up, or None. Never looked for
+    on a config without kernel settings, so every other failure keeps the kind it had."""
+    if cfg.kernels is None or not log:
+        return None
+    from rigtune import kernels
+    from rigtune.bench.compare import scrub_text
+
+    settings = kernels.parse(cfg.kernels)
+    if cfg.backend.startswith("vllm"):
+        flags = {"--attention-backend", "--compilation-config", "--optimization-level"}
+        match = _BACKEND_INVALID.search(log) if "attn" in settings else None
+        if match is None:
+            match = next((m for m in _CG_UNSUPPORTED.finditer(log) if "; setting cudagraph_mode=" not in m.group(0)),
+                         None)
+    else:
+        flags = {kernels.SGLANG_FLAGS[key] for key in settings if key in kernels.SGLANG_FLAGS}
+        match = None
+    if match is None:
+        match = next((m for m in _ARG_ERROR.finditer(log) if m.group(1) in flags), None)
+    return scrub_text(match.group(0).strip()) if match else None
+
 _REQUESTS_FAILED = re.compile(r"\d+/\d+ requests failed")  # TrialMetrics.failure_summary
 # vLLM profiles memory at start-up with dummy multimodal inputs, and a processor that rejects them stops the engine.
 # That happens when the engine and transformers mismatch: vLLM 0.29.0 declares only transformers>=5.10.4, and with
@@ -224,6 +262,8 @@ def failure_kind(res: TrialResult) -> Optional[str]:
     error = res.error or ""
     if error.startswith("out of memory at start-up"):
         return "oom_startup"
+    if error.startswith(KERNEL_REFUSED):
+        return "kernel_refused"
     cause = startup_cause(error)[0]
     if cause is not None:
         return _CAUSE_KINDS[cause]
@@ -456,13 +496,20 @@ class SubprocessTrialRunner:
                 cause = (f"{pair_failure}; " if pair_failure else
                          "out of memory at start-up; " if mentions_oom(log) else "")
                 why = pair_failure or ("oom_startup" if cause else "startup_other")
+                # A kernel setting the engine named in refusing to start is that, whatever else the log holds; an
+                # out-of-memory on such a trial stays one, and its error says which setting it ran with.
+                refused = kernel_startup_refusal(cfg, log)
+                if refused:
+                    cause, why = f"{KERNEL_REFUSED} ({refused}); ", "kernel_refused"
+                elif cfg.kernels is not None and why == "oom_startup":
+                    cause += f"kernel settings {cfg.kernels}; "
                 if pair_failure == "draft_refused" and model is not None:
                     from rigtune.pairing import refute
                     if refute(model, cfg.spec_decode, cfg.backend, backend.version(self.hw) if self.hw else None):
                         cause += "rigtune's check was wrong; the pair is blocked on this engine release; "
                 # The causes the search acts on or reports, also often above the tail (StagedSearch._startup_retry).
                 for kind, find in startup_finders(cfg, log):
-                    line = None if cause else find(log)
+                    line = None if cause else find(log)  # never when a cause is already known
                     if line:
                         cause, why = f"{kind} ({line}); ", _CAUSE_KINDS[kind]
                 return TrialResult(

@@ -115,9 +115,11 @@ class Observation:
 def _is_oom(error: Optional[str]) -> bool:
     if not error:
         return False
-    from rigtune.calibrate.search import startup_cause
+    from rigtune.calibrate.search import KERNEL_REFUSED, startup_cause
 
     if startup_cause(error)[0] is not None:  # the log named another cause (a load or multimodal profiling failure)
+        return False
+    if error.startswith(KERNEL_REFUSED):  # the engine named a kernel setting: no memory plan was wrong
         return False
     e = error.lower()
     return "out of memory" in e or "oom" in e or "cuda error: out of memory" in e or "failed to allocate" in e
