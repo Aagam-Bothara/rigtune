@@ -5,6 +5,10 @@ the Hub or loads model code. Missing facts are unknown, never proof of compatibi
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import re
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -114,3 +118,199 @@ def check_pair(target: PairFiles, second: PairFiles, kind: str, ctx: int,
         unknown.append("revision_unread")
     return PairVerdict(status="refused" if refused else "unknown" if unknown else "ok",
                        reasons=refused + unknown, evidence=evidence)
+
+
+TOKENIZER_LIMIT = 64_000_000
+
+
+class HubLookupError(RuntimeError):
+    def __init__(self, why: str):
+        self.why = why
+        super().__init__(f"pair files not checked: {why}")
+
+
+def _lookup_error(exc: Exception, source: str) -> HubLookupError:
+    code = getattr(getattr(exc, "response", None), "status_code", None)
+    why = {401: "gated", 403: "gated", 404: "not_found", 429: "rate_limited"}.get(code)
+    if why is None:
+        why = "offline" if source == "cache" or type(exc).__name__ in (
+            "OfflineModeIsEnabled", "LocalEntryNotFoundError") else "error"
+    return HubLookupError(why)
+
+
+def _get(obj: Any, key: str, default=None):
+    return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+
+
+def local_alias(repo: str, digest: str) -> str:
+    """Portable, path-free identity; works with Windows paths on Linux too."""
+    name = PureWindowsPath(repo).name if "\\" in repo or re.match(r"^[A-Za-z]:", repo) else Path(repo).name
+    return f"local/{name}-{digest[:8]}"
+
+
+def is_local(repo: str) -> bool:
+    return Path(repo).is_dir() or Path(repo).is_absolute() or bool(re.match(r"^[A-Za-z]:[\\/]", repo))
+
+
+def _hash_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _json(path: Path) -> dict:
+    with path.open(encoding="utf-8") as fh:
+        value = json.load(fh)
+    if not isinstance(value, dict):
+        raise ValueError("expected a JSON object")
+    return value
+
+
+def _tokens(path: Path) -> Dict[str, int]:
+    data = _json(path)
+    vocab = data.get("model", {}).get("vocab")
+    if isinstance(vocab, list):  # SentencePiece/Unigram: [[piece, score], ...]
+        vocab = {entry[0]: i for i, entry in enumerate(vocab)}
+    if not isinstance(vocab, dict) or not vocab:
+        raise ValueError("tokenizer has no vocabulary")
+    out = dict(vocab)
+    for entry in data.get("added_tokens", []):
+        token, ident = entry["content"], entry["id"]
+        if token in out and out[token] != ident:
+            raise ValueError("token has conflicting ids")
+        out[token] = ident
+    if any(not isinstance(k, str) or not isinstance(v, int) or v < 0 for k, v in out.items()):
+        raise ValueError("invalid vocabulary")
+    if len(set(out.values())) != len(out):
+        raise ValueError("duplicate token ids")
+    return out
+
+
+def _template(root: Path) -> Optional[str]:
+    if (root / "chat_template.jinja").is_file():
+        return _hash_file(root / "chat_template.jinja")
+    if (root / "tokenizer_config.json").is_file():
+        template = _json(root / "tokenizer_config.json").get("chat_template")
+        if template is not None:
+            return hashlib.sha256(json.dumps(template, sort_keys=True).encode()).hexdigest()
+    return None
+
+
+def _shards_missing(root: Path, weights: List[Path]) -> bool:
+    """Whether the directory holds only some of its weight files: a shard its index names, or one a present shard's
+    own name counts (`-00001-of-00003`), is absent. A cache snapshot keeps whatever was downloaded so far."""
+    present = {f.name for f in weights}
+    declared = set()
+    index = root / "model.safetensors.index.json"
+    if index.is_file():
+        mapping = _json(index).get("weight_map")
+        declared |= {v for v in mapping.values() if isinstance(v, str)} if isinstance(mapping, dict) else set()
+    for name in present:
+        shard = re.search(r"-(\d+)-of-(\d+)\.safetensors$", name)
+        if shard:
+            declared |= {f"{name[:shard.start()]}-{i:0{len(shard[1])}d}-of-{shard[2]}.safetensors"
+                         for i in range(1, int(shard[2]) + 1)}
+    return bool(present) and not declared <= present
+
+
+def _from_directory(root: Path, repo: Optional[str] = None, sha: Optional[str] = None,
+                    source: str = "local") -> PairFiles:
+    config = _json(root / "config.json")
+    weights = sorted(root.glob("*.safetensors"))
+    # Some shards of several: the size is unknown, not the sum of those present, which would plan too little memory.
+    size = None if _shards_missing(root, weights) else sum(f.stat().st_size for f in weights) or None
+    if size is None and not weights and (root / "model.safetensors.index.json").is_file():
+        size = _json(root / "model.safetensors.index.json").get("metadata", {}).get("total_size")
+    tokenizer = root / "tokenizer.json"
+    ts = tokenizer.stat().st_size if tokenizer.is_file() else None
+    digest = _hash_file(tokenizer) if ts and ts <= TOKENIZER_LIMIT else None
+    if source == "local":
+        # Content, including the weights, identifies a mutable local directory.
+        entries = sorted({*weights, *(f for f in root.iterdir() if f.suffix in (".json", ".jinja"))})
+        sha = hashlib.sha256(json.dumps([(f.name, _hash_file(f)) for f in entries]).encode()).hexdigest()
+        repo = local_alias(str(root), sha)
+    cfg = text_config(config)
+    dtype = cfg.get("torch_dtype", cfg.get("dtype"))
+    elem = {"float16": 2, "bfloat16": 2, "float32": 4}.get(dtype)
+    params = size // elem if size and elem and not config.get("quantization_config") else None
+    return PairFiles(repo=repo, sha=sha, config=config, size_bytes=size, num_params=params,
+                     tokenizer_bytes=ts, tokenizer_sha256=digest,
+                     token_ids=_tokens(tokenizer) if digest else None, template_sha256=_template(root), source=source)
+
+
+def read_files(repo: str, source: str = "hub", *, revision: Optional[str] = None,
+               info_fetcher=None, file_fetcher=None) -> PairFiles:
+    """Read metadata and config at one immutable revision, never model weights from the Hub.
+
+    A cache read uses only local_files_only downloads (no API call). A local read
+    hashes content so a directory changed in place cannot keep an old verdict.
+    """
+    try:
+        if is_local(repo):
+            return _from_directory(Path(repo))
+        if file_fetcher is None:
+            from huggingface_hub import hf_hub_download
+            file_fetcher = hf_hub_download
+        if source == "cache":
+            config_file = Path(file_fetcher(repo, "config.json", revision=revision, local_files_only=True))
+            # Cache snapshots have immutable commit directories; a missing pin is unknown.
+            sha = next((part for part in config_file.parts if re.fullmatch(r"[a-f0-9]{40}", part)), None)
+            return _from_directory(config_file.parent, repo, sha, "cache")
+        if info_fetcher is None:
+            from huggingface_hub import HfApi
+            info_fetcher = HfApi().model_info
+        info = info_fetcher(repo, revision=revision, files_metadata=True)
+        sha = _get(info, "sha")
+        if not isinstance(sha, str) or not re.fullmatch(r"[a-f0-9]{40}", sha):
+            raise HubLookupError("error")
+        config = _json(Path(file_fetcher(repo, "config.json", revision=sha)))
+        files = {_get(s, "rfilename"): s for s in (_get(info, "siblings") or [])}
+        sizes = [_get(s, "size") for name, s in files.items() if name.endswith(".safetensors")]
+        size = sum(sizes) if sizes and all(_positive(s) for s in sizes) else None
+        tok = files.get("tokenizer.json")
+        digest = _get(_get(tok, "lfs"), "sha256")  # a git blob id is NOT sha256
+        ts = _get(tok, "size")
+        params = _get(_get(info, "safetensors"), "total")
+        template = None
+        if "chat_template.jinja" in files:
+            template = _hash_file(Path(file_fetcher(repo, "chat_template.jinja", revision=sha)))
+        elif "tokenizer_config.json" in files:
+            cfg = _json(Path(file_fetcher(repo, "tokenizer_config.json", revision=sha)))
+            if cfg.get("chat_template") is not None:
+                template = hashlib.sha256(json.dumps(cfg["chat_template"], sort_keys=True).encode()).hexdigest()
+        return PairFiles(repo=repo, sha=sha, config=config, tokenizer_sha256=digest, tokenizer_bytes=ts,
+                         size_bytes=size, num_params=params, gated=bool(_get(info, "gated")),
+                         template_sha256=template, source=source)
+    except HubLookupError:
+        raise
+    except Exception as exc:
+        raise _lookup_error(exc, source) from None
+
+
+def read_tokenizers(target: PairFiles, second: PairFiles, *, source: str = "hub", file_fetcher=None) -> None:
+    """Download only when hashes cannot prove equality and BOTH files fit the bound."""
+    if target.tokenizer_sha256 and target.tokenizer_sha256 == second.tokenizer_sha256:
+        return
+    if not all(f.tokenizer_bytes and f.tokenizer_bytes <= TOKENIZER_LIMIT for f in (target, second)):
+        return
+    if file_fetcher is None:
+        from huggingface_hub import hf_hub_download
+        file_fetcher = hf_hub_download
+    for f in (target, second):
+        if f.token_ids is not None or not f.repo or f.repo.startswith("local/"):
+            continue
+        try:
+            path = Path(file_fetcher(f.repo, "tokenizer.json", revision=f.sha, local_files_only=source == "cache"))
+            if path.stat().st_size > TOKENIZER_LIMIT:
+                continue
+            digest = _hash_file(path)
+            if f.tokenizer_sha256 and digest != f.tokenizer_sha256:
+                raise HubLookupError("error")
+            f.token_ids = _tokens(path)
+            f.tokenizer_sha256 = digest
+        except HubLookupError:
+            raise
+        except Exception as exc:
+            raise _lookup_error(exc, source) from None
