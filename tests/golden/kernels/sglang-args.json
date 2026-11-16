@@ -1,0 +1,40 @@
+{
+ "attn=flashinfer,cg=full,cgmax=128": [
+  "--attention-backend",
+  "flashinfer",
+  "--cuda-graph-backend-decode",
+  "full",
+  "--cuda-graph-max-bs-decode",
+  "128"
+ ],
+ "attn=triton": [
+  "--attention-backend",
+  "triton"
+ ],
+ "attnd=flashinfer,attnp=fa3": [
+  "--decode-attention-backend",
+  "flashinfer",
+  "--prefill-attention-backend",
+  "fa3"
+ ],
+ "cg=breakable": [
+  "--cuda-graph-backend-decode",
+  "breakable"
+ ],
+ "cgmax=64": [
+  "--cuda-graph-max-bs-decode",
+  "64"
+ ],
+ "cgp=disabled,cgpmax=8192": [
+  "--cuda-graph-backend-prefill",
+  "disabled",
+  "--cuda-graph-max-bs-prefill",
+  "8192"
+ ],
+ "tc=0": [],
+ "tc=1,tcmax=16": [
+  "--enable-torch-compile",
+  "--torch-compile-max-bs",
+  "16"
+ ]
+}

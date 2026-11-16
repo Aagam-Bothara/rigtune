@@ -187,3 +187,55 @@ def vllm_args(settings: Dict[str, str]) -> Tuple[List[str], Optional[str]]:
     if "O" in settings:
         args += ["--optimization-level", settings["O"]]
     return args, settings.get("attn")
+
+
+# SGLang: kernels key -> (its server flag, how the value is passed). Flag names are the fields' names with dashes
+# (`_field_to_cli_name`); the fields, in v0.5.19 server_args.py / v0.5.23 arg_groups/fields/exec_.py:
+#   attention_backend 1657 / 207, decode_attention_backend 1666 / 215, prefill_attention_backend 1680 / 235,
+#   cuda_graph_backend_decode 1859 / 613, cuda_graph_backend_prefill 1867 / 621, cuda_graph_max_bs_decode 1875 / 629,
+#   cuda_graph_max_bs_prefill 1880 / 632, enable_torch_compile 2056 / 691, torch_compile_max_bs 2064 / 698.
+# --cuda-graph-max-bs is a deprecated alias on 0.5.19 (server_args.py:3929-3934) and gone from 0.5.23: never rendered.
+SGLANG_FLAGS = {
+    "attn": "--attention-backend",
+    "attnp": "--prefill-attention-backend",
+    "attnd": "--decode-attention-backend",
+    "cg": "--cuda-graph-backend-decode",
+    "cgp": "--cuda-graph-backend-prefill",
+    "cgmax": "--cuda-graph-max-bs-decode",
+    "cgpmax": "--cuda-graph-max-bs-prefill",
+    "tc": "--enable-torch-compile",
+    "tcmax": "--torch-compile-max-bs",
+}
+
+
+def sglang_unconfirmed(settings: Dict[str, str], facts: Any) -> Optional[str]:
+    """Why SGLang cannot be handed `settings`, from the flags and choices its own parser reported; None when every
+    one is confirmed. Without that answer nothing is offered: "not asked", never "not supported"."""
+    if facts is None or facts.flags is None:
+        return NOT_ASKED
+    for key, value in sorted(settings.items()):
+        flag = SGLANG_FLAGS.get(key)
+        if flag is None:
+            return f"SGLang has no kernel setting {key}"
+        if flag not in facts.flags:
+            return f"this SGLang has no {flag}"
+        choices = facts.flags[flag].get("choices")
+        if key not in _INTS and key not in _BOOLS and choices is not None and value not in choices:
+            return f"this SGLang's {flag} does not take {value} (it takes {', '.join(str(c) for c in choices)})"
+    if settings.get("tc") == "0" and "tcmax" in settings:
+        return "tcmax sets a size for torch.compile, which tc=0 leaves off"
+    return None
+
+
+def sglang_args(settings: Dict[str, str]) -> List[str]:
+    """The arguments `settings` add to SGLang's server, in key order. tc=0 adds nothing: the flag only turns
+    torch.compile on, and it is off unless asked for."""
+    args: List[str] = []
+    for key in sorted(settings):
+        flag, value = SGLANG_FLAGS[key], settings[key]
+        if key in _BOOLS:
+            if value == "1":
+                args.append(flag)
+        else:
+            args += [flag, value]
+    return args

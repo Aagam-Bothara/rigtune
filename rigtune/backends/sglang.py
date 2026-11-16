@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
-from rigtune import kvtier, speculative
+from rigtune import kernels, kvtier, speculative
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from rigtune.backends.vllm import FALLBACK_ARCHS, PAGED_KV_FRACTION
 from rigtune.hfconfig import dtype_bytes, load_arch
@@ -618,7 +618,15 @@ class SglangBackend(BaseBackend):
             gpu_memory_utilization=0.88,
         )
 
+    def config_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
+        if cfg.kernels is not None:  # each setting must be one the parser of the SGLang that will run reported
+            return kernels.sglang_unconfirmed(kernels.parse(cfg.kernels), _engine_facts())
+        return None
+
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:
+        refusal = self.config_refusal(cfg, model)
+        if refusal:
+            raise ValueError(refusal)
         path = model.hf_paths.get(cfg.quant) or model.hf_path or model.spec.hf_id
         args = [
             sglang_python() or sys.executable, "-m", "sglang.launch_server",
@@ -653,6 +661,8 @@ class SglangBackend(BaseBackend):
         if revision:
             args += ["--revision", revision]
         args += render_extra(cfg.extra)
+        if cfg.kernels is not None:
+            args += kernels.sglang_args(kernels.parse(cfg.kernels))
         env = {}
         # PCIe-only GPUs: peer-to-peer can hang at start-up inside containers. Measured on a pair of
         # A40s: NCCL's P2P path hangs at init, and with only that disabled the engine's custom
