@@ -686,6 +686,9 @@ def conformance(
     out: Path = typer.Option(Path("conformance"), "--out", help="Where the record and the engine logs go"),
     only: Optional[str] = typer.Option(None, "--only", help="Comma-separated check ids to run, e.g. C01,C04"),
     startup_timeout: float = typer.Option(900.0, "--startup-timeout", help="Seconds each launch may take to start"),
+    drafts: str = DRAFTS_OPT,
+    draft: Optional[str] = DRAFT_OPT,
+    hub: str = HUB_OPT,
 ) -> None:
     """Check on this machine's GPU that an installed engine release does what rigtune plans for, and write the record
     that adds it to the checked releases. Exits 0 when the release is certified. Has never run on a GPU."""
@@ -707,6 +710,7 @@ def conformance(
     roles = {"small": model, "hybrid": hybrid_model, "multimodal": multimodal_model}
     backend = registry()[engine]
     run = cf.Conformance(engine, backend, hw, _conformance_models(backend, hw, roles), out,
+                         drafts=drafts, draft=draft, hub=hub,
                          startup_timeout=startup_timeout, reporting=registry(report_reuse=True)[engine],
                          only=[c.strip() for c in only.split(",") if c.strip()] if only else None)
 

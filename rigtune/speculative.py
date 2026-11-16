@@ -131,7 +131,7 @@ MTP_KEY = "mtp"  # PreparedModel.spec_repos / spec_bytes key of the head
 MTP_SHARED_KEY = "mtp_shared"  # spec_bytes key of the target's embedding and output head (introspect.MtpHead)
 
 LOOKUP = ("ngram", "ngram_gpu", "suffix")  # proposers that need no second model
-SECOND_MODEL = ("draft", "eagle3")  # proposers whose second set of weights the spec names
+SECOND_MODEL = ("draft", "eagle3", "assist")  # proposers whose second set of weights the spec names
 SELF_HEAD = ("mtp",)  # proposers whose weights ship in the target's own checkpoint
 
 
@@ -477,6 +477,10 @@ def eagle3(head: str, k: int = EAGLE3_TOKENS) -> str:
     return f"eagle3:{head}:{k}"
 
 
+def assist(repo: str, k: int = 1) -> str:
+    return f"assist:{repo}:{k}"
+
+
 def mtp(k: int) -> str:
     """The checkpoint's own MTP head proposing k tokens (vLLM's num_speculative_tokens, SGLang's steps)."""
     return f"mtp:{k}"
@@ -519,7 +523,7 @@ def vllm_config(spec: str, revision: Optional[str] = None) -> Dict[str, object]:
         return out
     if kind == "eagle3":  # vLLM 0.29 reads the head's architecture from its config
         return {"method": "eagle3", "model": model_id, "num_speculative_tokens": k}
-    out = {"method": "draft_model", "model": model_id, "num_speculative_tokens": k}
+    out = {"method": "mtp" if kind == "assist" else "draft_model", "model": model_id, "num_speculative_tokens": k}
     if revision:
         out["revision"] = revision
     return out
@@ -559,7 +563,7 @@ def sglang_config(spec: str, model_path: Optional[str] = None, revision: Optiona
         return out + ["--speculative-num-steps", str(k), "--speculative-eagle-topk", "1",
                       "--speculative-num-draft-tokens", str(k + 1)]
     if kind in SECOND_MODEL:
-        out = ["--speculative-algorithm", "EAGLE3" if kind == "eagle3" else "STANDALONE",
+        out = ["--speculative-algorithm", "NEXTN" if kind == "assist" else "EAGLE3" if kind == "eagle3" else "STANDALONE",
                "--speculative-draft-model-path", draft_path or str(model_id), "--speculative-num-steps", str(k),
                "--speculative-eagle-topk", "1", "--speculative-num-draft-tokens", str(k + 1)]
         if draft_revision:

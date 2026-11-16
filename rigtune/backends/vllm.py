@@ -704,7 +704,7 @@ class VllmBackend(BaseBackend):
         if speculative.vllm_supports_suffix():
             specs.append(speculative.suffix())
         if model.drafts_mode == "verified":
-            specs += [v.spec_decode for v in self._pair_variants(cfg, model, hw)[0]]
+            specs += [v.spec_decode for v in self._pair_variants(cfg, model, hw, all_methods)[0]]
         else:
             draft = speculative.draft_for(model.spec.hf_id)
             if draft and speculative.vllm_supports_draft():
@@ -724,7 +724,7 @@ class VllmBackend(BaseBackend):
         A40 pod failed to start with arctic-inference 0.1.1 installed, and each cost a launch)."""
         notes = self._mtp_variants(cfg, model, hw, all_methods, min_batch)[1]
         if model.drafts_mode == "verified":
-            notes += self._pair_variants(cfg, model, hw)[1]
+            notes += self._pair_variants(cfg, model, hw, all_methods)[1]
         if speculative.vllm_suffix_release():
             if not speculative.vllm_supports_suffix():
                 notes.append(f"vllm: suffix decoding not tried: {speculative.vllm_suffix_refusal()}")
@@ -742,15 +742,20 @@ class VllmBackend(BaseBackend):
         return discover(prepared, self.name, ctx, draft=draft, hub=hub,
                         version=self.version(hw) if hw else None)
 
-    def _pair_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor]):
+    def _pair_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor], all_methods=False):
         from rigtune.pairing import eligible_pairs
-        if hw is None or not speculative.vllm_supports_draft() or not _probe_lists("spec_methods", "draft_model"):
+        if hw is None or cfg.quant in PREQUANTIZED:
             return [], []
         out, notes = [], []
         if cfg.kv_dtype == AMPERE_FP8_KV:
             return [], ["vllm: verified pairs excluded from the measured failing fp8_e5m2 FlashInfer combination"]
-        for pair in eligible_pairs(model, "draft", cfg.ctx):
-            spec = speculative.draft(pair["repo"], speculative.DRAFT_TOKENS_VLLM)
+        pairs = (eligible_pairs(model, "draft", cfg.ctx)
+                 if speculative.vllm_supports_draft() and _probe_lists("spec_methods", "draft_model") else [])
+        if all_methods and _vllm_version() >= (0, 29) and _probe_lists("spec_methods", "mtp"):
+            pairs += eligible_pairs(model, "assistant", cfg.ctx)
+        for pair in pairs:
+            spec = (speculative.assist(pair["repo"], 1) if pair["kind"] == "assistant"
+                    else speculative.draft(pair["repo"], speculative.DRAFT_TOKENS_VLLM))
             v = cfg.model_copy(update={"spec_decode": spec})
             if estimate(hw, model, v, self.memory_model(hw)).feasible:
                 out.append(v)

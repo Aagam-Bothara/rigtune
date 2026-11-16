@@ -154,7 +154,7 @@ class Conformance:
                  out_dir: Path, startup_timeout: float = 900.0,
                  selfcheck: Optional[Callable[[Sequence[int]], List[Any]]] = None,
                  reporting: Optional[BaseBackend] = None, only: Optional[Sequence[str]] = None,
-                 poll: float = 1.0):
+                 poll: float = 1.0, drafts: str = "table", draft: Optional[str] = None, hub: str = "on"):
         self.engine, self.backend, self.hw, self.models = engine, backend, hw, models
         self.reporting = reporting or backend  # the same backend launched with per-reply cached tokens
         self.out_dir, self.startup_timeout = Path(out_dir), startup_timeout
@@ -162,6 +162,7 @@ class Conformance:
         self.only = set(only) if only else None
         self.poll = poll  # seconds between readiness checks of a launch
         self.launches = 0
+        self.drafts, self.draft, self.hub = drafts, draft, hub
         self.http = httpx.Client(timeout=120.0)  # one client for the run: each new one loads the CA store
 
     # ---- launching
@@ -298,8 +299,11 @@ class Conformance:
             if role not in self.models:
                 continue
             model = self.models[role]
+            model.drafts_mode = "verified" if self.drafts == "verified" or self.draft else "table"
             notes = self.backend.find_second_models(model)
             base = self.base(role)
+            if model.drafts_mode == "verified":
+                notes += self.backend.find_pairs(model, base.ctx, draft=self.draft, hub=self.hub, hw=self.hw)
             # min_batch=1: an MTP setting that does not fit at the default batch is tried at the largest that does.
             variants = self.backend.spec_variants(base, model, self.hw, all_methods=True, min_batch=1)
             if role == "hybrid":  # the hybrid model is here for its own head; the small one covers the rest

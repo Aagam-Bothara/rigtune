@@ -114,6 +114,21 @@ def check_pair(target: PairFiles, second: PairFiles, kind: str, ctx: int,
             evidence["parameter_ratio"] = second.num_params / target.num_params
             if second.num_params > target.num_params * .25:
                 refused.append("over_cost_bound")
+    elif kind == "assistant":
+        target_archs, second_archs = a.get("architectures") or [], b.get("architectures") or []
+        if not target_archs or not second_archs:
+            unknown.append("architecture_unread")
+        else:
+            expected = {"Gemma4ForConditionalGeneration": "Gemma4AssistantForCausalLM",
+                        "Gemma4ForCausalLM": "Gemma4AssistantForCausalLM",
+                        "Gemma4UnifiedForConditionalGeneration": "Gemma4UnifiedAssistantForCausalLM",
+                        "Gemma4UnifiedForCausalLM": "Gemma4UnifiedAssistantForCausalLM"}.get(target_archs[0])
+            if expected is None or second_archs != [expected]:
+                refused.append("assistant_variant_differs")
+        evidence["ids"] = "same_hash" if same_hash else "same_map" if same_maps else "unread"
+        if target.token_ids and second.token_ids and not same_maps:
+            subset = all(target.token_ids.get(t) == i for t, i in second.token_ids.items())
+            evidence["ids"] = "target_only_tokens" if subset else "differs_shared_embeddings"
     else:
         refused.append("unsupported_kind")
     if not _positive(second.size_bytes):

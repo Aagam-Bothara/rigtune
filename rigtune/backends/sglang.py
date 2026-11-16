@@ -747,9 +747,12 @@ class SglangBackend(BaseBackend):
         if "ngram" in methods:
             specs.append(speculative.ngram(speculative.NGRAM_TOKENS_SGLANG))
         if hw is not None:
+            if model.drafts_mode == "verified" and "eagle3" in methods and cfg.quant not in INT4_METHODS:
+                from rigtune.pairing import eligible_pairs
+                specs += [speculative.assist(p["repo"], 3) for p in eligible_pairs(model, "assistant", cfg.ctx)]
             if "eagle3" in methods and "eagle3" in model.spec_repos:
                 specs.append(speculative.eagle3(model.spec_repos["eagle3"], speculative.EAGLE3_TOKENS))
-            if "draft" in methods and model.drafts_mode == "verified":
+            if "draft" in methods and model.drafts_mode == "verified" and cfg.quant not in INT4_METHODS:
                 from rigtune.pairing import eligible_pairs
                 specs += [speculative.draft(p["repo"], speculative.DRAFT_TOKENS_SGLANG)
                           for p in eligible_pairs(model, "draft", cfg.ctx)]
