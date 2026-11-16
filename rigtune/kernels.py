@@ -356,3 +356,21 @@ def sglang_same_as_default(settings: Dict[str, str], vram_mib: float, batch: int
     if default is not None and int(settings["cgmax"]) == default:
         return f"cgmax={default} is the decode cap SGLang picks for this card and batch"
     return None
+
+
+SGLANG_GRAPH_MIB_PER_BATCH = 2  # SGLang's own reserve per unit of decode cap (arg_groups/memory_hook.py:292-303
+#                                 @0.5.19 / 357-368 @0.5.23), which it adds only when it computes the memory fraction
+#                                 itself; rigtune always passes the fraction, so rigtune must count it.
+
+
+def sglang_graph_extra_bytes(settings: Dict[str, str], vram_mib: float, batch: int, tp: int, version: Optional[str],
+                             second_model: bool = False) -> int:
+    """Bytes of CUDA-graph memory a raised decode cap adds beyond what the card's default cap already takes: 2 MiB
+    for each unit above it, twice that with a second model, whose runner captures graphs of its own (a prior: not
+    measured). 0 without cgmax or at or below the default. Where the default is not known (a release no rule was
+    read for) the whole cap is counted: a plan that is too careful, never one that is too bold."""
+    if "cgmax" not in settings:
+        return 0
+    default = sglang_default_decode_cap(vram_mib, batch, tp, version) or 0
+    above = max(0, int(settings["cgmax"]) - default)
+    return above * SGLANG_GRAPH_MIB_PER_BATCH * (2 if second_model else 1) * 1024 * 1024

@@ -484,6 +484,16 @@ def sglang_tier_launch(cfg: Config, port: int) -> Tuple[List[str], dict]:
     return args, env
 
 
+def sglang_graph_bytes(cfg: Config, vram_bytes: int, version: Optional[str]) -> int:
+    """CUDA-graph memory `cfg` adds by raising SGLang's decode cap (kernels.sglang_graph_extra_bytes); 0 for every
+    config without that setting, before anything else is looked at."""
+    if cfg.kernels is None:
+        return 0
+    second = bool(cfg.spec_decode) and speculative.parse(cfg.spec_decode)[1] is not None
+    return kernels.sglang_graph_extra_bytes(kernels.parse(cfg.kernels), vram_bytes / (1024 * 1024), cfg.batch,
+                                            cfg.tp, version, second_model=second)
+
+
 class SglangBackend(BaseBackend):
     name = "sglang"
     runtime_workspace_bytes = int(2.0 * GiB)  # CUDA graphs for many batch sizes + radix cache metadata
@@ -593,9 +603,11 @@ class SglangBackend(BaseBackend):
         total = hw.gpu.vram_total_bytes if hw.gpu else 0
         found = hw.backends.get(self.name)
         version = found.version if found is not None else None
-        return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "gpu",
-                                      hybrid_fn=lambda cfg, arch: sglang_hybrid_kv(cfg, arch, total, version),
-                                      full_kv_fn=sglang_full_kv_reason)
+        mm = self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "gpu",
+                                    hybrid_fn=lambda cfg, arch: sglang_hybrid_kv(cfg, arch, total, version),
+                                    full_kv_fn=sglang_full_kv_reason)
+        mm.extra_fn = lambda cfg: sglang_graph_bytes(cfg, total, version)
+        return mm
 
     def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> List[Config]:
         ctxs = ctx_grid(model.arch.max_position_embeddings, min_ctx)

@@ -122,7 +122,8 @@ class MemoryModel:
                  margin_fraction: float = DEFAULT_MARGIN_FRACTION, calibrated: bool = False,
                  hybrid_fn: Optional[Callable[[Config, ArchInfo], HybridKV]] = None,
                  full_kv_fn: Optional[Callable[[ArchInfo], Optional[str]]] = None,
-                 extra_weights_fn: Optional[Callable[[Config, PreparedModel], int]] = None):
+                 extra_weights_fn: Optional[Callable[[Config, PreparedModel], int]] = None,
+                 extra_fn: Optional[Callable[[Config], int]] = None):
         self.runtime_workspace = runtime_workspace
         self.kv_tokens_fn = kv_tokens_fn  # Config -> int tokens resident in KV cache
         self.device = device  # "gpu" | "cpu"
@@ -136,6 +137,10 @@ class MemoryModel:
         # (Config, PreparedModel) -> weight bytes a setting loads beyond model.weights_for(cfg.quant): vLLM's MTP head
         # for a local checkpoint directory. None everywhere else, so every other plan is unchanged.
         self.extra_weights_fn = extra_weights_fn
+        # Config -> bytes a setting takes outside the weights and the KV cache, counted with the runtime workspace:
+        # SGLang's CUDA graphs above its default capture size (Config.kernels cgmax). None, or 0 for a config
+        # without such a setting, leaves every plan as it was.
+        self.extra_fn = extra_fn
 
     def full_kv_reason(self, arch: ArchInfo) -> Optional[str]:
         return self.full_kv_fn(arch) if (self.full_kv_fn is not None and arch.is_hybrid) else None
@@ -172,7 +177,8 @@ def estimate(
     if available is None:
         available = hw.gpu.vram_free_bytes if (mm.device == "gpu" and hw.gpu) else hw.cpu.ram_free_bytes
     margin = safety_margin(available, mm.margin_fraction)
-    total = weights + kv + mm.runtime_workspace + margin
+    workspace = mm.runtime_workspace + (int(mm.extra_fn(cfg)) if mm.extra_fn is not None else 0)
+    total = weights + kv + workspace + margin
 
     # vLLM/SGLang cap their own allocation at gpu_memory_utilization x total VRAM.
     budget = int(BUDGET_FRACTION * available)
@@ -185,7 +191,7 @@ def estimate(
         config_key=cfg.key(),
         weights=weights,
         kv_cache=kv,
-        runtime_workspace=mm.runtime_workspace,
+        runtime_workspace=workspace,
         safety_margin=margin,
         total=total,
         budget=budget,
