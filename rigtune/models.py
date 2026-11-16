@@ -500,6 +500,14 @@ class MemoryObservation(BaseModel):
     measured: Optional["MeasuredMemory"] = None
 
 
+class StartupCost(BaseModel):
+    """What one engine launch cost before it served its first request. A value that was not observed is None,
+    never 0: an engine that never became ready has no start-up time, and a log line that was not found says
+    nothing about what it would have reported."""
+
+    seconds: Optional[float] = None  # launch to the first healthy answer; None when it never became ready
+
+
 class TrialResult(BaseModel):
     config: Config
     stage: str
@@ -515,6 +523,10 @@ class TrialResult(BaseModel):
     # search.failure_kind reads it back for results recorded without this field. Left out of every file a model dump
     # writes (profiles, comparison results), which stay as they were; the trial ledger records it.
     failure_kind: Optional[str] = Field(default=None, exclude=True)
+    # What the launch behind this trial cost to start; None for a trial that launched nothing. Left out of every
+    # model dump like failure_kind, so profiles and comparison results stay as they were; the trial ledger records it
+    # beside the trial, not inside it.
+    startup: Optional[StartupCost] = Field(default=None, exclude=True)
 
     @property
     def ok(self) -> bool:

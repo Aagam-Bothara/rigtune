@@ -332,7 +332,7 @@ class Ledger:
             logger.warning("trial %s not recorded in the ledger: %s", res.config.key(), exc)
             return
         trial["failure_kind"] = res.failure_kind
-        rid = self._append({
+        record = {
             "type": "trial", "recorded_at": _now(),
             "duration_s": round(duration_s, 3) if duration_s is not None else None,
             **self.context,
@@ -340,8 +340,11 @@ class Ledger:
                        "libs": dict(sorted(backend.libs.items())) if backend else {}},
             "stage": res.stage, "config_key": res.config.key(),
             "outcome": {"kind": kind or "ok", "launched": res.launched},
-            "trial": trial,
-        })
+        }
+        if res.startup is not None:  # beside the trial, so a rebuilt profile reads the same trial as before
+            record["startup"] = res.startup.model_dump(mode="json")
+        record["trial"] = trial
+        rid = self._append(record)
         self._recorded.append((res, rid))
 
     def _seen(self, res: TrialResult) -> Tuple[bool, Optional[str]]:

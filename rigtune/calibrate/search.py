@@ -46,6 +46,7 @@ from rigtune.models import (
     HardwareDescriptor,
     MemoryObservation,
     PreparedModel,
+    StartupCost,
     TrialMetrics,
     TrialResult,
 )
@@ -363,6 +364,7 @@ class SubprocessTrialRunner:
         self.workload = workload
         self.log_dir = log_dir
         self.startup_timeout = startup_timeout
+        self._stamps = None  # (started, ready) monotonic stamps of the last launch, for its start-up record
         self.request_timeout = request_timeout
         self.power = power  # rigtune.power.PowerController, or None when energy tuning is off
         self.power_settle_s = power_settle_s
@@ -411,7 +413,12 @@ class SubprocessTrialRunner:
 
     def run(self, cfg: Config, stage: str, arrival_rate: Optional[float] = None) -> TrialResult:
         from rigtune.pairing import redact_trial
+        self._stamps = None
         result = self._run(cfg, stage, arrival_rate)
+        if self._stamps is not None:  # an engine process was started for this trial, ready or not
+            started, ready = self._stamps
+            result.startup = StartupCost(
+                seconds=round(ready - started, 3) if started is not None and ready is not None else None)
         model = self.models[cfg.backend]
         return redact_trial(result, getattr(model, "spec_paths", {}))
 
@@ -500,6 +507,7 @@ class SubprocessTrialRunner:
         finally:
             self._restore_power()
             if proc is not None:
+                self._stamps = (getattr(proc, "started_at", None), getattr(proc, "ready_at", None))
                 proc.stop()
             if cfg.kv_tier is not None:
                 kvtier.clear(port)  # its files are the served prompts' KV cache: never kept (SECURITY.md)
