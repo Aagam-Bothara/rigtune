@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple
 
-from pydantic import AliasChoices, BaseModel, Field, model_serializer
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_serializer
 
 Objective = Literal["throughput", "latency", "balanced", "efficiency"]
 OBJECTIVES: Tuple[str, ...] = ("throughput", "latency", "balanced", "efficiency")
@@ -234,6 +234,9 @@ class Config(BaseModel):
     # "host:<GiB>" of host RAM, or "host:<GiB>+disk:<GiB>" with a directory under rigtune's own cache dir
     # behind it. None = GPU only, as in every profile before tiers. Only --kv-tier auto tries one.
     kv_tier: Optional[str] = None
+    # Engine kernel and compiler settings (rigtune.kernels), e.g. "attn=TRITON_ATTN,cg=FULL": kept in one spelling,
+    # sorted by key, so one setting has one config key. None launches the engine with its own choices, as before.
+    kernels: Optional[str] = None
     extra: Dict[str, Any] = Field(default_factory=dict)
     # Serve a multimodal model's language model alone (vLLM --language-model-only): set only by the retry after the
     # engine's multimodal profiling failed at start-up. Such an engine accepts no image, video or audio input.
@@ -277,13 +280,24 @@ class Config(BaseModel):
             parts.append(f"clk{self.sm_clock_mhz}")
         if self.spec_head_quant is not None:
             parts.append(f"shq={self.spec_head_quant}")
+        if self.kernels is not None:  # only when set, so every key from before it is unchanged
+            parts.append(f"kern={self.kernels}")
         return "/".join(parts)
+
+    @field_validator("kernels")
+    @classmethod
+    def _one_spelling(cls, value: Optional[str]) -> Optional[str]:
+        from rigtune.kernels import canonical
+
+        return None if value is None else canonical(value)
 
     @model_serializer(mode="wrap")
     def _omit_unset_head_quant(self, handler) -> Dict[str, Any]:
         data = handler(self)
         if self.spec_head_quant is None:
             data.pop("spec_head_quant", None)
+        if self.kernels is None:  # written only when set, so every profile from before it is saved as it was
+            data.pop("kernels", None)
         return data
 
     def base_key(self) -> str:

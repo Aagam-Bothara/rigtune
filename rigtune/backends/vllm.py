@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from rigtune import speculative
+from rigtune import kernels, speculative
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from rigtune.hfconfig import dtype_bytes, kv_element_bytes, load_arch
 from rigtune.memory import HybridKV, MemoryModel, estimate
@@ -801,6 +801,8 @@ class VllmBackend(BaseBackend):
             return "verified pairs excluded from the measured failing fp8_e5m2 FlashInfer combination"
         if cfg.spec_head_quant and os.environ.get("VLLM_USE_V2_MODEL_RUNNER") == "0":
             return "quantized MTP output heads require Model Runner V2"
+        if cfg.kernels is not None:
+            return kernels.vllm_unconfirmed(kernels.parse(cfg.kernels), _engine_facts())
         return None
 
     def known_failure(self, cfg: Config) -> Optional[str]:
@@ -918,9 +920,13 @@ class VllmBackend(BaseBackend):
             args += ["--revision", model.spec.revision]
         args += render_extra(cfg.extra, skip=("attention_backend",))
         env = {}
+        # Kernel settings, each confirmed by the engine probe in config_refusal above. Their attention backend
+        # comes first: it is the setting under test.
+        kernel_args, kernel_attention = kernels.vllm_args(kernels.parse(cfg.kernels)) if cfg.kernels else ([], None)
+        args += kernel_args
         # Some cache types need a particular attention backend (KV_ATTENTION); extra["attention_backend"]
         # forces one, so an ablation can keep the backend while removing the quantized cache.
-        attention = cfg.extra.get("attention_backend") or KV_ATTENTION.get(cfg.kv_dtype)
+        attention = kernel_attention or cfg.extra.get("attention_backend") or KV_ATTENTION.get(cfg.kv_dtype)
         if attention:
             env["VLLM_ATTENTION_BACKEND"] = str(attention)  # vLLM 0.11
             if feature("attention_backend"):

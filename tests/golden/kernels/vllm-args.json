@@ -1,0 +1,80 @@
+{
+ "O=1": {
+  "added_args": [
+   "--optimization-level",
+   "1"
+  ],
+  "env": {}
+ },
+ "O=1,cg=PIECEWISE,cgmax=128,pass.fuse_act_quant=1": {
+  "added_args": [
+   "--compilation-config",
+   "{\"cudagraph_mode\":\"PIECEWISE\",\"max_cudagraph_capture_size\":128,\"pass_config\":{\"fuse_act_quant\":true}}",
+   "--optimization-level",
+   "1"
+  ],
+  "env": {}
+ },
+ "attn=TRITON_ATTN": {
+  "added_args": [
+   "--attention-backend",
+   "TRITON_ATTN"
+  ],
+  "env": {
+   "VLLM_ATTENTION_BACKEND": "TRITON_ATTN"
+  }
+ },
+ "attn=TRITON_ATTN,cg=FULL": {
+  "added_args": [
+   "--compilation-config",
+   "{\"cudagraph_mode\":\"FULL\"}",
+   "--attention-backend",
+   "TRITON_ATTN"
+  ],
+  "env": {
+   "VLLM_ATTENTION_BACKEND": "TRITON_ATTN"
+  }
+ },
+ "cg=FULL": {
+  "added_args": [
+   "--compilation-config",
+   "{\"cudagraph_mode\":\"FULL\"}"
+  ],
+  "env": {}
+ },
+ "cgmax=64": {
+  "added_args": [
+   "--compilation-config",
+   "{\"max_cudagraph_capture_size\":64}"
+  ],
+  "env": {}
+ },
+ "cgsizes=1+2+4+8": {
+  "added_args": [
+   "--compilation-config",
+   "{\"cudagraph_capture_sizes\":[1,2,4,8]}"
+  ],
+  "env": {}
+ },
+ "gp=1": {
+  "added_args": [
+   "--compilation-config",
+   "{\"use_inductor_graph_partition\":true}"
+  ],
+  "env": {}
+ },
+ "mode=STOCK_TORCH_COMPILE": {
+  "added_args": [
+   "--compilation-config",
+   "{\"mode\":\"STOCK_TORCH_COMPILE\"}"
+  ],
+  "env": {}
+ },
+ "pass.eliminate_noops=0,pass.fuse_norm_quant=1": {
+  "added_args": [
+   "--compilation-config",
+   "{\"pass_config\":{\"eliminate_noops\":false,\"fuse_norm_quant\":true}}"
+  ],
+  "env": {}
+ }
+}
