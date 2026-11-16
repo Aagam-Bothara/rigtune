@@ -1035,6 +1035,7 @@ def calibrate(
     from rigtune.predict import Predictor
 
     search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress,
+                          block_failed_pairs=opts.drafts == "verified" or bool(opts.draft),
                           predictor=Predictor(hw), models=plan.prepared, workload=workload,
                           power_points=points, variant_stages=stages, combine=opts.combine,
                           budget_s=opts.budget_s, confirm_top=3 if opts.confirm else 0,

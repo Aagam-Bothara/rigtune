@@ -481,3 +481,23 @@ def extra_weights(cfg, model) -> int:
             dtype = cfg.quant if cfg.quant in ("bf16", "fp16") else model.arch.torch_dtype
             return int(pair["params"] * dtype_bytes(dtype)) if pair.get("params") else pair["size_bytes"]
     return 0
+
+
+def refute(model, spec: str, engine: str, version: Optional[str]) -> bool:
+    """Remember an engine disproving a positive check, scoped to its exact release."""
+    from rigtune.paths import pairs_dir
+    from rigtune.speculative import parse
+    _, repo, _ = parse(spec)
+    for pair in model.spec_pairs:
+        name = pair.get("record")
+        if pair.get("repo") != repo or not isinstance(name, str) or not re.fullmatch(r"[a-f0-9]{24}\.json", name):
+            continue
+        path = pairs_dir() / name
+        record = load_record(path)
+        if record and record.verdict.status == "ok":
+            release = f"{engine} {version}"
+            if release not in record.refuted_by:
+                record.refuted_by.append(release)
+                _write_record(path, record)
+            return True
+    return False

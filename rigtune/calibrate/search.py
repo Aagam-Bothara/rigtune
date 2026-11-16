@@ -88,7 +88,8 @@ STARTUP_CAUSES = (MM_PROFILING_FAILED, LOAD_FAILED, SUFFIX_FAILED, ARCTIC_PLUGIN
 #   skipped_budget     not launched: --budget was spent
 #   skipped_blocked    not launched: its speculation method failed to start earlier in the calibration
 FAILURE_KINDS = ("oom_startup", "mm_profiling", "load_failure", "suffix_unusable", "arctic_plugin", "startup_other",
-                 "power_unavailable", "request_failures", "crashed", "skipped_budget", "skipped_blocked")
+                 "power_unavailable", "request_failures", "crashed", "skipped_budget", "skipped_blocked",
+                 "draft_refused", "draft_unavailable")
 _CAUSE_KINDS = {MM_PROFILING_FAILED: "mm_profiling", LOAD_FAILED: "load_failure", SUFFIX_FAILED: "suffix_unusable",
                 ARCTIC_PLUGIN_FAILED: "arctic_plugin", SUFFIX_TRIAL_ERROR: "startup_other"}
 BUDGET_SKIPPED = "skipped: calibration budget reached"
@@ -254,6 +255,58 @@ def startup_finders(cfg: Config, log: str) -> List[Tuple[str, Callable[[str], Op
     return finders
 
 
+# Download and access errors as huggingface_hub and transformers word them, which is what both engines print when a
+# repository cannot be fetched at start-up. Bare numbers are not enough: a start-up log is full of them (pids,
+# "Tried to allocate 404.00 MiB"), and vLLM prints the draft repository in every launch log.
+_ACCESS_ERROR = re.compile(
+    r"\b(?:401|403|404) (?:client error|unauthorized|forbidden|not found)\b"
+    r"|\bhttp(?: error| status)?:? (?:401|403|404)\b"
+    r"|\b(?:gatedrepoerror|repositorynotfounderror)\b"
+    r"|\bcannot access gated repo\b|\btrying to access a gated repo\b|\brepository not found\b"
+    r"|\bcannot access content at\b|\bis not a valid model identifier\b|\baccess to model \S+ is restricted\b")
+
+
+def _names_repo(text: str, repo: str) -> bool:
+    """The repository id as a whole name: not inside a longer id, a file name or a number."""
+    return re.search(r"(?<![\w.-])" + re.escape(repo) + r"(?![\w-]|\.\w)", text) is not None
+
+
+def _draft_access_error(log: str, repo: str) -> bool:
+    """An access error that names the second repository: on its own line, or (when that line names no repository,
+    as in transformers' two-line gated message) on one of the next two."""
+    lines = log.lower().splitlines()
+    repo = repo.lower()
+    for i, line in enumerate(lines):
+        if not _ACCESS_ERROR.search(line):
+            continue
+        if _names_repo(line, repo):
+            return True
+        if "huggingface.co/" not in line and any(_names_repo(after, repo) for after in lines[i + 1:i + 3]):
+            return True
+    return False
+
+
+def draft_startup_failure(cfg: Config, log: str) -> Optional[str]:
+    """A second model's own start-up failure. The engine's vocabulary refusal is named even beside the incidental
+    out-of-memory text of a dying worker; a download failure only when the log shows no out-of-memory text."""
+    from rigtune.speculative import parse
+    if not cfg.spec_decode:
+        return None
+    kind, repo, _ = parse(cfg.spec_decode)
+    if kind not in ("draft", "assist"):
+        return None
+    text = " ".join(log.lower().split())
+    if ("should have the same vocabulary size" in text or
+            "requires the draft model to share the same vocabulary" in text):
+        return "draft_refused"
+    if "is less than desired gpu memory utilization" in text:
+        return "startup_other"
+    # Attribute download failures to the second repo, not any target access failure.
+    if repo and not mentions_oom(log) and _draft_access_error(log, repo):
+        return "draft_unavailable"
+    return None
+
+
 def _point_workload(workload: Workload, i: int, points: int) -> Workload:
     """The workload for the i-th of `points` power points of a sweep on one running engine.
 
@@ -385,8 +438,14 @@ class SubprocessTrialRunner:
                 observation.measured = parse_log(cfg.backend, log)
                 # vLLM prints its engine's out-of-memory error well above the 20-line tail: say so in
                 # the error, so the memory report counts it as the planner failure it is.
-                cause = "out of memory at start-up; " if mentions_oom(log) else ""
-                why = "oom_startup" if cause else "startup_other"
+                pair_failure = draft_startup_failure(cfg, log)
+                cause = (f"{pair_failure}; " if pair_failure else
+                         "out of memory at start-up; " if mentions_oom(log) else "")
+                why = pair_failure or ("oom_startup" if cause else "startup_other")
+                if pair_failure == "draft_refused" and model is not None:
+                    from rigtune.pairing import refute
+                    if refute(model, cfg.spec_decode, cfg.backend, backend.version(self.hw) if self.hw else None):
+                        cause += "rigtune's check was wrong; the pair is blocked on this engine release; "
                 # The causes the search acts on or reports, also often above the tail (StagedSearch._startup_retry).
                 for kind, find in startup_finders(cfg, log):
                     line = None if cause else find(log)
@@ -669,6 +728,8 @@ class StagedSearch:
     # Speculation kinds not launched again: suffix decoding, after a trial showed Arctic Inference unusable
     # (SUFFIX_FAILED); kind -> the configurations that were not launched for it.
     _spec_blocked: Dict[str, List[str]] = field(default_factory=dict)
+    _pair_blocked: set = field(default_factory=set)
+    block_failed_pairs: bool = False  # verified mode only: table mode launches what it always launched
 
     # ---- predictor helpers
 
@@ -782,6 +843,14 @@ class StagedSearch:
             return self._skip(TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
                                           error=BUDGET_SKIPPED, failure_kind="skipped_budget"))
         spec_kind = (cfg.spec_decode or "").partition(":")[0]
+        pair_key = None
+        if spec_kind in ("draft", "assist"):
+            from rigtune.speculative import parse
+            pair_key = (cfg.backend, spec_kind, parse(cfg.spec_decode)[1])
+        if pair_key in self._pair_blocked:
+            return self._skip(TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
+                                          error="skipped: this second model failed to start on this engine",
+                                          failure_kind="skipped_blocked"))
         if spec_kind in self._spec_blocked:  # its start-up failure would only repeat
             self._spec_blocked[spec_kind].append(key)
             return self._skip(TrialResult(
@@ -814,6 +883,12 @@ class StagedSearch:
             if self.progress:
                 self.progress(stage, cfg, res)
             return self._run(retry, stage)
+        if (self.block_failed_pairs and pair_key is not None and not res.launched and
+                (failure_kind(res) in ("draft_refused", "draft_unavailable") or
+                 "failed to start" in (res.error or ""))):
+            self._pair_blocked.add(pair_key)
+            self.notes.append(f"{cfg.backend}: {pair_key[2]} failed to start ({failure_kind(res)}); "
+                              "only this candidate is blocked on this engine for this calibration")
         self.results.append(res)
         if self.progress:
             self.progress(stage, cfg, res)
