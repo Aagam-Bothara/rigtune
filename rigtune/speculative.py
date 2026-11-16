@@ -65,6 +65,28 @@ EAGLE3_HEADS = [
     (r"^Qwen/Qwen3-8B$", ("AngelSlim/Qwen3-8B_eagle3",)),
 ]
 
+# Proposals only: every row is checked from immutable files before use. Hub
+# config/tokenizer facts read 2026-11-15 (plan-drafts section 2.3).
+PAIR_CANDIDATES = [
+    # Gemma 4: first-party assistants declare Gemma4[Unified]AssistantForCausalLM.
+    (r"^google/gemma-4-(?:E2B|E4B|12B|26B-A4B|31B)-it$", (("assistant", r"\g<0>-assistant"),)),
+    # Ministral 3 2512: 131072 rows and matching tokenizer/tekken hashes; cost still checked.
+    (r"^mistralai/Ministral-3-(?:8|14)B-(Instruct|Reasoning)-2512$",
+     (("draft", r"mistralai/Ministral-3-3B-\1-2512"),)),
+    # Existing Qwen and Llama rows: config vocab and tokenizer evidence documented above;
+    # gated Meta files must be read, never equated to the unsloth copy by name.
+    *((pattern, (("draft", repo),)) for pattern, repo in DRAFTS),
+]
+
+
+def candidates_for(hf_id: str, draft_repo: Optional[str] = None) -> List[Tuple[str, str]]:
+    out = [("draft", draft_repo)] if draft_repo else []
+    for pattern, pairs in PAIR_CANDIDATES:
+        match = re.match(pattern, hf_id)
+        if match:
+            out.extend((kind, match.expand(repo)) for kind, repo in pairs)
+    return list(dict.fromkeys(out))
+
 # vLLM 0.11's V1 engine rejects a separate draft model ("not supported yet"); n-gram works there.
 VLLM_DRAFT_MIN = (0, 12)
 # Both methods are in vLLM 0.29's SpeculativeConfig; earlier releases were not checked.

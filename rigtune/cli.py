@@ -442,7 +442,8 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
           max_accuracy_loss: float = 3.0, eval_items: int = 300, report_reuse: bool = False,
           kv_tier: str = "off",
           arrival_rate: Optional[float] = None, rate_check: str = "on",
-          confirm_rounds: int = 1, min_requests: Optional[int] = None, eval_attempts: int = 3):
+          confirm_rounds: int = 1, min_requests: Optional[int] = None, eval_attempts: int = 3,
+          drafts: str = "table", draft: Optional[str] = None, hub: str = "on"):
     from rigtune.pipeline import SearchOptions
 
     if eval_set:
@@ -461,7 +462,21 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
         kv_tier=kv_tier,
         arrival_rate=arrival_rate, rate_check=rate_check == "on",
         confirm_rounds=confirm_rounds, min_requests=min_requests, eval_attempts=eval_attempts,
+        drafts=drafts, draft=draft, hub=hub,
     )
+
+
+def _drafts(value: str) -> str:
+    if value not in ("table", "verified"):
+        raise typer.BadParameter("expected table or verified")
+    return value
+
+
+DRAFTS_OPT = typer.Option("table", "--drafts", callback=_drafts,
+                          help="table: existing proposals; verified: check files and pin second models.")
+DRAFT_OPT = typer.Option(None, "--draft", help="Extra draft repository or directory; enables verified checking.")
+HUB_OPT = typer.Option("on", "--hub", callback=_on_off,
+                       help="off: pair evidence from local files/cache only (also HF_HUB_OFFLINE=1).")
 
 
 KV_TIER_OPT = typer.Option(
@@ -841,6 +856,10 @@ def plan(
     history: Optional[str] = HISTORY_OPT,
     session_system: Optional[Path] = SESSION_SYSTEM_OPT,
     as_json: bool = typer.Option(False, "--json"),
+    drafts: str = DRAFTS_OPT,
+    draft: Optional[str] = DRAFT_OPT,
+    hub: str = HUB_OPT,
+    speculative: str = SPEC_OPT,
 ) -> None:
     """Print feasible configs (after the memory planner) without running them."""
     from rigtune.hardware import probe as _probe
@@ -853,7 +872,8 @@ def plan(
     if not candidates:
         err.print("[red]no candidate backends for this machine/model[/]")
         raise typer.Exit(2)
-    result = prepare_and_plan(hw, spec, candidates, reg, workload=wl)
+    result = prepare_and_plan(hw, spec, candidates, reg, workload=wl, speculative_all=speculative == "all",
+                              drafts=drafts, draft=draft, hub=hub)
     from rigtune.memory import layout_note
 
     # A hybrid-attention model whose KV fell back to the every-layer-full estimate (rigtune/memory.py).
@@ -914,6 +934,9 @@ def bench(
     quant: str = QUANT_OPT,
     kv_quant: str = KVQ_OPT,
     speculative: str = SPEC_OPT,
+    drafts: str = DRAFTS_OPT,
+    draft: Optional[str] = DRAFT_OPT,
+    hub: str = HUB_OPT,
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
@@ -962,7 +985,7 @@ def bench(
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
                  eval_attempts=eval_attempts,
                  report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
-                 confirm_rounds=confirm_rounds, min_requests=min_requests)
+                 confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub)
     try:  # as resolve_profile does: refused before the weights download and the search runs
         check_distributed_options(opts, hw, layout, phases)
         check_goal_measurable(objective, cons, opts, hw, layout, phases)
@@ -973,7 +996,7 @@ def bench(
                   "host RAM is budgeted for one engine on one GPU[/]")
         opts.kv_tier = "off"
     result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.search_quants(),
-                              speculative_all=opts.speculative_all)
+                              speculative_all=opts.speculative_all, drafts=opts.drafts, draft=opts.draft, hub=opts.hub)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
     view = _search_view(objective, cons)
@@ -1024,6 +1047,9 @@ def recalibrate(
     quant: str = QUANT_OPT,
     kv_quant: str = KVQ_OPT,
     speculative: str = SPEC_OPT,
+    drafts: str = DRAFTS_OPT,
+    draft: Optional[str] = DRAFT_OPT,
+    hub: str = HUB_OPT,
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
@@ -1063,7 +1089,7 @@ def recalibrate(
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
                  eval_attempts=eval_attempts,
                  report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
-                 confirm_rounds=confirm_rounds, min_requests=min_requests), layout=layout)
+                 confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub), layout=layout)
     view.stop()
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
@@ -1142,6 +1168,9 @@ def compare(
     quant: str = QUANT_OPT,
     kv_quant: str = KVQ_OPT,
     speculative: str = SPEC_OPT,
+    drafts: str = DRAFTS_OPT,
+    draft: Optional[str] = DRAFT_OPT,
+    hub: str = HUB_OPT,
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
@@ -1222,7 +1251,7 @@ def compare(
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
                  eval_attempts=eval_attempts,
                  report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
-                 confirm_rounds=confirm_rounds, min_requests=min_requests), layout=layout)
+                 confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub), layout=layout)
     view.stop()
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend, workload=eval_wl, report_reuse=report_reuse)
@@ -1560,6 +1589,9 @@ def serve(
     quant: str = QUANT_OPT,
     kv_quant: str = KVQ_OPT,
     speculative: str = SPEC_OPT,
+    drafts: str = DRAFTS_OPT,
+    draft: Optional[str] = DRAFT_OPT,
+    hub: str = HUB_OPT,
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
@@ -1647,7 +1679,7 @@ def serve(
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
                  eval_attempts=eval_attempts,
                  report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
-                 confirm_rounds=confirm_rounds, min_requests=min_requests), layout=layout)
+                 confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub), layout=layout)
     view.stop()
     _print_profile(profile)
     if profile.prepared is None:

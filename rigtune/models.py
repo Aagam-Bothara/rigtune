@@ -183,6 +183,20 @@ class PreparedModel(BaseModel):
     # "mtp_shared". Empty in profiles saved before they existed, which still load.
     spec_repos: Dict[str, str] = Field(default_factory=dict)
     spec_bytes: Dict[str, int] = Field(default_factory=dict)
+    spec_revisions: Dict[str, str] = Field(default_factory=dict)
+    spec_paths: Dict[str, str] = Field(default_factory=dict, exclude=True, repr=False)
+    # Only verified mode populates pairs. Paths stay private; records use portable aliases.
+    spec_pairs: List[Dict[str, Any]] = Field(default_factory=list)
+    drafts_mode: str = "table"
+
+    @model_serializer(mode="wrap")
+    def _omit_unverified_drafts(self, handler) -> Dict[str, Any]:
+        """Written only by a verified-drafts calibration, so a table-mode profile is saved as it always was."""
+        data = handler(self)
+        for name, unset in (("spec_revisions", {}), ("spec_pairs", []), ("drafts_mode", "table")):
+            if data.get(name) == unset:
+                data.pop(name, None)
+        return data
 
     def weights_for(self, quant: str) -> int:
         if quant in self.weights_bytes:

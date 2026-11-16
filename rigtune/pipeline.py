@@ -93,6 +93,9 @@ class SearchOptions:
     # model, vLLM's EAGLE3 head, a checkpoint's own MTP head on both), the engines' choice after speculation and a
     # third speculation setting per engine.
     speculative_all: bool = False
+    drafts: str = "table"
+    draft: Optional[str] = None
+    hub: str = "on"
     prefix_cache: bool = True  # keep prefix caching on, and tune it for shared-prefix workloads
     phase_tuning: bool = True  # the prefill-knob stage
     combine: bool = True  # combinations of the strategies that were promising on their own
@@ -143,6 +146,12 @@ class SearchOptions:
         A custom goal (objective "custom") names what it optimises; its limits are in that fingerprint, which covers
         the goal's text. The text itself never goes into a file name: `<` and `>` are not allowed there on Windows."""
         out: Dict[str, str] = {}
+        if self.drafts != "table" or self.draft:
+            out["drafts"] = "verified"
+        if self.draft:
+            from rigtune.pairing import is_local, read_files
+            identity = read_files(self.draft).sha if is_local(self.draft) else self.draft
+            out["draft"] = hashlib.sha256(str(identity).encode()).hexdigest()[:16]
         if self.quants is not None:
             out["quant"] = "+".join(self.quants)
         if not self.kv_quant:
@@ -814,6 +823,9 @@ def prepare_and_plan(
     workload: Optional[Workload] = None,
     quants: Optional[List[str]] = None,
     speculative_all: bool = False,
+    drafts: str = "table",
+    draft: Optional[str] = None,
+    hub: str = "on",
 ) -> PlanResult:
     """Prepare each candidate backend's model, enumerate its grid, keep what fits the workload.
 
@@ -830,6 +842,7 @@ def prepare_and_plan(
             if quants is not None and allowed == []:
                 raise RuntimeError(f"none of --quant {','.join(quants)} is available on {name}")
             prepared = backend.prepare(spec, hw, quants=allowed)
+            prepared.drafts_mode = "verified" if drafts == "verified" or draft else "table"
             if speculative_all:
                 result.notes += backend.find_second_models(prepared)
             grid = backend.candidate_configs(hw, prepared, min_ctx=min_ctx)
@@ -1232,7 +1245,8 @@ def resolve_profile(
         raise RuntimeError("no backend supports this machine/model; run `rigtune probe` for details")
     say("prepare + plan")
     plan = prepare_and_plan(hw, spec, candidates, reg, materialize=not skip_calibration, workload=workload,
-                            quants=opts.search_quants(), speculative_all=opts.speculative_all)
+                            quants=opts.search_quants(), speculative_all=opts.speculative_all,
+                            drafts=opts.drafts, draft=opts.draft, hub=opts.hub)
     if skip_calibration:
         say("defaults")
         return default_profile(hw, spec, plan, reg, objective, workload=workload)
