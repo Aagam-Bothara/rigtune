@@ -506,6 +506,14 @@ class StartupCost(BaseModel):
     nothing about what it would have reported."""
 
     seconds: Optional[float] = None  # launch to the first healthy answer; None when it never became ready
+    # Read from the engine's own log (memlog.parse_startup); each None unless its line was found.
+    capture_s: Optional[float] = None  # CUDA-graph capture time; the slowest worker's when several report
+    cudagraph_gib: Optional[float] = None  # memory the captured graphs took, of that same worker
+    capture_lines: int = 0  # how many workers reported a capture
+    compile_s: Optional[float] = None  # seconds spent compiling, summed over the ranges compiled
+    compile_cached: Optional[bool] = None  # every range loaded from the compile cache; None when no line says
+    rewrites: List[str] = Field(default_factory=list)  # settings the engine said it changed, "cudagraph_mode=NAME"
+    parsed: List[str] = Field(default_factory=list)  # which lines were found: an empty list read nothing
 
 
 class TrialResult(BaseModel):

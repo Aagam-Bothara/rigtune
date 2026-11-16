@@ -39,7 +39,7 @@ from rigtune.calibrate.measure import MIN_OPEN_LOOP_RATE, run_trial
 from rigtune.calibrate.objectives import Constraints, pick, rank, resolve_goal, strict_refusal
 from rigtune.calibrate.rate import compose
 from rigtune.calibrate.workload import Workload
-from rigtune.memlog import device_used_mb, merge, parse_log
+from rigtune.memlog import device_used_mb, merge, parse_log, parse_startup
 from rigtune.memory import estimate as memory_estimate
 from rigtune.models import (
     Config,
@@ -416,9 +416,10 @@ class SubprocessTrialRunner:
         self._stamps = None
         result = self._run(cfg, stage, arrival_rate)
         if self._stamps is not None:  # an engine process was started for this trial, ready or not
-            started, ready = self._stamps
+            started, ready, log = self._stamps
             result.startup = StartupCost(
-                seconds=round(ready - started, 3) if started is not None and ready is not None else None)
+                seconds=round(ready - started, 3) if started is not None and ready is not None else None,
+                **parse_startup(cfg.backend, log))
         model = self.models[cfg.backend]
         return redact_trial(result, getattr(model, "spec_paths", {}))
 
@@ -507,7 +508,9 @@ class SubprocessTrialRunner:
         finally:
             self._restore_power()
             if proc is not None:
-                self._stamps = (getattr(proc, "started_at", None), getattr(proc, "ready_at", None))
+                # The whole log: the start-up lines are its first, long before the trial's own request lines.
+                self._stamps = (getattr(proc, "started_at", None), getattr(proc, "ready_at", None),
+                                proc.tail_log(1_000_000))
                 proc.stop()
             if cfg.kv_tier is not None:
                 kvtier.clear(port)  # its files are the served prompts' KV cache: never kept (SECURITY.md)

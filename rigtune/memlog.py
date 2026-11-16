@@ -251,6 +251,51 @@ PARSERS = {
 }
 
 
+# vLLM's start-up lines, each matched on its whole phrase with its unit, case-sensitively. Sources, v0.29.0 / v0.33.0:
+#   "Graph capturing finished in %.0f secs, took %.2f GiB"   v1/worker/gpu_model_runner.py:7002 / 6517 and
+#                                                            v1/worker/gpu/model_runner.py:961 / 1164
+#   "Encoder graph capturing finished in ... (%d graphs)"    v1/worker/mm_encoder_model_runner.py:95 (0.33 only):
+#                                                            a different capture, never read as the decoder's
+#   "[prefix]Compiling a graph for compile range %s takes %.2f s"       compilation/backends.py:394 / 418
+#   "[prefix]Directly load the compiled graph(s) for compile range %s from the cache, took %.3f s"   :293 / 311
+#   "...; setting cudagraph_mode=<NAME>"                     config/compilation.py, the resolver's warnings
+_CAPTURE = re.compile(r"(?<!Encoder )Graph capturing finished in (\d+) secs, took (\d+\.\d+) GiB")
+_COMPILED = re.compile(r"Compiling a graph for compile range .+? takes (\d+\.\d+) s")
+_CACHED = re.compile(r"Directly load the compiled graph\(s\) for compile range .+? from the cache, took \d+\.\d+ s")
+_REWRITE = re.compile(r"; setting (cudagraph_mode=[A-Z_]+)")
+
+
+def parse_startup(backend: str, text: str) -> Dict[str, object]:
+    """What an engine's log says its start-up cost: the fields of models.StartupCost other than `seconds`.
+
+    Only vLLM's lines are known; another engine's log, an empty log and a log cut before these lines all give
+    nothing, with `parsed` empty to say so. A value is never guessed: no capture line leaves the capture unknown,
+    and without a compile line or a cache line `compile_cached` stays None rather than False."""
+    out: Dict[str, object] = {"parsed": []}
+    if backend != "vllm" or not text:
+        return out
+    parsed: List[str] = []
+    captures = [(float(s), float(g)) for s, g in _CAPTURE.findall(text)]
+    if captures:  # one line per worker under tensor parallelism: the slowest one bounds the start-up
+        out["capture_s"], out["cudagraph_gib"] = max(captures)
+        out["capture_lines"] = len(captures)
+        parsed.append("capture")
+    compiled, cached = [float(s) for s in _COMPILED.findall(text)], _CACHED.findall(text)
+    if compiled:
+        out["compile_s"] = round(sum(compiled), 2)
+        parsed.append("compile")
+    if cached:
+        parsed.append("compile_cache")
+    if compiled or cached:
+        out["compile_cached"] = not compiled
+    rewrites = list(dict.fromkeys(_REWRITE.findall(text)))  # each named once, in the order the engine said them
+    if rewrites:
+        out["rewrites"] = rewrites
+        parsed.append("rewrites")
+    out["parsed"] = parsed
+    return out
+
+
 def parse_log(backend: str, text: str) -> MeasuredMemory:
     fn = PARSERS.get(backend)
     return fn(text) if fn else MeasuredMemory()
