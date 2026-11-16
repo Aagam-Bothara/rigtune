@@ -155,7 +155,7 @@ with the reason, rather than measured as something else.
 **Not verified until the GPU session.** The adapters were tested only against files built by hand from each
 tool's source and templates (`tests/fixtures/competitors/*.SAMPLE.*`, each labelled as such), never against a
 real run's output; the GPU session must save the real files and replace the samples. Assumed, not yet seen
-working: that llm-optimizer (last code commit September 2025) runs against vLLM 0.29 / SGLang 0.5.19 at all,
+working: that llm-optimizer (last code commit September 2025) runs against vLLM 0.33 / SGLang 0.5.23 at all,
 that `--server-cmd` with `--framework sglang` launches SGLang from its own environment, that
 `random_range_ratio=1.0` gives fixed lengths in its client, which systems AIConfigurator 0.12.0 really has data
 for (its README lists h100_sxm, h200_sxm, b200_sxm, gb200 and a100_sxm; this session's plan read l40s data at a
@@ -165,7 +165,7 @@ Tests: `tests/test_competitor_rows.py`.
 
 ## The next session, step by step
 
-`benchmarks/next_session_plan.py --out plan.json` writes the plan for the next session (36 phases for the two
+`benchmarks/next_session_plan.py --out plan.json` writes the plan for the next session (46 phases for the two
 default models; `--models`, `--cal-budget-min`, `--repeats`, `--hf-home` and the tool paths are options):
 
 | Phases | What they settle ([Not yet measured](benchmarks.md#not-yet-measured)) |
@@ -188,7 +188,7 @@ every phase, so the models are on the volume disk and a pod stop keeps them.
 
 **Before renting.** Follow the recipe that worked before (image, the bandwidth check before keeping a pod,
 `transformers<5` with vLLM 0.11, deleting uv's cache after installs), with SSH over the exposed TCP port. On the
-pod: vLLM 0.29.0 in the main Python; SGLang 0.5.19 in its own venv with `SGLANG_PYTHON` pointing at it;
+pod: vLLM 0.33.0 in the main Python (it pins torch 2.14.0); SGLang 0.5.23 in its own venv (torch 2.14.1) with `SGLANG_PYTHON` pointing at it;
 arctic-inference from the [install line](usage.md#suffix-decoding) (or the broken build first, for item 19's
 comparison); a sparse vLLM checkout at the installed tag in `/workspace/src/vllm` (see
 [Reproducing a comparison](benchmarks.md#reproducing-a-comparison)); llm-optimizer cloned to
@@ -241,10 +241,12 @@ missing can be read on the pod with `status`, pulled again, or sent by hand with
 **Prediction, not a measurement: the session's length.** From recorded times (a 60-minute calibration budget,
 auto_tune and llm-optimizer each cut at that budget, a compare of about 14 rows x 3 repeats at about 4 minutes
 a run): about 7 hours per model, 2 to 3 hours of goal and suffix phases and 1 to 2 hours of setup, environment
-and smoke, so 17 to 20 hours, about 9 to 10 USD on an A40 at 0.49 USD an hour and 15 to 17 on an L40S at 0.86.
-The two conformance runs are not in that figure: they have never run on a GPU, so there is no time to predict
-from. `--only` and `--models` cut it down; the comparisons go last, so a run that is stopped early still has
-the checks.
+and smoke, so 17 to 20 hours. The conformance runs and the draft checks are not in that figure: they have never
+run on a GPU, so there is no time to predict from; the kernel checks add about 2 hours (two 20-minute and one
+10-minute recalibration, with their start-ups). Allow 24 to 30 hours: about 14 to 18 USD on an A40 at 0.59 USD
+an hour (RunPod, 16 November 2026), 26 to 33 on an L40S or RTX 6000 Ada at 1.09. Every phase at its timeout is
+about 62 hours. `--only` and `--models` cut it down; the comparisons come before the kernel checks and after
+every other check, so a run that is stopped early still has the checks.
 
 **What stays unverified until the session.** Everything on this page. In particular: that the puller's
 `ssh host command` works against a RunPod pod's exposed port and that RunPod's image has `tar` and `sha256sum`
@@ -273,7 +275,7 @@ assistant cannot turn into a passing phase through successful n-gram checks.
 `drafts-llama-sglang` adds the previously missing Llama STANDALONE experiment.
 
 Keep the pair records, engine revision lines, accepted-token counters, pool-token
-counts and peak-memory logs with the session. The G1?G8 checklist in benchmarks.md
+counts and peak-memory logs with the session. The G1–G8 checklist in benchmarks.md
 is still unmeasured. These phases do not establish speedups by merely completing;
 use held-out Dolly at eight users, a 500 ms p95 ceiling and three interleaved runs.
 Hub ids are used in session commands, avoiding local path rewriting by Git Bash.
