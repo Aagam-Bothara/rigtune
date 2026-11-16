@@ -392,3 +392,77 @@ def save_record(target: PairFiles, second: PairFiles, kind: str, verdict: PairVe
                         refuted_by=previous.refuted_by if previous else [])
     _write_record(path, record)
     return path
+
+
+def discover(prepared, engine: str, ctx: int = 4096, *, draft: Optional[str] = None,
+             hub: str = "on", version: Optional[str] = None) -> List[str]:
+    """Check proposed repositories, record outcomes, retain at most two plain drafts."""
+    from rigtune.speculative import candidates_for
+    notes: List[str] = []
+    prepared.drafts_mode = "verified"
+    proposed = candidates_for(prepared.spec.hf_id, draft)
+    if not proposed:
+        return [f"{engine}: no second model listed for this target; no claim that none exists"]
+    source = "cache" if hub == "off" or os.environ.get("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes", "on") else "hub"
+    try:
+        target = read_files(prepared.spec.hf_id, source, revision=prepared.spec.revision)
+    except HubLookupError as exc:
+        return [f"{engine}: second models not checked: target files {exc.why}"]
+    accepted = []
+    for kind, repo in proposed:
+        label = local_alias(repo, "unread00") if is_local(repo) else repo
+        try:
+            second = read_files(repo, source)
+            read_tokenizers(target, second, source=source)
+        except HubLookupError as exc:
+            notes.append(f"{engine}: {label} not checked: {exc.why}")
+            continue
+        verdict = check_pair(target, second, kind, ctx, engine=engine)
+        path = save_record(target, second, kind, verdict)
+        label = second.repo
+        if verdict.status != "ok":
+            state = "refused" if verdict.status == "refused" else "not checked"
+            notes.append(f"{engine}: {label} {state}: {', '.join(verdict.reasons)}")
+            continue
+        record = load_record(path) if path else None
+        if record and f"{engine} {version}" in record.refuted_by:
+            notes.append(f"{engine}: {label} not offered: rigtune's check was wrong on {engine} {version}")
+            continue
+        accepted.append((kind, second, repo, path))
+        notes.append(f"{engine}: {label} checked at {second.sha}; template: {verdict.evidence['template']}")
+    count = 0
+    for kind, second, repo, path in sorted(accepted, key=lambda row: row[1].num_params or row[1].size_bytes):
+        if kind == "draft":
+            if count == 2:
+                continue
+            count += 1
+        alias = second.repo
+        prepared.spec_pairs.append({"kind": kind, "repo": alias, "params": second.num_params,
+                                    "size_bytes": second.size_bytes, "context": text_config(second.config).get("max_position_embeddings"),
+                                    "record": path.name if path else None})
+        prepared.spec_revisions[alias] = second.sha
+        prepared.spec_bytes[alias] = second.size_bytes
+        if is_local(repo):
+            prepared.spec_paths[alias] = repo
+    if prepared.spec_pairs and not is_local(prepared.spec.hf_id):
+        prepared.spec = prepared.spec.model_copy(update={"revision": target.sha})
+    return notes
+
+
+def eligible_pairs(model, kind: str, ctx: int):
+    return [p for p in model.spec_pairs if p["kind"] == kind and
+            (kind == "assistant" or (p.get("context") or 0) >= ctx)]
+
+
+def extra_weights(cfg, model) -> int:
+    """Second-model weights at the target's activation dtype; draft KV remains unplanned."""
+    from rigtune.hfconfig import dtype_bytes
+    from rigtune.speculative import parse
+    if not cfg.spec_decode:
+        return 0
+    _, repo, _ = parse(cfg.spec_decode)
+    for pair in model.spec_pairs:
+        if pair["repo"] == repo:
+            dtype = cfg.quant if cfg.quant in ("bf16", "fp16") else model.arch.torch_dtype
+            return int(pair["params"] * dtype_bytes(dtype)) if pair.get("params") else pair["size_bytes"]
+    return 0

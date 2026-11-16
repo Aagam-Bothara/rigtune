@@ -50,9 +50,19 @@ def profile_path(hw_hash: str, model: ModelSpec, objective: str, workload: str =
     return profiles_dir() / hw_hash / model.safe_id / f"{name}.json"
 
 
-def save(profile: Profile) -> Path:
-    requested = profile.prepared.spec.revision if profile.prepared is not None else None
-    path = profile_path(profile.hardware_hash, ModelSpec(hf_id=profile.model_id, revision=requested),
+def save(profile: Profile, requested: Optional[ModelSpec] = None) -> Path:
+    """Write the profile where `load` looks for it: under the revision the user asked for.
+
+    `requested` is the model as the user named it. A verified-drafts calibration pins `prepared.spec.revision` to
+    the commit it checked, and a profile filed under that pin would never be found by the next request, which
+    names no commit; the pin is recorded in the profile (`model_revision`) and compared on reuse instead. Without
+    `requested` the prepared model's revision is used, which is the requested one whenever nothing was pinned, so
+    profiles calibrated without verified drafts keep the names they always had."""
+    if requested is not None:
+        revision = requested.revision
+    else:
+        revision = profile.prepared.spec.revision if profile.prepared is not None else None
+    path = profile_path(profile.hardware_hash, ModelSpec(hf_id=profile.model_id, revision=revision),
                         profile.objective, profile.workload, profile.power_mode, profile.phases, profile.options)
     path.parent.mkdir(parents=True, exist_ok=True)
     # A staging file of its own per writer, so two saves of one profile never replace each other's half-written
@@ -144,7 +154,13 @@ def library_changes(profile: Profile, hw: HardwareDescriptor) -> Tuple[List[str]
 
 def revision_reason(profile: Profile, model: ModelSpec) -> Optional[str]:
     """Set when the local snapshot of the model is no longer the commit the profile was calibrated on. Compared
-    only when both are known; resolving the current commit never asks the Hub."""
+    only when both are known; resolving the current commit never asks the Hub.
+
+    A profile whose calibration pinned the model to a commit the request did not name (verified drafts) launches
+    at that commit whatever the local `main` points at, so it is not compared: `rigtune recalibrate` moves it."""
+    pinned = profile.prepared.spec.revision if profile.prepared is not None else None
+    if pinned is not None and pinned != model.revision and re.fullmatch(r"[a-f0-9]{40}", pinned):
+        return None
     current = snapshot_revision(model) if profile.model_revision else None
     if current is not None and current != profile.model_revision:
         return f"{model.hf_id} is now commit {current[:12]}, calibrated on {profile.model_revision[:12]}"

@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from rigtune import speculative
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from rigtune.hfconfig import dtype_bytes, kv_element_bytes, load_arch
-from rigtune.memory import HybridKV, MemoryModel
+from rigtune.memory import HybridKV, MemoryModel, estimate
 from rigtune.models import ArchInfo, Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
 from rigtune.hardware import nvlink_between
 from rigtune.quantized import INT4_METHODS, INT8_METHODS, PREQUANTIZED, hf_weight_options
@@ -191,7 +191,8 @@ def vllm_mtp_extra_weights(cfg: Config, model: PreparedModel) -> int:
     transient of shared_bytes at load, which is not planned (docs/benchmarks.md lists it for the GPU run)."""
     if speculative.own_head(cfg.spec_decode) and os.path.isdir(model.spec.hf_id):
         return int(model.spec_bytes.get(speculative.MTP_KEY) or 0)
-    return 0
+    from rigtune.pairing import extra_weights
+    return extra_weights(cfg, model)
 
 
 def vllm_registry_archs() -> Optional[set]:
@@ -702,9 +703,12 @@ class VllmBackend(BaseBackend):
         specs = [speculative.ngram_gpu() if speculative.vllm_supports_ngram_gpu() else speculative.ngram()]
         if speculative.vllm_supports_suffix():
             specs.append(speculative.suffix())
-        draft = speculative.draft_for(model.spec.hf_id)
-        if draft and speculative.vllm_supports_draft():
-            specs.append(speculative.draft(draft, speculative.DRAFT_TOKENS_VLLM))
+        if model.drafts_mode == "verified":
+            specs += [v.spec_decode for v in self._pair_variants(cfg, model, hw)[0]]
+        else:
+            draft = speculative.draft_for(model.spec.hf_id)
+            if draft and speculative.vllm_supports_draft():
+                specs.append(speculative.draft(draft, speculative.DRAFT_TOKENS_VLLM))
         head = model.spec_repos.get("eagle3")
         if all_methods and head and speculative.vllm_supports_eagle3():  # the head and tokens SGLang is offered
             specs.append(speculative.eagle3(head, speculative.EAGLE3_TOKENS))
@@ -719,6 +723,8 @@ class VllmBackend(BaseBackend):
         is not tried on a release that has it (speculative.suffix_refusal: on 14 Nov 2026 every suffix trial on an
         A40 pod failed to start with arctic-inference 0.1.1 installed, and each cost a launch)."""
         notes = self._mtp_variants(cfg, model, hw, all_methods, min_batch)[1]
+        if model.drafts_mode == "verified":
+            notes += self._pair_variants(cfg, model, hw)[1]
         if speculative.vllm_suffix_release():
             if not speculative.vllm_supports_suffix():
                 notes.append(f"vllm: suffix decoding not tried: {speculative.vllm_suffix_refusal()}")
@@ -729,6 +735,29 @@ class VllmBackend(BaseBackend):
                          "by analogy with EAGLE3, which shares its proposer path and is excluded after vLLM's draft "
                          "model failed so on an A40; unproven for MTP")
         return notes
+
+    def find_pairs(self, prepared: PreparedModel, ctx: int = 4096, *, draft: Optional[str] = None,
+                   hub: str = "on", hw: Optional[HardwareDescriptor] = None) -> List[str]:
+        from rigtune.pairing import discover
+        return discover(prepared, self.name, ctx, draft=draft, hub=hub,
+                        version=self.version(hw) if hw else None)
+
+    def _pair_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor]):
+        from rigtune.pairing import eligible_pairs
+        if hw is None or not speculative.vllm_supports_draft() or not _probe_lists("spec_methods", "draft_model"):
+            return [], []
+        out, notes = [], []
+        if cfg.kv_dtype == AMPERE_FP8_KV:
+            return [], ["vllm: verified pairs excluded from the measured failing fp8_e5m2 FlashInfer combination"]
+        for pair in eligible_pairs(model, "draft", cfg.ctx):
+            spec = speculative.draft(pair["repo"], speculative.DRAFT_TOKENS_VLLM)
+            v = cfg.model_copy(update={"spec_decode": spec})
+            if estimate(hw, model, v, self.memory_model(hw)).feasible:
+                out.append(v)
+                notes.append(f"vllm: {pair['repo']} weights planned at target dtype; draft KV is unplanned")
+            else:
+                notes.append(f"vllm: {pair['repo']} does not fit with its draft weights at ctx {cfg.ctx}, batch {cfg.batch}")
+        return out, notes
 
     def _mtp_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor], all_methods: bool,
                       min_batch: Optional[int]) -> Tuple[List[Config], List[str]]:
@@ -848,7 +877,13 @@ class VllmBackend(BaseBackend):
             args += ["--enable-prefix-caching" if cfg.prefix_cache else "--no-enable-prefix-caching"]
         if cfg.spec_decode:
             revision = model.spec.revision if cfg.quant not in PREQUANTIZED else None  # read by an MTP head only
-            args += ["--speculative-config", json.dumps(speculative.vllm_config(cfg.spec_decode, revision))]
+            kind, second, _ = speculative.parse(cfg.spec_decode)
+            if second:
+                revision = model.spec_revisions.get(second)
+            payload = speculative.vllm_config(cfg.spec_decode, revision)
+            if second in model.spec_paths:
+                payload["model"] = model.spec_paths[second]
+            args += ["--speculative-config", json.dumps(payload)]
         if cfg.tp > 1:
             args += ["--tensor-parallel-size", str(cfg.tp)]
         if model.spec.revision and cfg.quant not in PREQUANTIZED:

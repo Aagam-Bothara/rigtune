@@ -1017,7 +1017,7 @@ def bench(
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
     if save:  # before the table: nothing printed after a calibration can lose it
-        profile_cache.save(profile)
+        profile_cache.save(profile, ModelSpec(hf_id=model))
     _print_tradeoffs(profile, objective, cons)
 
 

@@ -361,7 +361,7 @@ def test_a_layout_calibration_skips_the_tier_stage(engines, monkeypatch, spec):
     monkeypatch.setattr(pl, "select", lambda *a, **k: ([], {}))
     monkeypatch.setattr(layout, "calibrate_layout", lambda hw, objective, base, *a, **k: base.model_copy())
     monkeypatch.setattr(pl.profile_cache, "load", lambda *a, **k: None)
-    monkeypatch.setattr(pl.profile_cache, "save", lambda p: None)
+    monkeypatch.setattr(pl.profile_cache, "save", lambda p, requested=None: None)
     p = pl._resolve_layout(spec, "throughput", None, True, get_workload("chat"), None, None, hw, None, "off",
                            SearchOptions(kv_tier="auto"), "replicas")
     assert asked == ["off"] and p.options["tier"] == "auto"

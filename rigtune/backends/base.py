@@ -420,6 +420,11 @@ class BaseBackend:
         `prepared`. Returns notes for the profile, such as a lookup the Hub could not answer. Default: none."""
         return []
 
+    def find_pairs(self, prepared: PreparedModel, ctx: int = 4096, *, draft: Optional[str] = None,
+                   hub: str = "on", hw: Optional[HardwareDescriptor] = None) -> List[str]:
+        """Verified full-model/assistant pairs; opt-in and unsupported by default."""
+        return []
+
     def replica_launch_spec(self, cfg: Config, model: PreparedModel, port: int, gpu_index: int) -> LaunchSpec:
         """One full engine pinned to one GPU, for the replicas layout. Without a KV-cache tier: its host RAM
         was budgeted for one engine, and every replica would take it again."""

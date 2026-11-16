@@ -851,6 +851,8 @@ def prepare_and_plan(
                     f"model max context {prepared.arch.max_position_embeddings} < workload minimum {min_ctx}"
                 )
             kept = memory_plan(hw, prepared, grid, backend.memory_model(hw))
+            if prepared.drafts_mode == "verified" and kept:
+                result.notes += backend.find_pairs(prepared, min(c.ctx for c, _ in kept), draft=draft, hub=hub, hw=hw)
             result.prepared[name] = prepared
             result.feasible[name] = kept
             result.considered[name] = len(grid)
@@ -1217,6 +1219,7 @@ def resolve_profile(
     """
     say = on_stage or (lambda s: None)
     workload = workload or get_workload("default")
+    requested = spec  # as the user named it: what the cache is looked up and saved under
     say("probe")
     hw = hw or probe()
     opts = options or SearchOptions()
@@ -1253,7 +1256,7 @@ def resolve_profile(
     say("calibrate")
     profile = calibrate(hw, spec, objective, plan, reg, workload=workload, constraints=constraints, progress=progress,
                         power_mode=power_mode, options=opts)
-    profile_cache.save(profile)
+    profile_cache.save(profile, requested)
     return profile
 
 
@@ -1291,7 +1294,7 @@ def _resolve_phased(spec: ModelSpec, objective: str, force_backend: Optional[str
     profile = calibrate_disaggregated(hw, spec, objective, base, reg, workload=workload, constraints=constraints,
                                       phases=phases, connector=kv_connector, progress=progress, power_mode=power_mode,
                                       log_dir=profile_cache.logs_dir() / spec.safe_id)
-    profile_cache.save(profile)
+    profile_cache.save(profile, spec)
     return profile
 
 
@@ -1328,5 +1331,5 @@ def _resolve_layout(spec: ModelSpec, objective: str, force_backend: Optional[str
         profile.options = {**profile.options, "tier": options.kv_tier}  # cached where it is looked up
         profile.notes.append(f"--kv-tier {options.kv_tier} was not tried under --layout {layout}: a KV-cache "
                              "tier's host RAM is budgeted for one engine on one GPU")
-    profile_cache.save(profile)
+    profile_cache.save(profile, spec)
     return profile

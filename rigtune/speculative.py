@@ -519,7 +519,10 @@ def vllm_config(spec: str, revision: Optional[str] = None) -> Dict[str, object]:
         return out
     if kind == "eagle3":  # vLLM 0.29 reads the head's architecture from its config
         return {"method": "eagle3", "model": model_id, "num_speculative_tokens": k}
-    return {"method": "draft_model", "model": model_id, "num_speculative_tokens": k}
+    out = {"method": "draft_model", "model": model_id, "num_speculative_tokens": k}
+    if revision:
+        out["revision"] = revision
+    return out
 
 
 def sglang_config(spec: str, model_path: Optional[str] = None, revision: Optional[str] = None) -> List[str]:
