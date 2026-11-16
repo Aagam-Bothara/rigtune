@@ -228,6 +228,7 @@ class Config(BaseModel):
     prefix_cache: Optional[bool] = None  # None = the engine default (on for vLLM and SGLang)
     # speculative decoding: "ngram|ngram_gpu|suffix|mtp:<k>" | "draft|eagle3:<hf_id>:<k>"
     spec_decode: Optional[str] = None
+    spec_head_quant: Optional[str] = None
     tp: int = 1  # tensor-parallel degree across GPUs
     # A KV-cache tier below the GPU pool (vLLM's offloading connector, SGLang's hierarchical cache):
     # "host:<GiB>" of host RAM, or "host:<GiB>+disk:<GiB>" with a directory under rigtune's own cache dir
@@ -274,7 +275,16 @@ class Config(BaseModel):
             parts.append(f"pl{self.power_limit_w}")
         if self.sm_clock_mhz is not None:
             parts.append(f"clk{self.sm_clock_mhz}")
+        if self.spec_head_quant is not None:
+            parts.append(f"shq={self.spec_head_quant}")
         return "/".join(parts)
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_head_quant(self, handler) -> Dict[str, Any]:
+        data = handler(self)
+        if self.spec_head_quant is None:
+            data.pop("spec_head_quant", None)
+        return data
 
     def base_key(self) -> str:
         """Key without energy settings, so power variants of one configuration share it."""

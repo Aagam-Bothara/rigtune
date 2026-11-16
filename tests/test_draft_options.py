@@ -55,3 +55,13 @@ def test_table_mode_makes_no_lookup(no_network, hw_a100, spec, monkeypatch):
 def test_cli_exposes_draft_options(command):
     params = {p.name for p in get_command(app).commands[command].params}
     assert {"drafts", "draft", "hub"} <= params
+
+
+def test_new_launch_goldens_only():
+    import json
+    from pathlib import Path
+    root = Path(__file__).parent / "golden/drafts"
+    for spec, expected in json.loads((root / "vllm-configs.json").read_text()).items():
+        assert speculative.vllm_config(spec, "b" * 40) == expected
+    for spec, expected in json.loads((root / "sglang-flags.json").read_text()).items():
+        assert speculative.sglang_config(spec, draft_revision="b" * 40, draft_quantization="unquant") == expected

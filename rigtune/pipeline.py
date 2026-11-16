@@ -334,7 +334,8 @@ def spec_state_notes_for(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], pl
 
     be = reg[cfg.backend]
     gmu = cfg.gmu_before_spec if cfg.gmu_before_spec is not None else cfg.gpu_memory_utilization
-    base = cfg.model_copy(update={"spec_decode": None, "gpu_memory_utilization": gmu, "gmu_before_spec": None})
+    base = cfg.model_copy(update={"spec_decode": None, "spec_head_quant": None,
+                                  "gpu_memory_utilization": gmu, "gmu_before_spec": None})
     try:
         variants = be.spec_variants(base, pm, hw, opts.speculative_all)
         return spec_state_notes(hw, pm, be.memory_model(hw), base, variants)

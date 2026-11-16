@@ -1081,7 +1081,7 @@ class StagedSearch:
 
     # Config fields a single-dimension stage may change (plus `extra`, compared key by key).
     _DELTA_FIELDS = ("batch", "n_batch", "prefill_budget", "kv_dtype", "prefix_cache", "spec_decode",
-                     "kv_tier")
+                     "kv_tier", "spec_head_quant")
     # Changed together with the speculation setting only: SGLang lowers the memory fraction to leave a second
     # model room, and a combination that carries the speculation over must carry the lower fraction with it.
     _SPEC_MEMORY_FIELDS = ("gpu_memory_utilization", "gmu_before_spec")
@@ -1090,6 +1090,8 @@ class StagedSearch:
     def _delta(cls, ref: Config, var: Config) -> Dict[str, Any]:
         """What a variant changed relative to the leader it was measured against."""
         d: Dict[str, Any] = {f: getattr(var, f) for f in cls._DELTA_FIELDS if getattr(var, f) != getattr(ref, f)}
+        if "spec_head_quant" in d:
+            d["spec_decode"] = var.spec_decode
         if "spec_decode" in d:
             d.update({f: getattr(var, f) for f in cls._SPEC_MEMORY_FIELDS if getattr(var, f) != getattr(ref, f)})
         extra = {k: v for k, v in var.extra.items() if ref.extra.get(k) != v}
@@ -1100,6 +1102,8 @@ class StagedSearch:
     @staticmethod
     def _apply(cfg: Config, delta: Dict[str, Any]) -> Config:
         update = {k: v for k, v in delta.items() if k != "extra"}
+        if "spec_decode" in update and not (update["spec_decode"] or "").startswith("mtp:"):
+            update["spec_head_quant"] = None
         if "extra" in delta:
             update["extra"] = {**cfg.extra, **delta["extra"]}
         return cfg.model_copy(update=update)
@@ -1129,8 +1133,8 @@ class StagedSearch:
         lead = leader.config
         changed = self._delta(base, lead)
         # A speculation setting that lowered the memory fraction (SGLang's draft room) is undone with it.
-        paired = ("spec_decode",) + self._SPEC_MEMORY_FIELDS
-        together = "spec_decode" in changed and any(f in changed for f in self._SPEC_MEMORY_FIELDS)
+        paired = ("spec_decode", "spec_head_quant") + self._SPEC_MEMORY_FIELDS
+        together = "spec_decode" in changed and any(f in changed for f in ("spec_head_quant",) + self._SPEC_MEMORY_FIELDS)
         out: List[Config] = [lead.model_copy(update={f: getattr(base, f)}) for f in changed
                              if f != "extra" and not (together and f in paired)]
         if together:

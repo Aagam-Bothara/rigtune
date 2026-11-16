@@ -1,0 +1,4 @@
+{
+  "draft:org/draft:4": {"method": "draft_model", "model": "org/draft", "num_speculative_tokens": 4, "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "assist:org/assistant:1": {"method": "mtp", "model": "org/assistant", "num_speculative_tokens": 1, "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+}

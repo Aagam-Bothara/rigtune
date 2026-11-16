@@ -131,7 +131,7 @@ def strategy_variants(pick: Config, backend: BaseBackend, hw: HardwareDescriptor
     if pick.spec_decode:
         # Without speculation the memory SGLang left for a second model goes back to the cache.
         before = pick.gmu_before_spec if pick.gmu_before_spec is not None else pick.gpu_memory_utilization
-        out.append(variant("-spec", "spec", pick.model_copy(update={"spec_decode": None, "gmu_before_spec": None,
+        out.append(variant("-spec", "spec", pick.model_copy(update={"spec_decode": None, "spec_head_quant": None, "gmu_before_spec": None,
                                                                      "gpu_memory_utilization": before})))
     else:
         for v in backend.spec_variants(pick, model):

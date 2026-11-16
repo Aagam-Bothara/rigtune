@@ -505,9 +505,11 @@ def parse(spec: str) -> Tuple[str, Optional[str], int]:
     raise ValueError(f"unknown speculative method in {spec!r}")
 
 
-def vllm_config(spec: str, revision: Optional[str] = None) -> Dict[str, object]:
+def vllm_config(spec: str, revision: Optional[str] = None, head_quant: Optional[str] = None) -> Dict[str, object]:
     """The value for vLLM's --speculative-config. `revision` is the target's, used only by an MTP head."""
     kind, model_id, k = parse(spec)
+    if head_quant is not None and (kind != "mtp" or head_quant != "fp8"):
+        raise ValueError("fp8 output-head quantization is offered only for the checkpoint's own MTP head")
     if kind in ("ngram", "ngram_gpu"):  # one code path in vLLM, with the same lookup settings
         return {"method": kind, "num_speculative_tokens": k, "prompt_lookup_max": 4, "prompt_lookup_min": 2}
     if kind == "suffix":
@@ -518,6 +520,8 @@ def vllm_config(spec: str, revision: Optional[str] = None) -> Dict[str, object]:
         # v0.33.0 line 1420), so a target pinned to a revision passes it here too, or the head would come from the
         # default branch.
         out: Dict[str, object] = {"method": "mtp", "num_speculative_tokens": k}
+        if head_quant:
+            out["draft_lm_head_quantization"] = head_quant
         if revision:
             out["revision"] = revision
         return out

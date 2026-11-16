@@ -712,7 +712,7 @@ class VllmBackend(BaseBackend):
         head = model.spec_repos.get("eagle3")
         if all_methods and head and speculative.vllm_supports_eagle3():  # the head and tokens SGLang is offered
             specs.append(speculative.eagle3(head, speculative.EAGLE3_TOKENS))
-        out = [cfg.model_copy(update={"spec_decode": s}) for s in specs if s != cfg.spec_decode]
+        out = [cfg.model_copy(update={"spec_decode": s, "spec_head_quant": None}) for s in specs if s != cfg.spec_decode]
         out = [v for v in out if self.known_failure(v) is None]
         return out + self._mtp_variants(cfg, model, hw, all_methods, min_batch)[0]
 
@@ -756,7 +756,7 @@ class VllmBackend(BaseBackend):
         for pair in pairs:
             spec = (speculative.assist(pair["repo"], 1) if pair["kind"] == "assistant"
                     else speculative.draft(pair["repo"], speculative.DRAFT_TOKENS_VLLM))
-            v = cfg.model_copy(update={"spec_decode": spec})
+            v = cfg.model_copy(update={"spec_decode": spec, "spec_head_quant": None})
             if estimate(hw, model, v, self.memory_model(hw)).feasible:
                 out.append(v)
                 notes.append(f"vllm: {pair['repo']} weights planned at target dtype; draft KV is unplanned")
@@ -772,8 +772,14 @@ class VllmBackend(BaseBackend):
         busiest level (`min_batch`), or not at all; either is noted (BaseBackend.own_head_fit)."""
         if not (all_methods and hw is not None and self._offers_mtp(cfg, model)):
             return [], []
-        variants = [cfg.model_copy(update={"spec_decode": speculative.mtp(k)}) for k in speculative.MTP_TOKENS]
-        variants = [v for v in variants if v.spec_decode != cfg.spec_decode and self.known_failure(v) is None]
+        variants = [cfg.model_copy(update={"spec_decode": speculative.mtp(k), "spec_head_quant": None})
+                    for k in speculative.MTP_TOKENS]
+        facts = _engine_facts()
+        if (_vllm_version() >= (0, 33) and hw.gpu is not None and hw.gpu.cc >= (8, 9)
+                and "fp8" in self.precisions(hw) and facts is not None and facts.answered("spec_fields")
+                and "draft_lm_head_quantization" in facts.spec_fields):
+            variants.append(cfg.model_copy(update={"spec_decode": "mtp:1", "spec_head_quant": "fp8"}))
+        variants = [v for v in variants if v.key() != cfg.key() and self.known_failure(v) is None]
         return self.own_head_fit(variants, model, hw, min_batch)
 
     def _offers_mtp(self, cfg: Config, model: PreparedModel) -> bool:
@@ -885,7 +891,7 @@ class VllmBackend(BaseBackend):
             kind, second, _ = speculative.parse(cfg.spec_decode)
             if second:
                 revision = model.spec_revisions.get(second)
-            payload = speculative.vllm_config(cfg.spec_decode, revision)
+            payload = speculative.vllm_config(cfg.spec_decode, revision, cfg.spec_head_quant)
             if second in model.spec_paths:
                 payload["model"] = model.spec_paths[second]
             args += ["--speculative-config", json.dumps(payload)]

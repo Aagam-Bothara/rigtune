@@ -313,6 +313,8 @@ class Conformance:
             for v in variants:
                 kind = speculative.parse(v.spec_decode)[0]
                 cid = f"C06-{kind}" if role == "small" else f"C06-{kind}-hybrid"
+                if v.spec_head_quant:
+                    cid += "-" + v.spec_head_quant
                 if any(r.id == cid for r in out):
                     continue  # one setting per method (an MTP head is offered at more than one k)
                 try:

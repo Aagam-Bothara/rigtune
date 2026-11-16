@@ -1,0 +1,4 @@
+{
+  "draft:org/draft:3": ["--speculative-algorithm", "STANDALONE", "--speculative-draft-model-path", "org/draft", "--speculative-num-steps", "3", "--speculative-eagle-topk", "1", "--speculative-num-draft-tokens", "4", "--speculative-draft-model-revision", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "--speculative-draft-model-quantization", "unquant"],
+  "assist:org/assistant:3": ["--speculative-algorithm", "NEXTN", "--speculative-draft-model-path", "org/assistant", "--speculative-num-steps", "3", "--speculative-eagle-topk", "1", "--speculative-num-draft-tokens", "4", "--speculative-draft-model-revision", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "--speculative-draft-model-quantization", "unquant"]
+}
