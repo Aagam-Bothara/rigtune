@@ -43,7 +43,9 @@ VLLM = {
         "from typing import Literal\n"
         "MTPModelTypes = Literal['deepseek_mtp', 'qwen3_5_mtp', 'mtp']\n"
         "EagleModelTypes = Literal['eagle', 'eagle3', MTPModelTypes]\n"
-        "SpeculativeMethod = Literal['ngram', 'draft_model', 'suffix', EagleModelTypes, Literal['ngram_gpu']]\n"),
+        "SpeculativeMethod = Literal['ngram', 'draft_model', 'suffix', EagleModelTypes, Literal['ngram_gpu']]\n"
+        "from dataclasses import dataclass\n@dataclass\nclass SpeculativeConfig:\n"
+        "    method: str = 'mtp'\n    draft_lm_head_quantization: str = None\n"),
     "vllm/config/cache.py": (
         "from typing import Literal\n"
         "CacheDType = Literal['auto', 'fp8', 'fp8_e5m2', 'int8_per_token_head']\n"),

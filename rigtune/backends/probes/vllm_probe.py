@@ -96,6 +96,17 @@ def spec_methods():
     return sorted(set(literal_values(SpeculativeMethod)))
 
 
+def spec_fields():
+    from dataclasses import fields, is_dataclass
+    from vllm.config.speculative import SpeculativeConfig
+
+    if is_dataclass(SpeculativeConfig):
+        return sorted(f.name for f in fields(SpeculativeConfig))
+    if hasattr(SpeculativeConfig, "model_fields"):
+        return sorted(SpeculativeConfig.model_fields)
+    raise TypeError("SpeculativeConfig fields could not be read")
+
+
 def kv_dtypes():
     from vllm.config.cache import CacheDType
 
@@ -128,6 +139,7 @@ def main():
     emit("version", lambda: importlib.metadata.version("vllm"))
     emit("libs", libs)
     emit("spec_methods", spec_methods)
+    emit("spec_fields", spec_fields)
     emit("kv_dtypes", kv_dtypes)
     emit("flags", flags)
     emit("features", features)

@@ -42,7 +42,7 @@ MARK = "RIGTUNE-PROBE "
 PROBES = Path(__file__).parent / "probes"
 SCRIPTS = {"vllm": "vllm_probe.py", "sglang": "sglang_probe.py"}
 # What each probe is asked, in the order it answers. "done" closes a probe that ran to the end.
-KEYS = {"vllm": ("version", "libs", "spec_methods", "kv_dtypes", "flags", "features", "archs"),
+KEYS = {"vllm": ("version", "libs", "spec_methods", "spec_fields", "kv_dtypes", "flags", "features", "archs"),
         "sglang": ("version", "libs", "spec_methods", "flags", "request_fields", "env_vars", "arch_sets", "archs")}
 
 
@@ -55,6 +55,7 @@ class EngineFacts(BaseModel):
     flags: Optional[Dict[str, Dict[str, Any]]] = None  # every option string -> {"choices": [...] | None, "default"}
     archs: Optional[List[str]] = None
     spec_methods: Optional[List[str]] = None  # the engine's own names: vLLM's methods, SGLang's algorithms
+    spec_fields: Optional[List[str]] = None  # vLLM SpeculativeConfig fields; None = unanswered
     kv_dtypes: Optional[List[str]] = None  # vLLM
     request_fields: Optional[List[str]] = None  # SGLang: ChatCompletionRequest's fields
     env_vars: Optional[List[str]] = None  # SGLang: the variables its environ.py declares
@@ -68,6 +69,8 @@ class EngineFacts(BaseModel):
     provenance: str = "probe"
 
     def answered(self, key: str) -> bool:
+        if key == "spec_fields" and self.spec_fields == []:
+            return self.provenance == "probe"
         return getattr(self, key, None) is not None
 
     def has_flag(self, option: str) -> Optional[bool]:
