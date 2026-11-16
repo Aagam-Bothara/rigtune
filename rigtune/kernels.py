@@ -85,6 +85,8 @@ def _value(key: str, value: str) -> str:
     if key in _INTS or key == "O":
         if not value.isdigit():
             raise ValueError(f"kernel setting {key} takes a whole number, not {value!r}")
+        if key in _INTS and int(value) < 1:  # vLLM asserts max_cudagraph_capture_size >= 1 (config/vllm.py:2095 / 2554)
+            raise ValueError(f"kernel setting {key} is a size of at least 1, not {value}")
         return str(int(value))
     if key in _BOOLS or key.startswith(PASS_PREFIX):
         low = value.lower()
@@ -264,6 +266,9 @@ VLLM_ATTN_KV = {
 # vLLM's CUDA-graph mode at its default optimisation level: FULL_AND_PIECEWISE at O2 and O3
 # (config/vllm.py:301, 324 / 311, 332); "O3: Currently the same as -O2" (:121-122 / 143-144).
 VLLM_DEFAULT_CG = "FULL_AND_PIECEWISE"
+# PassConfig fields that are sizes, not switches (config/compilation.py PassConfig, both releases; the last 0.29 only).
+VLLM_PASS_NOT_BOOL = ("pass.rope_kvcache_fusion_max_token_num", "pass.fi_allreduce_fusion_max_size_mb",
+                      "pass.sp_min_token_num")
 VLLM_DEFAULT_O = ("2", "3")
 
 
@@ -283,14 +288,30 @@ def _within(version: Optional[str], bounds: Tuple[Tuple[int, ...], Tuple[int, ..
     return rel if rel is not None and bounds[0] <= rel <= bounds[1] else None
 
 
-def vllm_refusal(settings: Dict[str, str], kv_dtype: str, version: Optional[str]) -> Optional[str]:
-    """Why vLLM would refuse `settings` with this KV-cache type, where a rule read for its release says so."""
+def vllm_refusal(settings: Dict[str, str], kv_dtype: str, version: Optional[str],
+                 capability: Optional[Tuple[int, int]] = None) -> Optional[str]:
+    """Why vLLM would refuse `settings` with this KV-cache type, where a rule read for its release says so.
+    `capability` is the card's when known; the rules that depend on it say nothing without it."""
     if _within(version, VLLM_RULES) is None:
         return None
     attn = settings.get("attn")
     if attn in VLLM_ATTN_KV and kv_dtype not in VLLM_ATTN_KV[attn]:
         return (f"vLLM's {attn} attention does not take a {kv_dtype} KV cache "
                 f"(it lists {', '.join(VLLM_ATTN_KV[attn])})")
+    # Its list is not Triton's only check: building the model raises "FP8 KV cache is not supported by the Triton
+    # attention backend ... requires SM89+" (v1/attention/backends/triton_attn.py:478-492 / 510-524).
+    if attn == "TRITON_ATTN" and kv_dtype.startswith("fp8") and capability is not None and capability < (8, 9):
+        return (f"vLLM's TRITON_ATTN attention takes a {kv_dtype} KV cache only from compute capability 8.9, and "
+                f"this card is {capability[0]}.{capability[1]}")
+    if "cgmax" in settings and "cgsizes" in settings:
+        # "customized max_cudagraph_capture_size ... should be consistent with the max value of
+        # cudagraph_capture_sizes" (config/vllm.py:2163-2175 / 2612-2623)
+        largest = max(int(p) for p in settings["cgsizes"].split("+"))
+        if int(settings["cgmax"]) != largest:
+            return f"vLLM wants cgmax to be the largest of cgsizes ({largest}), not {settings['cgmax']}"
+    not_flags = sorted(key for key in settings if key in VLLM_PASS_NOT_BOOL)
+    if not_flags:
+        return f"vLLM's {not_flags[0][len(PASS_PREFIX):]} is a number, not a pass to switch on or off"
     return None
 
 
@@ -330,9 +351,9 @@ def sglang_default_decode_cap(vram_mib: float, batch: int, tp: int, version: Opt
       32 / 160 (:88-101 / 118-131); under 160 GiB 256 / 512; above 512.
     0.5.23 then lowers a default cap to --max-running-requests (:182-188), which rigtune always passes as the
     batch; 0.5.19 has no such step."""
-    rel = _within(version, SGLANG_RULES)
-    if rel is None or vram_mib <= 0:
-        return None
+    rel = release(version, 3)
+    if rel not in SGLANG_RULES or vram_mib <= 0:  # the two releases read, not those between: the clamp arrived
+        return None  # somewhere in that range, and a default guessed too high would plan too little memory
     wide = tp >= 4
     if vram_mib < 20 * 1024:
         cap = 8
@@ -353,8 +374,15 @@ def sglang_same_as_default(settings: Dict[str, str], vram_mib: float, batch: int
     if set(settings) != {"cgmax"}:
         return None
     default = sglang_default_decode_cap(vram_mib, batch, tp, version)
-    if default is not None and int(settings["cgmax"]) == default:
+    if default is None:
+        return None
+    if int(settings["cgmax"]) == default:
         return f"cgmax={default} is the decode cap SGLang picks for this card and batch"
+    # No graph is captured above the request pool, about --max-running-requests, which rigtune passes as the batch
+    # (model_executor/runner/base_cuda_graph_runner.py:64-92 / 65-101): a cap past the batch reaches only the batch.
+    if min(int(settings["cgmax"]), batch) == min(default, batch):
+        return (f"cgmax={settings['cgmax']} captures no more than SGLang already does at a batch of {batch} "
+                f"(its cap here is {default})")
     return None
 
 

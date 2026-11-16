@@ -489,7 +489,9 @@ def sglang_graph_bytes(cfg: Config, vram_bytes: int, version: Optional[str]) -> 
     config without that setting, before anything else is looked at."""
     if cfg.kernels is None:
         return 0
-    second = bool(cfg.spec_decode) and speculative.parse(cfg.spec_decode)[1] is not None
+    # A draft, an EAGLE3 head, an assistant or the checkpoint's own MTP head: each runs a second worker that
+    # captures decode graphs of its own. The lookup proposers (n-gram, suffix) do not.
+    second = bool(cfg.spec_decode) and speculative.parse(cfg.spec_decode)[0] not in speculative.LOOKUP
     return kernels.sglang_graph_extra_bytes(kernels.parse(cfg.kernels), vram_bytes / (1024 * 1024), cfg.batch,
                                             cfg.tp, version, second_model=second)
 

@@ -376,6 +376,11 @@ class BaseBackend:
         """A model-dependent restriction, enforced at search and launch boundaries."""
         return None
 
+    def kernels_refusal(self, cfg: Config, hw: HardwareDescriptor) -> Optional[str]:
+        """Why this engine would refuse `cfg`'s kernel settings on this machine, where a rule read in its source says
+        so and config_refusal, which does not see the card, could not. Default: no rule."""
+        return None
+
     def kernels_same_as_default(self, cfg: Config, hw: HardwareDescriptor) -> Optional[str]:
         """Why `cfg`'s kernel settings are what this engine does anyway, so trying them would measure nothing; None
         when they are a change, or when no rule says. Default: no rule."""

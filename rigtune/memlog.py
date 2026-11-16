@@ -259,10 +259,13 @@ PARSERS = {
 #   "[prefix]Compiling a graph for compile range %s takes %.2f s"       compilation/backends.py:394 / 418
 #   "[prefix]Directly load the compiled graph(s) for compile range %s from the cache, took %.3f s"   :293 / 311
 #   "...; setting cudagraph_mode=<NAME>"                     config/compilation.py, the resolver's warnings
-_CAPTURE = re.compile(r"(?<!Encoder )Graph capturing finished in (\d+) secs, took (\d+\.\d+) GiB")
-_COMPILED = re.compile(r"Compiling a graph for compile range .+? takes (\d+\.\d+) s")
+_CAPTURE = re.compile(r"(?<!Encoder )Graph capturing finished in (\d+) secs, took (-?\d+\.\d+) GiB")
+_COMPILED = re.compile(r"Compiling a graph for compile range (.+?) takes (\d+\.\d+) s")
 _CACHED = re.compile(r"Directly load the compiled graph\(s\) for compile range .+? from the cache, took \d+\.\d+ s")
 _REWRITE = re.compile(r"; setting (cudagraph_mode=[A-Z_]+)")
+# The other wording, for piecewise compilation with nothing to split (config/compilation.py:1204 / 1226); the
+# source breaks the phrase across two string literals, the log does not.
+_REWRITE_TO = re.compile(r"Setting cudagraph_mode to ([A-Z_]+)")
 
 
 def parse_startup(backend: str, text: str) -> Dict[str, object]:
@@ -280,7 +283,12 @@ def parse_startup(backend: str, text: str) -> Dict[str, object]:
         out["capture_s"], out["cudagraph_gib"] = max(captures)
         out["capture_lines"] = len(captures)
         parsed.append("capture")
-    compiled, cached = [float(s) for s in _COMPILED.findall(text)], _CACHED.findall(text)
+    # One figure per compile range, the slowest: 0.33 prints the line once per tensor-parallel worker, all
+    # compiling at once, and 0.29 once in all, so summing lines would double the time on one release only.
+    ranges: Dict[str, float] = {}
+    for compile_range, seconds in _COMPILED.findall(text):
+        ranges[compile_range] = max(ranges.get(compile_range, 0.0), float(seconds))
+    compiled, cached = list(ranges.values()), _CACHED.findall(text)
     if compiled:
         out["compile_s"] = round(sum(compiled), 2)
         parsed.append("compile")
@@ -288,7 +296,9 @@ def parse_startup(backend: str, text: str) -> Dict[str, object]:
         parsed.append("compile_cache")
     if compiled or cached:
         out["compile_cached"] = not compiled
-    rewrites = list(dict.fromkeys(_REWRITE.findall(text)))  # each named once, in the order the engine said them
+    found = [(m.start(), m.group(1)) for m in _REWRITE.finditer(text)]
+    found += [(m.start(), f"cudagraph_mode={m.group(1)}") for m in _REWRITE_TO.finditer(text)]
+    rewrites = list(dict.fromkeys(name for _, name in sorted(found)))  # each once, in the order the engine said them
     if rewrites:
         out["rewrites"] = rewrites
         parsed.append("rewrites")

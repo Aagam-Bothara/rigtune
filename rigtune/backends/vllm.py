@@ -807,6 +807,12 @@ class VllmBackend(BaseBackend):
                     or kernels.vllm_refusal(settings, cfg.kv_dtype, facts.version))
         return None
 
+    def kernels_refusal(self, cfg: Config, hw: HardwareDescriptor) -> Optional[str]:
+        if cfg.kernels is None:
+            return None
+        return kernels.vllm_refusal(kernels.parse(cfg.kernels), cfg.kv_dtype, self.version(hw),
+                                    capability=hw.gpu.compute_capability if hw.gpu else None)
+
     def kernels_same_as_default(self, cfg: Config, hw: HardwareDescriptor) -> Optional[str]:
         if cfg.kernels is None:
             return None

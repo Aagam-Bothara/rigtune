@@ -130,6 +130,10 @@ def observations_from_trials(trials: Iterable[TrialResult], hardware_hash: str) 
     for t in trials:
         if t.memory is None or t.memory.predicted is None:
             continue
+        if t.config.kernels is not None:
+            # A kernel setting can add memory of its own (SGLang's CUDA graphs above its default cap), which the
+            # plan counts apart: fitted into the workspace it would be counted twice, on every plan.
+            continue
         p = t.memory.predicted
         m = t.memory.measured
         if p.weights <= 0:

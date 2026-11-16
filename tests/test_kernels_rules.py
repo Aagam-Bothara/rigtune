@@ -134,13 +134,38 @@ def test_sglang_default_cap_is_min_of_tier_and_batch_on_0_5_23():
     assert kernels.sglang_default_decode_cap(A40, 16, 1, "0.5.23") == 16
     assert kernels.sglang_default_decode_cap(A40, 64, 1, "0.5.23") == 32
     assert "SGLang picks" in kernels.sglang_same_as_default(P("cgmax=16"), A40, 16, 1, "0.5.23")
-    assert kernels.sglang_same_as_default(P("cgmax=32"), A40, 16, 1, "0.5.23") is None  # above the clamp: a change
+    # Above the batch nothing more is captured: SGLang captures no graph past its request pool.
+    assert "captures no more" in kernels.sglang_same_as_default(P("cgmax=32"), A40, 16, 1, "0.5.23")
+    assert kernels.sglang_same_as_default(P("cgmax=64"), A40, 64, 1, "0.5.23") is None  # 64 > 32 within the batch
 
 
 def test_sglang_default_cap_ignores_batch_on_0_5_19():
     assert kernels.sglang_default_decode_cap(A40, 16, 1, "0.5.19") == 32
     assert kernels.sglang_same_as_default(P("cgmax=32"), A40, 16, 1, "0.5.19")
-    assert kernels.sglang_same_as_default(P("cgmax=16"), A40, 16, 1, "0.5.19") is None
+    # 0.5.19 does not lower its default to the batch, yet captures none above it: 16 and 32 run the same there.
+    assert "captures no more" in kernels.sglang_same_as_default(P("cgmax=16"), A40, 16, 1, "0.5.19")
+    assert kernels.sglang_same_as_default(P("cgmax=8"), A40, 16, 1, "0.5.19") is None  # fewer graphs: a change
+
+
+@pytest.mark.parametrize("capability, refused", [((8, 6), True), ((8, 0), True), ((8, 9), False), ((9, 0), False),
+                                                 (None, False)])
+def test_triton_attention_takes_an_fp8_cache_only_from_sm89(capability, refused):
+    """Triton lists fp8 caches and still refuses to build with one on Ampere; without the card nothing is said."""
+    for kv in ("fp8", "fp8_e5m2"):
+        reason = kernels.vllm_refusal(P("attn=TRITON_ATTN"), kv, "0.33.0", capability)
+        assert (reason is not None) == refused
+    assert kernels.vllm_refusal(P("attn=TRITON_ATTN"), "auto", "0.33.0", (8, 6)) is None
+    assert kernels.vllm_refusal(P("attn=FLASHINFER"), "fp8_e5m2", "0.33.0", (8, 6)) is None
+
+
+def test_sizes_that_vllm_would_reject():
+    assert "largest of cgsizes (8)" in kernels.vllm_refusal(P("cgmax=64,cgsizes=1+2+4+8"), "auto", "0.33.0")
+    assert kernels.vllm_refusal(P("cgmax=8,cgsizes=1+2+4+8"), "auto", "0.33.0") is None
+    assert "is a number" in kernels.vllm_refusal(P("pass.sp_min_token_num=1"), "auto", "0.29.0")
+    for zero in ("cgmax=0", "cgpmax=0", "tcmax=0"):
+        with pytest.raises(ValueError, match="at least 1"):
+            kernels.parse(zero)
+    assert kernels.parse("O=0") == {"O": "0"}  # a level, not a size
 
 
 def test_equivalent_setting_is_not_launched_and_note_names_the_rule():

@@ -487,7 +487,7 @@ def kernel_variants_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan
         if pm is None or c.backend not in ("vllm", "sglang"):
             return [], f"{lead}: kernel settings are rendered for vLLM and SGLang on a GPU only"
         variant = c.model_copy(update={"kernels": canonical})
-        refusal = be.config_refusal(variant, pm)
+        refusal = be.config_refusal(variant, pm) or be.kernels_refusal(variant, hw)
         if refusal:
             return [], f"{lead}: {refusal}"
         same = be.kernels_same_as_default(variant, hw)

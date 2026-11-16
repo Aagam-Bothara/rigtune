@@ -120,7 +120,11 @@ def kernel_startup_refusal(cfg: Config, log: str) -> Optional[str]:
 
     settings = kernels.parse(cfg.kernels)
     if cfg.backend.startswith("vllm"):
-        flags = {"--attention-backend", "--compilation-config", "--optimization-level"}
+        # Only the flags these settings rendered: the attention backend a cache type forced is not one of them.
+        flags = {flag for flag, on in (("--attention-backend", "attn" in settings),
+                                       ("--optimization-level", "O" in settings),
+                                       ("--compilation-config", kernels.vllm_compilation_config(settings) is not None))
+                 if on}
         match = _BACKEND_INVALID.search(log) if "attn" in settings else None
         if match is None:
             match = next((m for m in _CG_UNSUPPORTED.finditer(log) if "; setting cudagraph_mode=" not in m.group(0)),
@@ -555,10 +559,14 @@ class SubprocessTrialRunner:
         finally:
             self._restore_power()
             if proc is not None:
-                # The whole log: the start-up lines are its first, long before the trial's own request lines.
-                self._stamps = (getattr(proc, "started_at", None), getattr(proc, "ready_at", None),
-                                proc.tail_log(1_000_000))
-                proc.stop()
+                proc.stop()  # first, and whatever follows: nothing here may leave an engine holding the GPU
+                log = ""
+                if cfg.backend == "vllm":  # the only engine whose start-up lines are known (memlog.parse_startup)
+                    try:  # its file outlives the process; a log that cannot be read costs the record, not the trial
+                        log = proc.tail_log(1_000_000)
+                    except Exception as exc:
+                        logger.warning("start-up log of %s not read: %s", cfg.key(), type(exc).__name__)
+                self._stamps = (getattr(proc, "started_at", None), getattr(proc, "ready_at", None), log)
             if cfg.kv_tier is not None:
                 kvtier.clear(port)  # its files are the served prompts' KV cache: never kept (SECURITY.md)
 
@@ -961,7 +969,9 @@ class StagedSearch:
             if self.progress:
                 self.progress(stage, cfg, res)
             return self._run(retry, stage)
-        if (self.block_failed_pairs and pair_key is not None and not res.launched and
+        # A trial with kernel settings says nothing about its second model: the engine refused the setting, or
+        # ran out of memory with it, on a pair its leader had already started.
+        if (self.block_failed_pairs and pair_key is not None and not res.launched and cfg.kernels is None and
                 (failure_kind(res) in ("draft_refused", "draft_unavailable") or
                  "failed to start" in (res.error or ""))):
             self._pair_blocked.add(pair_key)

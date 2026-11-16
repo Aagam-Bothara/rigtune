@@ -380,13 +380,18 @@ def build(a: argparse.Namespace) -> dict:
         "On a 24 GB card with 0.5.23 the default is already 48: a weak test there",
         needs=["k0-startup"], requires=f"{has_kernel} && [ -n \"${{SGLANG_PYTHON:-}}\" ]",
         timeout_s=a.goal_budget_min * 60 + 3600)
+    # Not the kernel model: for Gemma 4 without FA4 (every card below SM90) vLLM picks Triton attention itself
+    # (model_executor/models/config.py:209-254 @0.29 / 301-370 @0.33), so the trial would compare Triton with Triton.
+    t, tsid = a.goal_model, safe_id(a.goal_model)
+    t_profile = f"P=$(ls -t {{out}}/rigtune-home/profiles/*/{tsid}/*.json | head -1) && [ -n \"$P\" ]"
     phase("k3-vllm-triton", CLEAN + (
-        f"{rig} recalibrate {k} {cal_opts.replace(f'--budget {a.cal_budget_min}m', k_budget)} --backend vllm "
+        f"{rig} recalibrate {t} {cal_opts.replace(f'--budget {a.cal_budget_min}m', k_budget)} --backend vllm "
         f"--kernel attn=TRITON_ATTN > {{out}}/recalibrate.log 2>&1; tail -5 {{out}}/recalibrate.log; "
-        f"{k_profile} && {check} --check-kernel \"$P\" --setting attn=TRITON_ATTN --max-abs 0.05 "
+        f"{t_profile} && {check} --check-kernel \"$P\" --setting attn=TRITON_ATTN --max-abs 0.05 "
         "| tee {out}/result.txt"),
-        "P4: on vLLM 0.33 Triton attention is within 5% of the leader and is not adopted; refuted by a larger "
-        "difference (the stage's value was underestimated) or by a failure to start (then a rule, not a trial)",
+        f"P4: on vLLM 0.33 Triton attention on {t} is within 5% of the leader and is not adopted; refuted by a "
+        "larger difference (the stage's value was underestimated). Undecided where it is not tried: with an fp8 KV "
+        "cache below compute capability 8.9 vLLM's Triton attention refuses to build, and rigtune says so",
         needs=["k0-startup"], requires=has_kernel, timeout_s=a.goal_budget_min * 60 + 3600)
     phase("k4-compile-cache", CLEAN + (
         f"{rig} recalibrate {k} {cal_opts.replace(f'--budget {a.cal_budget_min}m', '--budget 10m')} --backend vllm "
