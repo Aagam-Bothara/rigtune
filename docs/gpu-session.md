@@ -261,3 +261,19 @@ runs them: `env` against a matching, a different and a missing commit; G2's chec
 a wrapped log; G4's requirement with and without a limit file; `lengths-` without a profile; a tuner given empty
 lengths; auto_tune without a row; `measure_power.sh` with its output and command redirected; and every shell
 command through `bash -n`).
+
+
+## Draft coverage checks
+
+The generated plan now uses `--speculative all --drafts verified` for matching
+calibration and comparison phases. Extra `drafts-<engine>-<model>` phases run C06
+on Gemma 4 assistants and Qwen3.5 MTP. C06-only runs are not release certification;
+the phase separately requires the expected method to be present and pass. A skipped
+assistant cannot turn into a passing phase through successful n-gram checks.
+`drafts-llama-sglang` adds the previously missing Llama STANDALONE experiment.
+
+Keep the pair records, engine revision lines, accepted-token counters, pool-token
+counts and peak-memory logs with the session. The G1?G8 checklist in benchmarks.md
+is still unmeasured. These phases do not establish speedups by merely completing;
+use held-out Dolly at eight users, a 500 ms p95 ceiling and three interleaved runs.
+Hub ids are used in session commands, avoiding local path rewriting by Git Bash.

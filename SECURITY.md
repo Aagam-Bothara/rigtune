@@ -41,3 +41,14 @@ A server rigtune supervises gets the same: an empty directory at start and at ev
 **Some weights can come from someone other than the model's author.** The model you name, and any draft model speculative decoding adds, come from that model's own organisation on the Hub. Two kinds of file can come from a third party: pre-quantized 4-bit and 8-bit checkpoints, which are off unless you allow them (`--quant auto,awq,gptq,w8a8`), and llama.cpp's GGUF files, which it may download from known quantizers such as bartowski or TheBloke. rigtune checks what those files are, from a checkpoint's quantization config, not who published them. They are safetensors or GGUF, which hold data rather than code, so the risk is altered answers rather than code execution. With `--backend vllm` or `--backend sglang` and the default `--quant auto`, rigtune downloads only from the named model's own organisation.
 
 **Power control acts on the whole machine.** `--power` and `rigtune power` set GPU power caps and clock locks through the driver, which needs root, and they apply to every process using that GPU. A crash can leave them set; `rigtune power reset` undoes that.
+
+
+Verified second-model records live under `RIGTUNE_PAIRS` (default: the RigTune home,
+`pairs/`). They contain repository ids, immutable commits/content hashes, the checked
+config fields, tokenizer hashes/maps, size, verdict, timestamp, source and engine
+releases that refuted a positive check. They contain no model weights, Hub tokens,
+local directory names beyond a basename, or raw exception text. Unknown results are
+not retained. Each write uses a unique temporary file and atomic replacement.
+Local draft directories are excluded from serialized prepared models and replaced
+by content aliases in saved launch arguments. Raw engine logs remain private runtime
+artifacts and may contain paths; review them before publishing.

@@ -91,7 +91,7 @@ def test_the_plan_is_one_the_runner_accepts_in_the_intended_order(plan):
     assert names[:5] == ["env", "hub-access", "prompts", "selfcheck", "smoke"]
     for m in ("qwen3.5-9b", "gemma-4-12b-it"):
         mine = [n for n in names if n.endswith(m)]
-        assert mine == [f"cal-{m}", f"ledger-{m}", f"lengths-{m}", f"autotune-{m}", f"llmopt-vllm-{m}",
+        assert mine == [f"drafts-vllm-{m}", f"drafts-sglang-{m}", f"cal-{m}", f"ledger-{m}", f"lengths-{m}", f"autotune-{m}", f"llmopt-vllm-{m}",
                         f"llmopt-sglang-{m}", f"aic-vllm-{m}", f"aic-sglang-{m}", f"cmp-{m}"]
     assert plan["home"] == "rigtune-home" and plan["env"] == {"HF_HOME": "/workspace/hf"}
     # The prompt files are written into the prompts phase's own directory, so they are in its copy, and every
@@ -386,7 +386,7 @@ def test_a_dry_run_of_the_plan_lists_every_phase_pending(plan, tmp_path, capsys)
     path.write_text(json.dumps(plan), encoding="utf-8")
     assert gs.main(["run", "--plan", str(path), "--root", str(tmp_path / "session"), "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert out.count("[pending]") == len(plan["phases"]) == 36 and not (tmp_path / "session").exists()
+    assert out.count("[pending]") == len(plan["phases"]) == 41 and not (tmp_path / "session").exists()
 
 
 def test_a_root_that_shell_commands_would_split_is_refused(tmp_path, capsys):

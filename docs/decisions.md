@@ -385,3 +385,16 @@ sampling visibly degrades, which is the same missing experiment named above
   layout and an appending one of the same events pick differently, a pick tuned on chat sessions is tuned on the
   wrong tail for agents.
 - A second person running a calibration on hardware and traffic the author does not control.
+
+
+## Why check token ids when the engine checks sizes?
+
+The Gemma 4 E2B and 12B configs both declare 262144 rows but disagree at token id
+249788. vLLM's plain-draft check compares row counts. SGLang's STANDALONE worker has
+a map comparison, but its draft worker has no tokenizer, so that comparison is not
+performed. RigTune therefore needs identical tokenizer hashes or equal complete
+maps, including added tokens, before admitting a plain draft. Missing evidence is
+unknown. Assistant heads share target embeddings and have their own variant check.
+The engine contracts were checked in vLLM 0.29/0.33 and SGLang 0.5.19/0.5.23.
+A table proposes; revision-pinned evidence decides. Table mode remains the default
+until the planned cross-engine GPU check succeeds.

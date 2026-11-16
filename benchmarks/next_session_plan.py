@@ -99,7 +99,7 @@ def build(a: argparse.Namespace) -> dict:
     # Calibration and comparison must pass the same search options, or the comparison would not find the
     # cached profile and would calibrate again (SearchOptions.key() is the cache key).
     cal_opts = (f"--workload chat --workload-file {cal_file} --objective balanced {limits} "
-                f"--speculative all --budget {a.cal_budget_min}m")
+                f"--speculative all --drafts verified --budget {a.cal_budget_min}m")
     budget_s = a.cal_budget_min * 60
     phases: List[Dict] = []
 
@@ -170,6 +170,22 @@ def build(a: argparse.Namespace) -> dict:
               f"item 21: the conformance run for the installed {engine} on this card; done only when the release "
               "is certified, and the record and engine logs are in conformance/ either way",
               requires=f"COLUMNS=200 {rig} conformance --help | grep -e --out", timeout_s=3 * 3600)
+        for model in a.models:
+            method = "assist" if "gemma-4-" in model else "mtp" if "Qwen3.5-" in model else None
+            if method:
+                phase(f"drafts-{engine}-{slug(model)}", CLEAN + (
+                    f"{rig} conformance {engine} --model {model} --drafts verified --only C06 "
+                    "--out {out}/conformance; "
+                    f"{py} {bench}/next_session_plan.py --check-drafts {{out}}/conformance --expected-method {method}"),
+                    f"draft checks G1/G2/G7/G8: {method} must actually pass; a missing/skipped method fails; "
+                    "inspect accepted-token counts, revision and pool sizing in the kept logs",
+                    needs=["hub-access"], timeout_s=3 * 3600)
+    phase("drafts-llama-sglang", CLEAN + (
+        f"{rig} bench unsloth/Llama-3.1-8B-Instruct --backend sglang --speculative all --drafts verified "
+        f"--workload chat --workload-file {cal_file} --budget {a.cal_budget_min}m --save"),
+        "draft checks G3/G4/G6: inspect the ledger for a pinned STANDALONE launch and compare logged KV tokens "
+        "with the plan (within 10%); benchmark completion alone does not establish a gain",
+        needs=["prompts"], timeout_s=budget_s + 3600)
     phase("suffix-facts", (
         f"{py} -m pip show -f arctic-inference > {{out}}/arctic-files.txt 2>&1; "
         "grep -c '_C' {out}/arctic-files.txt > {out}/arctic-native-count.txt; "
@@ -343,9 +359,24 @@ def build(a: argparse.Namespace) -> dict:
     return plan
 
 
+def check_drafts(directory: Path, method: str) -> int:
+    """A C06-only run is not release certification; decide the requested method explicitly."""
+    files = sorted(directory.glob("*.json"), key=lambda p: p.stat().st_mtime_ns)
+    if not files:
+        return 1
+    try:
+        details = json.loads(files[-1].read_text(encoding="utf-8"))[0]["details"]
+        checks = [v for k, v in details.items() if k == f"C06-{method}" or k.startswith(f"C06-{method}-")]
+        return 0 if checks and all(c["status"] == "pass" for c in checks) else 1
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        return 1
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--out", type=Path, help="where to write the plan")
+    ap.add_argument("--check-drafts", type=Path)
+    ap.add_argument("--expected-method", choices=("assist", "draft", "mtp"))
     ap.add_argument("--pick-jpt", type=Path, metavar="PROFILE",
                     help="print the J/token a profile's pick measured and write no plan (g3-balanced runs this)")
     ap.add_argument("--session", default="next-gpu-session")
@@ -373,6 +404,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--check-items", type=int, default=300)
     a = ap.parse_args(argv)
+    if a.check_drafts is not None:
+        if a.expected_method is None:
+            ap.error("--check-drafts needs --expected-method")
+        return check_drafts(a.check_drafts, a.expected_method)
     if a.pick_jpt is not None:
         value = pick_jpt(json.loads(a.pick_jpt.read_text(encoding="utf-8")))
         if value is None:

@@ -488,3 +488,45 @@ This project was called PolyServe until September 2026. It was renamed because a
 | `~/.polyserve` | `~/.rigtune` |
 
 What keeps working: the old environment variables are still read, and the new ones win when both are set. `~/.polyserve` is used for as long as `~/.rigtune` does not exist, so calibrations made under the old name, each half an hour to an hour of GPU time, are not thrown away; `mv ~/.polyserve ~/.rigtune` moves them for good. Profiles and comparison results written before the rename load unchanged, including every file under `benchmarks/`, which are kept exactly as recorded. What does not: the old endpoint paths are gone, so update any client or monitor that calls them.
+
+
+## Verified second models
+
+`--drafts table|verified` defaults to `table`, preserving the existing search.
+`--drafts verified` checks candidates from raw configs and token ids, pins their
+commits, and records why each was accepted, refused or not checked. Equal vocabulary
+sizes alone are insufficient. Plain drafts also need enough context, known size,
+a checked loader family, and at most 25% of the target's parameters. At most two
+plain drafts are offered per target and engine. A differing chat template is a note.
+
+`--draft org/model` or `--draft /path/to/model` adds a candidate and enables verified
+checking. Local directories are hashed (including weights); portable aliases go in
+profiles, while the supplied directory stays private. Supply the same directory when
+serving a cached profile; changed contents require recalibration. Quantized second
+models and unfamiliar loader families are not certified by this implementation.
+
+`--hub off` uses local files, the HF cache or kept pair evidence for pairing. The
+same applies with `HF_HUB_OFFLINE=1`. Reused evidence says **not rechecked** and prints
+a recalibrate hint; an unanswered lookup never means no draft exists. `--hub` stays
+out of the profile cache key. Use `rigtune recalibrate ... --hub on` to revisit an
+offline profile. Target weights must already be available to run fully offline;
+set `HF_HUB_OFFLINE=1` for the engine processes too. Optional EAGLE3/MTP discovery is
+skipped in offline verified searches if it has not already been recorded.
+
+```sh
+rigtune bench Qwen/Qwen3-8B --backend vllm --drafts verified
+rigtune compare google/gemma-4-12B-it --speculative all --drafts verified --verdict
+rigtune bench unsloth/Llama-3.1-8B-Instruct --backend sglang --speculative all --drafts verified
+```
+
+Verified vLLM plain drafts join `--speculative on`. SGLang pairs and Gemma 4
+assistants also require `--speculative all`, since they have no new GPU measurements.
+Gemma assistants launch as vLLM MTP (one token) or SGLang NEXTN (three steps).
+Qwen3.5 siblings cannot be plain drafts: both engines rewrite their configs into
+MTP heads. Its own checkpoint's MTP head remains the applicable method.
+
+vLLM budgets verified draft weights at the target dtype; its draft KV is unplanned.
+SGLang leaves weight room outside its memory fraction; its shared pool estimate
+still needs the GPU checks below. A vocabulary rejection is `draft_refused`, even
+in table mode; a second-repository access failure is `draft_unavailable`. A refuted
+positive check is blocked only on the engine release that contradicted it.
