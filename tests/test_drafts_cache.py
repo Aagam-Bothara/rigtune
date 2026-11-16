@@ -1,5 +1,7 @@
 """A profile calibrated with verified drafts is found again where it was saved, on every route that saves one."""
 import functools
+import json
+import struct
 
 import pytest
 
@@ -34,6 +36,12 @@ def calibrations(no_network, tmp_home, monkeypatch):
     monkeypatch.setattr(D, "calibrate_disaggregated",
                         functools.partial(D.calibrate_disaggregated, runner=FakeDisaggRunner(5000.0)))
     return ran
+
+
+def write_weights(path, count):
+    """A valid one-tensor safetensors file of `count` bf16 elements."""
+    header = json.dumps({"weight": {"dtype": "BF16", "shape": [count], "data_offsets": [0, count * 2]}}).encode()
+    path.write_bytes(struct.pack("<Q", len(header)) + header + bytes(count * 2))
 
 
 def resolve_twice(spec, opts, route, ran):
@@ -82,3 +90,37 @@ def test_table_mode_profile_keeps_its_name_and_its_revision_check(calibrations, 
     first.model_revision = "d" * 40
     monkeypatch.setattr(cache, "snapshot_revision", lambda model: "e" * 40)
     assert "is now commit" in cache.revision_reason(first, spec)
+
+
+@pytest.mark.parametrize("route", list(ROUTES))
+def test_local_draft_profile_is_found_again_with_its_directory(calibrations, spec, monkeypatch, tmp_path, tmp_home,
+                                                               route):
+    root = tmp_path / "private-person" / "draft"
+    root.mkdir(parents=True)
+    (root / "config.json").write_text(json.dumps(pair().config))
+    write_weights(root / "model.safetensors", 10)
+    (root / "tokenizer.json").write_text(json.dumps({"model": {"vocab": {"a": 0}}}))
+    real = p.read_files
+    local = real(str(root))
+
+    def read(repo, *args, **kw):
+        if repo == str(root):
+            return real(repo)
+        if repo != spec.hf_id:
+            raise p.HubLookupError("not_found")
+        return local.model_copy(update={"repo": spec.hf_id, "sha": PIN, "num_params": 8_000_000, "source": "hub"},
+                                deep=True)
+
+    monkeypatch.setattr(p, "read_files", read)
+    first, again = resolve_twice(spec, SearchOptions(draft=str(root)), route, calibrations)
+    alias = local.repo
+    assert first.prepared.spec.revision == PIN and [pair["repo"] for pair in first.prepared.spec_pairs] == [alias]
+    assert again.prepared.spec_paths == {alias: str(root)}  # reattached from --draft, never read from the file
+    for saved in tmp_home.rglob("*.json"):
+        assert "private-person" not in saved.read_text(encoding="utf-8"), saved.name
+    # The directory changed in place: its old profile no longer answers for it.
+    write_weights(root / "model.safetensors", 11)
+    stages = []
+    pl.resolve_profile(spec, "throughput", force_backend="vllm", hw=two_gpus(), options=SearchOptions(draft=str(root)),
+                       on_stage=stages.append, **ROUTES[route])
+    assert "calibrate" in stages

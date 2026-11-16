@@ -56,6 +56,13 @@ REWRITTEN_AS_HEAD = {
                          "Gemma4AssistantForCausalLM", "Gemma4UnifiedAssistantForCausalLM"}),
 }
 
+# Plain-model families checked against both release trees above. An unrecognised
+# loader is unknown, rather than assumed safe because our rewrite list is finite.
+PLAIN_ARCHS = frozenset({"LlamaForCausalLM", "Qwen2ForCausalLM", "Qwen3ForCausalLM",
+                         "MistralForCausalLM", "Mistral3ForConditionalGeneration", "Ministral3ForCausalLM",
+                         "Gemma4ForConditionalGeneration", "Gemma4ForCausalLM",
+                         "Gemma4UnifiedForConditionalGeneration", "Gemma4UnifiedForCausalLM"})
+
 
 def text_config(config: Optional[dict]) -> dict:
     raw = config or {}
@@ -101,6 +108,10 @@ def check_pair(target: PairFiles, second: PairFiles, kind: str, ctx: int,
         archs = b.get("architectures") or []
         if not archs or not b.get("model_type"):
             unknown.append("architecture_unread")
+        elif any(arch not in PLAIN_ARCHS for arch in archs):
+            unknown.append("plain_loader_unchecked")
+        if b.get("quantization_config"):
+            refused.append("quantized_second_unsupported")
         if (set(archs) & REWRITTEN_AS_HEAD.get(engine, frozenset())
                 or b.get("model_type") in REWRITTEN_TYPES
                 or any(word in str(b.get("model_type", "")).lower() for word in ("mtp", "eagle", "dflash", "dspark"))):
@@ -422,16 +433,30 @@ def discover(prepared, engine: str, ctx: int = 4096, *, draft: Optional[str] = N
     try:
         target = read_files(prepared.spec.hf_id, source, revision=prepared.spec.revision)
     except HubLookupError as exc:
-        return [f"{engine}: second models not checked: target files {exc.why}"]
+        if source != "cache":
+            return [f"{engine}: second models not checked: target files {exc.why}"]
+        target = None
+    if source == "cache":
+        notes.append(f"{engine}: Hub not asked; using local pair evidence only; run rigtune recalibrate with --hub on to recheck")
     accepted = []
     for kind, repo in proposed:
         label = local_alias(repo, "unread00") if is_local(repo) else repo
+        second = None
         try:
             second = read_files(repo, source)
+            if target is None:
+                raise HubLookupError("offline")
             read_tokenizers(target, second, source=source)
         except HubLookupError as exc:
-            notes.append(f"{engine}: {label} not checked: {exc.why}")
-            continue
+            record = kept_pair(prepared.spec.hf_id, repo, kind,
+                               target.sha if target else prepared.spec.revision,
+                               second.sha if second else None) if source == "cache" else None
+            # A local directory is mutable; never reuse its old bytes when it cannot be read.
+            if record is None or is_local(repo) or is_local(prepared.spec.hf_id):
+                notes.append(f"{engine}: {label} not checked: {exc.why}; no usable kept evidence")
+                continue
+            target, second = record.target, record.second
+            notes.append(f"{engine}: {label} kept evidence used, not rechecked against the Hub; run rigtune recalibrate with --hub on")
         verdict = check_pair(target, second, kind, ctx, engine=engine)
         path = save_record(target, second, kind, verdict)
         label = second.repo
@@ -467,6 +492,46 @@ def discover(prepared, engine: str, ctx: int = 4096, *, draft: Optional[str] = N
 def eligible_pairs(model, kind: str, ctx: int):
     return [p for p in model.spec_pairs if p["kind"] == kind and
             (kind == "assistant" or (p.get("context") or 0) >= ctx)]
+
+
+def hub_off(hub: str = "on") -> bool:
+    return hub == "off" or os.environ.get("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes", "on")
+
+
+def kept_pair(target_repo: str, second_repo: str, kind: str, target_sha: Optional[str] = None,
+              second_sha: Optional[str] = None) -> Optional[PairRecord]:
+    from rigtune.paths import pairs_dir
+    records = []
+    for path in pairs_dir().glob("*.json"):
+        record = load_record(path)
+        if (record and record.target.repo == target_repo and record.second.repo == second_repo and record.kind == kind
+                and (target_sha is None or target_sha == record.target.sha)
+                and (second_sha is None or second_sha == record.second.sha)):
+            records.append(record)
+    return max(records, key=lambda r: r.checked_at) if records else None
+
+
+def restore_local_paths(model, draft: Optional[str]) -> bool:
+    """Reattach the user-supplied directory only if its content still matches the pin."""
+    wanted = {repo: sha for repo, sha in model.spec_revisions.items() if repo.startswith("local/")}
+    if not wanted:
+        return True
+    if not draft or not is_local(draft):
+        return False
+    try:
+        files = read_files(draft)
+    except HubLookupError:
+        return False
+    if wanted != {files.repo: files.sha}:
+        return False
+    model.spec_paths[files.repo] = draft
+    return True
+
+
+def redact_paths(text: str, paths: Dict[str, str]) -> str:
+    for alias, path in paths.items():
+        text = text.replace(json.dumps(path)[1:-1], alias).replace(path, alias)
+    return text
 
 
 def extra_weights(cfg, model) -> int:

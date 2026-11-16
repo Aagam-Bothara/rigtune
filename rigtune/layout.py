@@ -412,7 +412,10 @@ def calibrate_layout(
     if chosen is not ref and chosen is not None:
         out.config = chosen.config
         out.replicas = chosen.replicas
-        out.launch_args = backend.launch_spec(chosen.config, model, 0).args
+        from rigtune.pairing import redact_paths
+        # Shown and saved: a local draft directory appears under its alias, as in the single-GPU profile.
+        out.launch_args = [redact_paths(arg, model.spec_paths)
+                           for arg in backend.launch_spec(chosen.config, model, 0).args]
         # Measured through the balancer, for every engine of the layout together.
         out.served_concurrency = capacity_level(chosen, objective, constraints) or ranked_level(chosen, pool,
                                                                                                objective, constraints)

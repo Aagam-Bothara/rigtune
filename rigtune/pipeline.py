@@ -269,6 +269,11 @@ def _usable(cached: Optional[Profile], opts: SearchOptions, force_backend: Optio
     pick made for the old one. A profile that recorded no constraints (written before they were) is recalibrated."""
     if cached is None or (force_backend is not None and cached.backend != force_backend):
         return False
+    if opts.drafts == "verified" or opts.draft:
+        from rigtune.pairing import restore_local_paths
+        models = list(cached.prepared_all.values()) + ([cached.prepared] if cached.prepared else [])
+        if not all(restore_local_paths(pm, opts.draft) for pm in models):
+            return False
     if not cached.calibration_constraints:
         logger.info("cached profile for %s records no calibration constraints (written by an earlier rigtune); "
                     "recalibrating once", cached.model_id)
@@ -843,8 +848,12 @@ def prepare_and_plan(
                 raise RuntimeError(f"none of --quant {','.join(quants)} is available on {name}")
             prepared = backend.prepare(spec, hw, quants=allowed)
             prepared.drafts_mode = "verified" if drafts == "verified" or draft else "table"
-            if speculative_all:
+            from rigtune.pairing import hub_off
+            if speculative_all and not (prepared.drafts_mode == "verified" and hub_off(hub)):
                 result.notes += backend.find_second_models(prepared)
+            elif speculative_all and prepared.drafts_mode == "verified":
+                result.notes.append(f"{name}: Hub not asked for optional EAGLE3/MTP inspection; "
+                                    "rigtune recalibrate with --hub on can add these methods")
             grid = backend.candidate_configs(hw, prepared, min_ctx=min_ctx)
             if not grid:
                 raise RuntimeError(
@@ -882,6 +891,8 @@ def _profile_for(
     served: Optional[object] = None,
 ) -> Profile:
     launch = backend.launch_spec(cfg, prepared, 0)
+    from rigtune.pairing import redact_paths
+    launch.args = [redact_paths(arg, prepared.spec_paths) for arg in launch.args]
     workload = workload or get_workload("default")
     return Profile(
         rigtune_version=__version__,

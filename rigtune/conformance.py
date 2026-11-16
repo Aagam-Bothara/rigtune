@@ -300,7 +300,9 @@ class Conformance:
                 continue
             model = self.models[role]
             model.drafts_mode = "verified" if self.drafts == "verified" or self.draft else "table"
-            notes = self.backend.find_second_models(model)
+            from rigtune.pairing import hub_off
+            notes = ([] if model.drafts_mode == "verified" and hub_off(self.hub)
+                     else self.backend.find_second_models(model))
             base = self.base(role)
             if model.drafts_mode == "verified":
                 notes += self.backend.find_pairs(model, base.ctx, draft=self.draft, hub=self.hub, hw=self.hw)

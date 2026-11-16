@@ -781,8 +781,11 @@ def calibrate_disaggregated(
     if chosen.disagg is not None:
         out.disagg = chosen.disagg
         out.config = chosen.disagg.decode
-        out.launch_args = backend.disagg_launch_spec(chosen.disagg.decode, model, 0, "decode",
-                                                     chosen.disagg.kv_transfer_config, chosen.disagg.decode_gpu, 0).args
+        from rigtune.pairing import redact_paths
+        launch = backend.disagg_launch_spec(chosen.disagg.decode, model, 0, "decode",
+                                            chosen.disagg.kv_transfer_config, chosen.disagg.decode_gpu, 0)
+        # Shown and saved: a local draft directory appears under its alias, as in the unified profile.
+        out.launch_args = [redact_paths(arg, model.spec_paths) for arg in launch.args]
         out.served_concurrency = capacity_level(chosen, objective, constraints) or ranked_level(chosen, pool,
                                                                                                objective, constraints)
     else:
