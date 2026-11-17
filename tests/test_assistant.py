@@ -32,6 +32,19 @@ def test_unified_assistant_only_for_unified_target():
     assert p.check_pair(gemma(False), gemma(assistant=True), "assistant", 4096).status == "refused"
 
 
+def test_published_gemma4_configs_with_null_nested_architectures_pair():
+    # The shapes of google/gemma-4-12B-it and its assistant as published (read on the A40 pod, 16 Nov 2026):
+    # architectures at the top level, and text_config repeating the key as null.
+    t = target(config={"architectures": ["Gemma4UnifiedForConditionalGeneration"], "model_type": "gemma4_unified",
+                       "text_config": {"architectures": None, "model_type": "gemma4_unified_text",
+                                       "vocab_size": 262144}})
+    a = pair(config={"architectures": ["Gemma4UnifiedAssistantForCausalLM"], "model_type": "gemma4_unified_assistant",
+                     "text_config": {"architectures": None, "model_type": "gemma4_unified_text", "vocab_size": 262144}})
+    v = p.check_pair(t, a, "assistant", 4096)
+    assert "architecture_unread" not in v.reasons and v.status == "ok", v.reasons
+    assert p.text_config(t.config)["model_type"] == "gemma4_unified_text"  # a non-null nested value still wins
+
+
 def test_non_gemma_target_gets_no_assist():
     assert p.check_pair(target(), gemma(assistant=True), "assistant", 4096).status == "refused"
 

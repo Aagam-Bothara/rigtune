@@ -66,8 +66,11 @@ PLAIN_ARCHS = frozenset({"LlamaForCausalLM", "Qwen2ForCausalLM", "Qwen3ForCausal
 
 
 def text_config(config: Optional[dict]) -> dict:
+    """The top-level config with its text_config's values over it. A null in text_config does not hide the top-level
+    value: Gemma 4's published configs (12B-it and its assistant, 16 Nov 2026) carry `"architectures": null` there,
+    which made every Gemma 4 assistant pair `architecture_unread`."""
     raw = config or {}
-    return {**raw, **(raw.get("text_config") or {})}
+    return {**raw, **{k: v for k, v in (raw.get("text_config") or {}).items() if v is not None}}
 
 
 def _positive(value: Any) -> bool:
