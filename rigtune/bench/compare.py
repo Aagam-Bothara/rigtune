@@ -619,7 +619,7 @@ def free_results_path(path: Path) -> Path:
         name = stem if n == 1 else f"{stem}-{n}"
         if not any((path.parent / f"{name}{suffix}").exists()
                    for suffix in (".json", ".runs.jsonl", ".verdict.json", ".verdict.md", ".inputs",
-                                  ".requests")):
+                                  ".requests", ".answers.jsonl")):
             return path.parent / f"{name}.json"
         n += 1
 

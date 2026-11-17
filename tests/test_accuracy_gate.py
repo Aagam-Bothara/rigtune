@@ -525,7 +525,9 @@ class _Chat(BaseHTTPRequestHandler):
             return
         if n == 3:
             RELEASE.wait(30)
-        data = json.dumps({"choices": [{"message": {"role": "assistant", "content": f"The answer is {n}"}}]}).encode()
+        message = {"role": "assistant", "content": f"The answer is {n}", **({"reasoning": "hmm"} if n == 1 else {})}
+        data = json.dumps({"choices": [{"message": message, "finish_reason": "length" if n == 4 else "stop"}],
+                           "usage": {"completion_tokens": 10 + n}}).encode()
         try:
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -541,14 +543,19 @@ def test_chat_answers_talks_to_the_chat_endpoint_and_caps_the_wall_time():
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _Chat)
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
+    details = [None] * 6
     try:
         out = chat_answers(f"http://127.0.0.1:{srv.server_address[1]}", "m", _items(6), concurrency=8,
-                           max_tokens=16, wall_s=2.0)
+                           max_tokens=16, wall_s=2.0, details=details)
     finally:
         RELEASE.set()  # the held request can only finish after the client has returned
         srv.shutdown()
     assert out[0] == "The answer is 0" and out[5] == "The answer is 5"
     assert out[2] is None and out[3] is None  # an error and a request past the wall cap are unanswered
+    # how each answer ended: a cut-off answer says so, and a thinking model's reasoning is counted
+    assert details[0] == {"finish_reason": "stop", "completion_tokens": 10, "reasoning_chars": 0}
+    assert details[1]["reasoning_chars"] == 3 and details[4]["finish_reason"] == "length"
+    assert details[2] is None and details[3] is None
 
 
 # --------------------------------------------------------------------------- what a refusal cost

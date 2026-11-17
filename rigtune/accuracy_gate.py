@@ -77,7 +77,8 @@ def pass_wall_seconds(items: int) -> float:
 
 
 async def _answer_all(base_url: str, model: Optional[str], items: Sequence[EvalItem], concurrency: int,
-                      max_tokens: int, wall_s: float, request_timeout: float) -> List[Optional[str]]:
+                      max_tokens: int, wall_s: float, request_timeout: float,
+                      details: Optional[List[Optional[dict]]] = None) -> List[Optional[str]]:
     out: List[Optional[str]] = [None] * len(items)
     sem = asyncio.Semaphore(max(1, concurrency))
     async with httpx.AsyncClient(base_url=base_url, timeout=request_timeout) as client:
@@ -91,9 +92,16 @@ async def _answer_all(base_url: str, model: Optional[str], items: Sequence[EvalI
                     if resp.status_code != 200:
                         logger.debug("accuracy gate: HTTP %s", resp.status_code)
                         return
-                    choice = (resp.json().get("choices") or [{}])[0]
-                    text = (choice.get("message") or {}).get("content")
+                    data = resp.json()
+                    choice = (data.get("choices") or [{}])[0]
+                    message = choice.get("message") or {}
+                    text = message.get("content")
                     out[i] = text if isinstance(text, str) else None
+                    if details is not None:  # how the answer ended, so a failed check can be read item by item
+                        reasoning = message.get("reasoning") or message.get("reasoning_content")
+                        details[i] = {"finish_reason": choice.get("finish_reason"),
+                                      "completion_tokens": (data.get("usage") or {}).get("completion_tokens"),
+                                      "reasoning_chars": len(reasoning) if isinstance(reasoning, str) else 0}
                 except (httpx.HTTPError, ValueError, KeyError, IndexError, AttributeError) as exc:
                     logger.debug("accuracy gate request failed: %s", exc)
 
@@ -108,13 +116,16 @@ async def _answer_all(base_url: str, model: Optional[str], items: Sequence[EvalI
 
 
 def chat_answers(base_url: str, model: Optional[str], items: Sequence[EvalItem], concurrency: int,
-                 max_tokens: int = 512, wall_s: float = 600.0, request_timeout: float = 180.0) -> List[Optional[str]]:
+                 max_tokens: int = 512, wall_s: float = 600.0, request_timeout: float = 180.0,
+                 details: Optional[List[Optional[dict]]] = None) -> List[Optional[str]]:
     """Each item's greedy answer from a running engine's chat endpoint, `concurrency` at a time, stopping
-    naturally; None for any request that failed or had not finished when `wall_s` ran out.
+    naturally; None for any request that failed or had not finished when `wall_s` ran out. Given `details`, a list
+    as long as `items`, each answered item's entry becomes {finish_reason, completion_tokens, reasoning_chars}.
 
     Through /v1/chat/completions, so each engine applies its model's chat template, as benchmarks/task_quality.py
     does with vLLM's llm.chat."""
-    return asyncio.run(_answer_all(base_url, model, items, concurrency, max_tokens, wall_s, request_timeout))
+    return asyncio.run(_answer_all(base_url, model, items, concurrency, max_tokens, wall_s, request_timeout,
+                                   details))
 
 
 def _counts(ref: str, cand: str) -> Tuple[int, int, int]:

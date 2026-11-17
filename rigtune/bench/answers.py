@@ -25,8 +25,10 @@ pick answers through its router or balancer (KeyedGate), graded under its own ro
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set
 
 from rigtune.accuracy_gate import MAX_CONCURRENCY, MIN_CONCURRENCY, _counts, chat_answers, pass_wall_seconds
@@ -50,18 +52,40 @@ class RowGrader:
     grades: Dict[str, str] = field(default_factory=dict)  # key -> per item '1' right, '0' wrong, '-'
     twice: Set[str] = field(default_factory=set)  # keys graded a second time: the stock rows'
     again: Dict[str, str] = field(default_factory=dict)  # key -> the second pass's per-item outcomes
+    # Every graded answer, one JSON line each ({key, pass, item, label, right, response, finish_reason,
+    # completion_tokens, reasoning_chars}), so a check that fails can be read answer by answer. Set only with the
+    # default `answer` (chat_answers), which fills in how each answer ended.
+    answers_file: Optional[Path] = None
 
-    def _pass(self, base_url: str, model: Optional[str], cfg: Config, key: str) -> Optional[str]:
+    def _pass(self, base_url: str, model: Optional[str], cfg: Config, key: str, n: int = 1) -> Optional[str]:
         concurrency = min(MAX_CONCURRENCY, max(MIN_CONCURRENCY, cfg.batch or MIN_CONCURRENCY))
+        details: List[Optional[dict]] = [None] * len(self.items)
         try:
+            more = {"details": details} if self.answers_file is not None else {}
             responses = self.answer(base_url, model, self.items, concurrency, self.max_tokens,
-                                    pass_wall_seconds(len(self.items)))
+                                    pass_wall_seconds(len(self.items)), **more)
         except Exception as exc:  # grading never takes the run down with it; an empty pass grades again later
             logger.warning("answer check: grading %s failed: %s", key, exc)
             return None
+        responses = list(responses) + [None] * len(self.items)
         outcomes = "".join("-" if r is None else ("1" if item.grade(r) else "0")
-                           for item, r in zip(self.items, list(responses) + [None] * len(self.items)))
-        return outcomes if outcomes.strip("-") else None
+                           for item, r in zip(self.items, responses))
+        if not outcomes.strip("-"):
+            return None
+        if self.answers_file is not None:
+            self._keep(key, n, responses, outcomes, details)
+        return outcomes
+
+    def _keep(self, key: str, n: int, responses: List[Optional[str]], outcomes: str,
+              details: List[Optional[dict]]) -> None:
+        try:
+            with open(self.answers_file, "a", encoding="utf-8") as f:
+                for i, (item, said, got) in enumerate(zip(self.items, responses, outcomes)):
+                    f.write(json.dumps({"key": key, "pass": n, "item": item.id or i, "label": item.answer,
+                                        "right": None if got == "-" else got == "1", "response": said,
+                                        **(details[i] or {})}) + "\n")
+        except OSError as exc:  # the record is for reading later; the grade stands without it
+            logger.warning("answer check: could not keep %s's answers in %s: %s", key, self.answers_file, exc)
 
     def record(self, base_url: str, model: Optional[str], cfg: Config, key: Optional[str] = None) -> None:
         key = key or cfg.key()
@@ -71,7 +95,7 @@ class RowGrader:
                 return
             self.grades[key] = got
         if key in self.twice and key not in self.again:  # on the same warm engine, straight after
-            got = self._pass(base_url, model, cfg, key)
+            got = self._pass(base_url, model, cfg, key, n=2)
             if got is not None:
                 self.again[key] = got
 

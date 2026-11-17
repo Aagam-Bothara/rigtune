@@ -52,6 +52,30 @@ def test_each_configuration_is_graded_once_on_its_warm_engine():
     assert silent.grades == {}  # a pass that answered nothing is not a grade: the next run tries again
 
 
+def test_every_graded_answer_is_kept_with_how_it_ended(tmp_path):
+    """A failed check must be readable answer by answer: was it wrong, or cut off before its last line?"""
+
+    def answer(base_url, model, items, concurrency, max_tokens, wall_s, details):
+        for i in range(len(items) - 1):
+            details[i] = {"finish_reason": "length" if i == 1 else "stop", "completion_tokens": 7,
+                          "reasoning_chars": 0}
+        return [f"The answer is {2 * i}." if i != 1 else "Let me think" for i in range(len(items) - 1)] + [None]
+
+    kept = tmp_path / "x.answers.jsonl"
+    g = RowGrader(items=ITEMS[:3], set_name="sums", sha256="abc", answer=answer, answers_file=kept)
+    cfg = Config(backend="vllm", quant="bf16", batch=8)
+    g.twice = {cfg.key()}
+    g.record("http://a", "m", cfg)
+    lines = [json.loads(x) for x in kept.read_text(encoding="utf-8").splitlines()]
+    assert [(x["pass"], x["item"], x["right"]) for x in lines] == [(1, 0, True), (1, 1, False), (1, 2, None),
+                                                                    (2, 0, True), (2, 1, False), (2, 2, None)]
+    assert lines[1] == {"key": cfg.key(), "pass": 1, "item": 1, "label": "2", "right": False,
+                        "response": "Let me think", "finish_reason": "length", "completion_tokens": 7,
+                        "reasoning_chars": 0}
+    assert lines[2]["response"] is None and "finish_reason" not in lines[2]  # unanswered: nothing to say
+    assert g.grades[cfg.key()] == "10-"  # keeping the answers changes no grade
+
+
 def test_a_row_is_checked_against_its_engines_stock_row_with_the_gates_bound():
     ref, lost4 = "1" * 200, "0000" + "1" * 196
     g = _grader(ref=ref, cand=lost4)
@@ -389,6 +413,13 @@ def test_check_answers_reads_its_set_before_calibrating_and_reaches_the_runner(t
                                  "--eval-items", "20", "--out", str(tmp_path / "all")])
     assert r.exit_code == 0, r.output
     assert len(built[1]["gate"].items) == 1319
+    assert built[1]["gate"].answers_file is None  # without --verdict there is no evidence folder to keep them in
+    r = CliRunner().invoke(app, ["compare", MODEL, "--backend", "vllm", "--check-answers", "gsm8k",
+                                 "--check-items", "20", "--verdict", "--out", str(tmp_path / "kept")])
+    assert r.exit_code == 0, r.output
+    kept = built[2]["gate"].answers_file
+    assert kept.name.endswith(".answers.jsonl") and kept.with_name(
+        kept.name.removesuffix(".answers.jsonl") + ".json").exists()  # beside the results it grades
 
 
 def test_answers_worse_claims_speed_only_where_the_speed_rule_does():

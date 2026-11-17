@@ -1324,6 +1324,8 @@ def compare(
                                                 profile.objective, out, goal=cons.goal))
         runs = runs_path_for(target)
         requests, probe = target.with_name(target.name.removesuffix(".json") + ".requests"), gpu_state
+        if grader is not None:  # every graded answer, so a failed check can be read item by item
+            grader.answers_file = target.with_name(target.name.removesuffix(".json") + ".answers.jsonl")
         prompts = {"calibration_prompts": workload_file, "measured_prompts": eval_workload_file}
         options = {"objective": objective, "workload": wl.name, "measured_on": measured, "levels": users,
                    "repeats": repeats, "include": list(include or []), "backend": backend,
