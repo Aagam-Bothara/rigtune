@@ -127,6 +127,8 @@ def test_every_tuner_gets_the_same_model_limits_and_lengths(plan):
     for name in (f"llmopt-vllm-{M}", f"llmopt-sglang-{M}"):
         assert "--levels 1,4,8" in p[name]["cmd"] and "--max-model-len 4096" in p[name]["cmd"]
         assert "timeout 3600 " in p[name]["cmd"]  # the calibration's budget, and no more
+        # 256 requests per run made one 1-user run take 43 min on an A40; the 27-run grid never finished
+        assert "--num-prompts 16 " in p[name]["cmd"]
     assert "$SGLANG_PYTHON -m sglang.launch_server" in p[f"llmopt-sglang-{M}"]["cmd"]
 
 

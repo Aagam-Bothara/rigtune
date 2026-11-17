@@ -308,6 +308,7 @@ def build(a: argparse.Namespace) -> dict:
                 "|| echo unknown) && "
                 f"CMD=$({py} {bench}/competitor_rows.py llm-optimizer-cmd --framework {fw} --model {model} "
                 f"{lim} {sizes} --max-model-len {a.max_model_len} --levels {a.levels} "
+                f"--num-prompts {a.llmopt_prompts} "
                 f"--binary {a.llm_optimizer_bin} --out {{out}}/llm-optimizer.json --shell{server}) && "
                 f"[ -n \"$CMD\" ] || {{ {na} \"the llm-optimizer command could not be written (no request "
                 "lengths, or competitor_rows.py failed); see output.log\"; exit 1; }; "
@@ -564,6 +565,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--vllm-src", default="/workspace/src/vllm", help="sparse vLLM checkout for auto_tune")
     ap.add_argument("--llm-optimizer-src", default="/workspace/src/llm-optimizer")
     ap.add_argument("--llm-optimizer-bin", default="/workspace/venvs/llmopt/bin/llm-optimizer")
+    ap.add_argument("--llmopt-prompts", type=int, default=16,
+                    help="requests per llm-optimizer run. Its grid is 9 server settings x every level, run one "
+                         "after another; at 256 a single 1-user run of Qwen3.5-9B on an A40 (383 tokens out) took "
+                         "43 min, so the grid could not finish inside the calibration's budget. Its pick is "
+                         "measured again in cmp, so the search needs only enough requests to rank")
     ap.add_argument("--aiconfigurator-bin", default="/workspace/venvs/aic/bin/aiconfigurator")
     ap.add_argument("--aiconfigurator-python", default="/workspace/venvs/aic/bin/python")
     ap.add_argument("--smoke-model", default="Qwen/Qwen2.5-3B-Instruct")
