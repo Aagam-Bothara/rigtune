@@ -70,6 +70,18 @@ def parse_vllm(text: str) -> MeasuredMemory:
         m.weights_mb = _to_mb(*r.groups())
     if r := re.search(r"Total non KV cache memory:\s*" + _SIZE, text):
         m.non_kv_mb = _to_mb(*r.groups())
+    elif r := re.search(r"Desired GPU memory utilization is \([\d.]+,\s*" + _SIZE + r"\)"
+                        r".*?Current kv cache memory in use is\s*" + _SIZE, text):
+        # vLLM 0.33 logs the line above at debug level only (utils/mem_utils.py:219). Its start-up summary
+        # (v1/worker/gpu_worker.py:1066) gives what it requested and the KV cache it kept; the difference is what it
+        # reserved outside the KV cache: consumed memory, activation headroom and its CUDA-graph estimate. Not the
+        # summary's three terms added up: its "peak activation" already includes that estimate.
+        m.non_kv_mb = _to_mb(*r.groups()[:2]) - _to_mb(*r.groups()[2:])
+        if c := re.search(r"Actual usage is\s*" + _SIZE + r" for consumed memory.*?,\s*" + _SIZE
+                          + r" for peak activation, and\s*" + _SIZE + r" for CUDAGraph memory", text):
+            g = c.groups()
+            d["consumed_mb"], d["peak_activation_mb"], d["cudagraph_mb"] = (
+                _to_mb(*g[0:2]), _to_mb(*g[2:4]), _to_mb(*g[4:6]))
     if r := re.search(r"torch peak memory increase:\s*" + _SIZE, text):
         d["torch_peak_increase_mb"] = _to_mb(*r.groups())
     if r := re.search(r"non-torch forward increase memory:\s*" + _SIZE, text):

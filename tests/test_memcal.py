@@ -42,6 +42,31 @@ def test_parse_vllm_components():
     assert m.details["torch_peak_increase_mb"] == pytest.approx(1.02 * 1024)
 
 
+VLLM_033_LOG = """
+(EngineCore pid=8251) INFO 11-17 00:57:40 [model_runner.py:428] Model loading took 0.93 GiB memory and 2.501754 seconds
+(EngineCore pid=8251) INFO 11-17 00:57:56 [gpu_worker.py:772] Available KV cache memory: 40.7 GiB
+(EngineCore pid=8251) INFO 11-17 00:57:56 [kv_cache_utils.py:1147] GPU KV cache size: 3,556,800 tokens, Maximum concurrency for 4,096 tokens per request: 868.36x
+(EngineCore pid=8251) INFO 11-17 00:58:00 [gpu_worker.py:1003] CUDA graph pool memory: 0.18 GiB (actual), 0.29 GiB (estimated), difference: 0.11 GiB (58.5%).
+(EngineCore pid=8251) INFO 11-17 00:58:00 [gpu_worker.py:1066] Free memory on device (47.06/47.4 GiB) on startup. Desired GPU memory utilization is (0.9, 42.66 GiB). Actual usage is 1.15 GiB for consumed memory (weights + non-torch), 0.81 GiB for peak activation, and 0.18 GiB for CUDAGraph memory. Replace gpu_memory_utilization config with `--kv-cache-memory=43351638836` (40.37 GiB) to fit into requested memory, or `--kv-cache-memory=48073396224` (44.77 GiB) to fully utilize gpu memory. Current kv cache memory in use is 40.7 GiB.
+"""
+
+
+def test_parse_vllm_033_non_kv_from_the_startup_summary():
+    # vLLM 0.33 on an A40 (16 Nov 2026 session, conformance C02): no "Total non KV cache memory" line at INFO.
+    m = parse_vllm(VLLM_033_LOG)
+    assert m.weights_mb == pytest.approx(0.93 * 1024) and m.kv_mb == pytest.approx(40.7 * 1024)
+    assert m.non_kv_mb == pytest.approx((42.66 - 40.7) * 1024)  # requested minus the KV cache kept
+    assert m.workspace_mb == pytest.approx((42.66 - 40.7 - 0.93) * 1024)
+    assert m.details["consumed_mb"] == pytest.approx(1.15 * 1024)
+    assert m.details["peak_activation_mb"] == pytest.approx(0.81 * 1024)
+    assert m.details["cudagraph_mb"] == pytest.approx(0.18 * 1024)
+
+
+def test_parse_vllm_prefers_the_total_line_when_both_are_there():
+    m = parse_vllm(VLLM_LOG + VLLM_033_LOG)
+    assert m.non_kv_mb == pytest.approx(7.85 * 1024)
+
+
 def test_parse_llamacpp_splits_device_and_host():
     m = parse_llamacpp(LLAMACPP_LOG)
     assert m.source == "llamacpp-log"
