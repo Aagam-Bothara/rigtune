@@ -130,6 +130,9 @@ def test_every_tuner_gets_the_same_model_limits_and_lengths(plan):
         # 256 requests per run made one 1-user run take 43 min on an A40; the 27-run grid never finished
         assert "--num-prompts 16 " in p[name]["cmd"]
     assert "$SGLANG_PYTHON -m sglang.launch_server" in p[f"llmopt-sglang-{M}"]["cmd"]
+    # unset, every launch was ` -m sglang.launch_server`; llm-optimizer exited 0 and the phase read as done
+    assert '[ -n "${SGLANG_PYTHON:-}" ]' in p[f"llmopt-sglang-{M}"]["requires"]
+    assert p[f"llmopt-vllm-{M}"].get("requires") is None
 
 
 def test_every_competitor_phase_leaves_a_row_and_the_comparison_reads_them_all(plan):

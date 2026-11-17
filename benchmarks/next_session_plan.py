@@ -320,7 +320,11 @@ def build(a: argparse.Namespace) -> dict:
                 f"else {na} \"llm-optimizer exited $rc (124: cut off at the calibration's budget of "
                 f"{budget_s} s) and wrote no --output-json; see output.log\"; fi; exit $rc"),
                 f"BentoML llm-optimizer's pick on {fw}, same model, limits and lengths (rows.json, written even "
-                "when it fails)", needs=[f"lengths-{m}"], timeout_s=budget_s + 1800)
+                "when it fails)", needs=[f"lengths-{m}"], timeout_s=budget_s + 1800,
+                # Without it every server launch is ` -m sglang.launch_server` and fails at once, while
+                # llm-optimizer still exits 0 (a runner restarted without the variable, 2026-11-17).
+                requires=("[ -n \"${SGLANG_PYTHON:-}\" ] || { echo 'SGLANG_PYTHON is not set: llm-optimizer would "
+                          "launch SGLang as \" -m sglang.launch_server\"'; exit 1; }") if fw == "sglang" else None)
         for be in ("vllm", "sglang"):
             label = f"aiconfigurator-{be}"
             na = f"{na_tool} --label {label} --source \"NVIDIA AIConfigurator ${{VER:-unknown}}\" --reason"
