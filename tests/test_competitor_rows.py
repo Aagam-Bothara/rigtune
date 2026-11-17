@@ -94,6 +94,63 @@ def test_llm_optimizer_sglang_pick_carries_its_other_settings(tmp_path, prepared
     assert args[args.index("--chunked-prefill-size") + 1] == "4096"
 
 
+def stub_llm_optimizer(root: Path) -> None:
+    """A stand-in for the three llm-optimizer functions the cut-off summary calls (the real ones run on the pod).
+    Its pick follows cli.py's find_best_throughput_configs: the highest output throughput among runs under every
+    `<` limit."""
+    pkg = root / "llm_optimizer"
+    (pkg / "visualization").mkdir(parents=True)
+    for init in (pkg / "__init__.py", pkg / "visualization" / "__init__.py"):
+        init.write_text("", encoding="utf-8")
+    (pkg / "performance.py").write_text(
+        "def parse_slo_constraints(text):\n"
+        "    out = []\n"
+        "    for part in text.split(';'):\n"
+        "        name, limit = part.split('<')\n"
+        "        metric, stat = name.split(':')\n"
+        "        out.append((f'{stat}_{metric}_ms', float(limit.rstrip('ms'))))\n"
+        "    return out\n", encoding="utf-8")
+    (pkg / "visualization" / "visualize.py").write_text(
+        "def convert_constraints_for_visualization(parsed):\n    return [list(p) for p in parsed]\n",
+        encoding="utf-8")
+    (pkg / "cli.py").write_text(
+        "def extract_token_lengths(c):\n    return c['random_input_len'], c['random_output_len']\n"
+        "def find_best_throughput_configs(results, parsed):\n"
+        "    ok = [r for r in results if all(r['results'][m] < v for m, v in parsed)]\n"
+        "    best = max(ok, key=lambda r: r['results']['output_throughput'], default=None)\n"
+        "    pick = best and {'throughput': best['results']['output_throughput'], 'config': best['config'],\n"
+        "                     'cmd': best.get('cmd', '')}\n"
+        "    return {'best_output_throughput_constrained': pick}\n", encoding="utf-8")
+
+
+def test_a_cut_off_llm_optimizer_run_still_gives_its_pick_among_the_runs_it_finished(tmp_path, monkeypatch):
+    """On the A40 its 27-run grid was cut off at 3600 s after 19 runs, with no --output-json: the pick is made from
+    its JSONL by its own end-of-run code, and the row says it was cut off."""
+    stub_llm_optimizer(tmp_path / "lo")
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "lo"))
+    finished = sample("llm-optimizer-vllm.SAMPLE.json")["test_results"][:15]  # cut off after 5 of 9 servers
+    jsonl = tmp_path / "llm-optimizer.jsonl"
+    jsonl.write_text("".join(json.dumps(r) + "\n" for r in finished) + '{"half a line', encoding="utf-8")
+    out, summary = tmp_path / "rows.json", tmp_path / "summary.json"
+    assert cr.main(["llm-optimizer-cut-off-row", "--jsonl", str(jsonl), "--python", sys.executable,
+                    "--ttft-ms", "500", "--tpot-ms", "50", "--budget-s", "3600", "--framework", "vllm",
+                    "--tool-version", "7be87d7", "--summary", str(summary), "--out", str(out)]) == 0
+    extra = read_rows_file(out)["llm-optimizer-vllm"]
+    assert extra.skipped is None
+    assert (extra.config.batch, extra.config.prefill_budget, extra.config.ctx) == (128, 8192, 4096)
+    assert "cut off at the calibration's budget of 3600 s" in extra.source and "among 15 measured runs" in \
+        extra.source
+    kept = json.loads(summary.read_text(encoding="utf-8"))
+    assert kept["metadata"]["cut_off"] == {"budget_s": 3600.0, "runs": 15}
+
+
+def test_a_cut_off_run_without_llm_optimizer_installed_is_an_error_not_a_row(tmp_path):
+    jsonl = tmp_path / "llm-optimizer.jsonl"
+    jsonl.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(cr.AdapterError, match="summary of .* failed"):
+        cr.lo_finish(sys.executable, str(jsonl), "ttft:p95<500ms", 3600)
+
+
 def test_not_llm_optimizer_output_is_an_error():
     with pytest.raises(cr.AdapterError, match="best_configurations"):
         cr.lo_row({"rows": []}, "vllm", 4096, "x")

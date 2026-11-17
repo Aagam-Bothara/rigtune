@@ -340,9 +340,22 @@ def build(a: argparse.Namespace) -> dict:
                 f"else {na} \"$(cat {{out}}/not-applicable.txt) (no AIConfigurator command for this card)\"; fi"),
                 f"NVIDIA AIConfigurator's predicted pick on {be}, or a not-applicable row where it has no data "
                 "for this card", needs=[f"lengths-{m}"], timeout_s=2400)
-        row_files = " ".join(f"{{root}}/{p}-{m}/rows.json" for p in (
-            "autotune", "llmopt-vllm", "llmopt-sglang", "aic-vllm", "aic-sglang"))
-        phase(f"cmp-{m}", CLEAN + (
+        # llm-optimizer writes --output-json only when its whole grid ends; a run cut off at the budget left its
+        # finished runs in llm-optimizer.jsonl, so its pick among them is made here by its own end-of-run code.
+        cut_off = (
+            "for fw in vllm sglang; do d={root}/llmopt-$fw-" + m + "; "
+            "if [ -s $d/llm-optimizer.jsonl ] && [ ! -f $d/llm-optimizer.json ]; then "
+            f"{py} {bench}/competitor_rows.py llm-optimizer-cut-off-row --jsonl $d/llm-optimizer.jsonl "
+            f"--python {a.llm_optimizer_python} {lim} --budget-s {budget_s} --framework $fw "
+            f"--max-model-len {a.max_model_len} --tool-version $(git -C {a.llm_optimizer_src} rev-parse --short "
+            "HEAD 2>/dev/null || echo unknown) --summary {out}/llmopt-$fw-cut-off.json "
+            "--out {out}/llmopt-$fw-rows.json || { echo \"no row from the cut-off llm-optimizer run on $fw\"; "
+            "rm -f {out}/llmopt-$fw-rows.json; }; fi; done; ")
+        llmopt_rows = ("$(for fw in vllm sglang; do if [ -s {out}/llmopt-$fw-rows.json ]; then "
+                       "echo {out}/llmopt-$fw-rows.json; else echo {root}/llmopt-$fw-" + m + "/rows.json; fi; done)")
+        row_files = " ".join([f"{{root}}/autotune-{m}/rows.json", llmopt_rows]
+                             + [f"{{root}}/{p}-{m}/rows.json" for p in ("aic-vllm", "aic-sglang")])
+        phase(f"cmp-{m}", CLEAN + cut_off + (
             f"ROWS=''; for f in {row_files}; do if [ -s \"$f\" ]; then ROWS=\"$ROWS --rows $f\"; else "
             "echo \"ROW MISSING: $f (its phase left no row; this comparison runs without it)\" "
             ">> {out}/rows-missing.txt; fi; done; [ ! -f {out}/rows-missing.txt ] || cat {out}/rows-missing.txt; "
@@ -565,6 +578,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--vllm-src", default="/workspace/src/vllm", help="sparse vLLM checkout for auto_tune")
     ap.add_argument("--llm-optimizer-src", default="/workspace/src/llm-optimizer")
     ap.add_argument("--llm-optimizer-bin", default="/workspace/venvs/llmopt/bin/llm-optimizer")
+    ap.add_argument("--llm-optimizer-python", default="/workspace/venvs/llmopt/bin/python",
+                    help="its environment's Python, which makes a cut-off run's pick with its own code")
     ap.add_argument("--llmopt-prompts", type=int, default=16,
                     help="requests per llm-optimizer run. Its grid is 9 server settings x every level, run one "
                          "after another; at 256 a single 1-user run of Qwen3.5-9B on an A40 (383 tokens out) took "

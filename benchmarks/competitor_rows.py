@@ -61,6 +61,7 @@ from __future__ import annotations
 import argparse
 import json
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -202,6 +203,42 @@ def lo_command(framework: str, model: str, ttft_ms: float, tpot_ms: Optional[flo
     return argv
 
 
+# Run in llm-optimizer's own environment: its end-of-run summary (cli.py), built from the JSONL it appends after
+# every run, for a run that was cut off before it could write --output-json itself.
+LO_FINISH = """
+import json, sys
+from llm_optimizer.cli import extract_token_lengths, find_best_throughput_configs
+from llm_optimizer.performance import parse_slo_constraints
+from llm_optimizer.visualization.visualize import convert_constraints_for_visualization
+jsonl, constraints, budget_s = sys.argv[1], sys.argv[2], float(sys.argv[3])
+results = []
+for line in open(jsonl):
+    try:
+        results.append(json.loads(line))
+    except ValueError:
+        pass
+parsed = parse_slo_constraints(constraints)
+first = (results[0].get("config") or {}).get("client_args") or {} if results else {}
+input_len, output_len = extract_token_lengths(first) if results else (None, None)
+gpu = (results[0].get("metadata") or {}).get("gpu_type") if results else None
+json.dump({"metadata": {"gpu_type": gpu, "total_tests": len(results),
+                        "constraints": convert_constraints_for_visualization(parsed),
+                        "input_len": input_len, "output_len": output_len,
+                        "cut_off": {"budget_s": budget_s, "runs": len(results)}},
+           "best_configurations": find_best_throughput_configs(results, parsed),
+           "test_results": results}, sys.stdout)
+"""
+
+
+def lo_finish(python: str, jsonl: str, constraints: str, budget_s: float) -> dict:
+    """llm-optimizer's --output-json for a run cut off at `budget_s`, made by its own code from its JSONL."""
+    got = subprocess.run([python, "-c", LO_FINISH, jsonl, constraints, str(budget_s)],
+                         capture_output=True, text=True)
+    if got.returncode != 0:
+        raise AdapterError(f"llm-optimizer's summary of {jsonl} failed: {got.stderr.strip()[-500:]}")
+    return json.loads(got.stdout)
+
+
 def lo_row(result: dict, framework: str, max_model_len: int, tool_version: str, quant: str = "bf16",
            label: Optional[str] = None) -> dict:
     """llm-optimizer's --output-json as one --rows entry."""
@@ -217,6 +254,9 @@ def lo_row(result: dict, framework: str, max_model_len: int, tool_version: str, 
               f"client with random prompts of {meta.get('input_len')} tokens and answers of "
               f"{meta.get('output_len')}; its card {meta.get('gpu_type')!r}; this row is re-measured on the "
               "comparison's prompts")
+    if meta.get("cut_off"):
+        source += (f"; its search was cut off at the calibration's budget of {meta['cut_off']['budget_s']:g} s, "
+                   f"so this is its pick among the {total} runs it finished, made by its own end-of-run code")
     if not constraints:
         return _row(label, source, None, [], "llm-optimizer ran without --constraints, so its pick is not "
                                              "judged by the comparison's limits")
@@ -410,6 +450,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--quant", default="bf16")
     p.add_argument("--out", type=Path, required=True)
 
+    p = sub.add_parser("llm-optimizer-cut-off-row",
+                       help="a --rows file from the JSONL of a run cut off before it wrote --output-json")
+    p.add_argument("--jsonl", required=True, help="the llm-optimizer.jsonl beside its --output-json")
+    p.add_argument("--python", required=True, help="the Python of llm-optimizer's environment")
+    p.add_argument("--ttft-ms", type=float, required=True)
+    p.add_argument("--tpot-ms", type=float, default=None)
+    p.add_argument("--budget-s", type=float, required=True, help="where it was cut off")
+    p.add_argument("--framework", choices=BACKENDS, required=True)
+    p.add_argument("--max-model-len", type=int, default=4096)
+    p.add_argument("--tool-version", required=True)
+    p.add_argument("--quant", default="bf16")
+    p.add_argument("--summary", type=Path, default=None, help="also keep the summary it made here")
+    p.add_argument("--out", type=Path, required=True)
+
     p = sub.add_parser("aiconfigurator-cmd", help="print the AIConfigurator command, or say it does not apply")
     limits(p)
     p.add_argument("--gpu", required=True, help="the card's name as nvidia-smi reports it")
@@ -452,6 +506,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(shlex.join(cmd) if a.shell else json.dumps(cmd))
         elif a.cmd == "llm-optimizer-row":
             data = json.loads(a.result.read_text(encoding="utf-8"))
+            row = lo_row(data, a.framework, a.max_model_len, a.tool_version, a.quant)
+            write_rows([row], a.out)
+            print(json.dumps(row, indent=1))
+        elif a.cmd == "llm-optimizer-cut-off-row":
+            data = lo_finish(a.python, a.jsonl, lo_constraints(a.ttft_ms, a.tpot_ms), a.budget_s)
+            if a.summary:
+                a.summary.write_text(json.dumps(data, indent=1), encoding="utf-8")
             row = lo_row(data, a.framework, a.max_model_len, a.tool_version, a.quant)
             write_rows([row], a.out)
             print(json.dumps(row, indent=1))

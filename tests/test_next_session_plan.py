@@ -139,8 +139,14 @@ def test_every_competitor_phase_leaves_a_row_and_the_comparison_reads_them_all(p
         cmd = p[name]["cmd"]
         assert "competitor_rows.py not-applicable --out {out}/rows.json" in cmd
     cmp_ = p[f"cmp-{m}"]["cmd"]
-    for name in ("autotune", "llmopt-vllm", "llmopt-sglang", "aic-vllm", "aic-sglang"):
+    for name in ("autotune", "aic-vllm", "aic-sglang"):
         assert f"{{root}}/{name}-{m}/rows.json" in cmp_
+    # llm-optimizer's row is its phase's, unless that run was cut off: then its pick among the runs it finished
+    assert f"echo {{root}}/llmopt-$fw-{m}/rows.json" in cmp_ and "for fw in vllm sglang" in cmp_
+    assert (f"[ -s {{root}}/llmopt-$fw-{m}/llm-optimizer.jsonl ] " not in cmp_ and
+            f"d={{root}}/llmopt-$fw-{m}; if [ -s $d/llm-optimizer.jsonl ] && [ ! -f $d/llm-optimizer.json ]" in cmp_)
+    assert ("llm-optimizer-cut-off-row --jsonl $d/llm-optimizer.jsonl --python /workspace/venvs/llmopt/bin/python "
+            "--ttft-ms 500 --tpot-ms 50 --budget-s 3600 --framework $fw" in cmp_)
     assert "ROW MISSING" in cmp_ and "{out}/rows-missing.txt" in cmp_  # a dropped row is named, not silent
 
 
