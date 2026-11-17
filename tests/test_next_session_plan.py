@@ -348,6 +348,23 @@ def test_a_tuner_phase_given_empty_lengths_fails_and_still_leaves_a_row(local_pl
 
 
 @needs_bash
+def test_an_llm_optimizer_run_that_exits_0_without_a_result_fails_with_a_row_saying_so(tmp_path):
+    """On the A40 every SGLang launch failed at once; llm-optimizer exited 0, so the phase read as done."""
+    stub = tmp_path / "llm-optimizer"
+    stub.write_text("#!/bin/sh\necho 'Error during run for config ...'\nexit 0\n", encoding="utf-8")
+    stub.chmod(0o755)
+    plan = _plan(tmp_path, "--commit", "0123abc", "--repo", REPO.as_posix(), "--models", MODEL,
+                 "--llm-optimizer-bin", stub.as_posix())
+    root = tmp_path / "root"
+    (root / f"lengths-{M}").mkdir(parents=True)
+    (root / f"lengths-{M}" / "lengths.env").write_text("INPUT_LEN=63\nOUTPUT_LEN=383\n", encoding="utf-8")
+    got, out = run_as_the_runner(plan, f"llmopt-vllm-{M}", root)
+    assert got.returncode == 1, got.stdout + got.stderr
+    row = json.loads((out / "rows.json").read_text(encoding="utf-8"))["rows"][0]
+    assert row["label"] == "llm-optimizer-vllm" and "exited 0" in row["skipped"]
+
+
+@needs_bash
 def test_an_auto_tune_run_that_writes_no_row_fails_with_a_row_saying_so(local_plan, tmp_path):
     (tmp_path / f"lengths-{M}").mkdir()
     (tmp_path / f"lengths-{M}" / "lengths.env").write_text("INPUT_LEN=63\nOUTPUT_LEN=395\n", encoding="utf-8")

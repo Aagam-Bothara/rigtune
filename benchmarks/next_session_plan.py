@@ -318,7 +318,7 @@ def build(a: argparse.Namespace) -> dict:
                 f"--result {{out}}/llm-optimizer.json --framework {fw} --max-model-len {a.max_model_len} "
                 "--tool-version \"$VER\" --out {out}/rows.json; "
                 f"else {na} \"llm-optimizer exited $rc (124: cut off at the calibration's budget of "
-                f"{budget_s} s) and wrote no --output-json; see output.log\"; fi; exit $rc"),
+                f"{budget_s} s) and wrote no --output-json; see output.log\"; [ $rc != 0 ] || rc=1; fi; exit $rc"),
                 f"BentoML llm-optimizer's pick on {fw}, same model, limits and lengths (rows.json, written even "
                 "when it fails)", needs=[f"lengths-{m}"], timeout_s=budget_s + 1800,
                 # Without it every server launch is ` -m sglang.launch_server` and fails at once, while
