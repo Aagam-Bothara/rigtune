@@ -199,7 +199,13 @@ def lo_command(framework: str, model: str, ttft_ms: float, tpot_ms: Optional[flo
             "--server-args", server_grid or lo_grid(framework, max_model_len), "--client-args", client,
             "--constraints", lo_constraints(ttft_ms, tpot_ms), "--output-json", out]
     if server_cmd:
-        argv += ["--server-cmd", server_cmd]
+        # With --server-cmd it fills in no port of its own and waits on http://127.0.0.1:None/health until each
+        # run times out (SGLang on the A40, 2026-11-17), so it is told the one the command serves on.
+        words = shlex.split(server_cmd)
+        flag = {w: words[i + 1] for i, w in enumerate(words[:-1]) if w in ("--port", "--host")}
+        if "--port" not in flag:
+            raise AdapterError(f"the server command names no --port for llm-optimizer to wait on: {server_cmd}")
+        argv += ["--server-cmd", server_cmd, "--host", flag.get("--host", "127.0.0.1"), "--port", flag["--port"]]
     return argv
 
 

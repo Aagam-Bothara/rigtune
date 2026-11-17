@@ -165,9 +165,14 @@ def test_llm_optimizer_gets_the_comparisons_model_limits_lengths_and_levels():
     client = dict(kv.split("=") for kv in opt["--client-args"].split(";"))
     assert client["max_concurrency"] == "[1,4,8]" and client["random_input_len"] == "63"
     assert client["random_output_len"] == "395" and client["dataset_name"] == "random"
-    sg = cr.lo_command("sglang", "M", 500, None, 63, 395, 4096, [8], "o.json", server_cmd="py -m sglang.launch_server")
-    assert sg[sg.index("--constraints") + 1] == "ttft:p95<500ms" and sg[-2:] == ["--server-cmd", "py -m sglang.launch_server"]
+    server = "py -m sglang.launch_server --model-path M --host 127.0.0.1 --port 30000"
+    sg = cr.lo_command("sglang", "M", 500, None, 63, 395, 4096, [8], "o.json", server_cmd=server)
+    assert sg[sg.index("--constraints") + 1] == "ttft:p95<500ms" and sg[sg.index("--server-cmd") + 1] == server
     assert "context_length=4096" in sg[sg.index("--server-args") + 1]
+    # given --server-cmd, llm-optimizer sets no port and waited on 127.0.0.1:None until every run timed out
+    assert sg[sg.index("--port") + 1] == "30000" and sg[sg.index("--host") + 1] == "127.0.0.1"
+    with pytest.raises(cr.AdapterError, match="no --port"):
+        cr.lo_command("sglang", "M", 500, None, 63, 395, 4096, [8], "o.json", server_cmd="py -m sglang.launch_server")
 
 
 # --------------------------------------------------------------------------- AIConfigurator
