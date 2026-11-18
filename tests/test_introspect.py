@@ -71,6 +71,16 @@ QWEN35_TEMPLATE = """{%- if add_generation_prompt %}
         {{- '<think>\\n\\n</think>\\n\\n' }}
     {%- endif %}
 {%- endif %}"""
+# Lines 147-154 of Qwen/Qwen3.5-9B's own chat_template.jinja at revision c202236235762e1c871ad0ccb60c8ee5ba337b9a,
+# the checkpoint the A40 run of November 2026 served: unlike vLLM's qwen35.jinja above, it thinks by default.
+QWEN35_9B_TEMPLATE = """{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\\n' }}
+    {%- if enable_thinking is defined and enable_thinking is false %}
+        {{- '<think>\\n\\n</think>\\n\\n' }}
+    {%- else %}
+        {{- '<think>\\n' }}
+    {%- endif %}
+{%- endif %}"""
 
 # quantization_config, verbatim, of hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4 and
 # RedHatAI/Meta-Llama-3.1-8B-Instruct-quantized.w8a8.
@@ -352,6 +362,7 @@ def test_modelopt_from_hf_quant_config():
 @pytest.mark.parametrize("template, expected", [
     (QWEN3_TEMPLATE, introspect.ThinkingSwitch("enable_thinking", "on")),
     (QWEN35_TEMPLATE, introspect.ThinkingSwitch("enable_thinking", "off")),
+    (QWEN35_9B_TEMPLATE, introspect.ThinkingSwitch("enable_thinking", "on")),
     ("{{ enable_thinking }}", introspect.ThinkingSwitch("enable_thinking", "unknown")),
     (QWEN3_TEMPLATE + QWEN35_TEMPLATE, introspect.ThinkingSwitch("enable_thinking", "unknown")),
     ("{{ messages }}", None),

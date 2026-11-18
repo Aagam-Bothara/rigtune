@@ -21,9 +21,11 @@ a file that is missing or cannot be fetched adds a note and never raises.
   * Quantization: what `quantization_config` (config.json, or its text_config) or ModelOpt's hf_quant_config.json
     declares: method, format, weight and activation bits, KV-cache scheme.
   * Thinking switch: an `enable_thinking` variable in the chat template, and what the template does without it.
-    Qwen3's template thinks unless it is false ("enable_thinking is defined and enable_thinking is false"); one
-    Qwen3.5 template thinks only when it is true ("... is true"). Both lines are copied in vLLM v0.33.0's
-    rust/src/chat/tests/templates/qwen3.jinja (line 86) and qwen35.jinja (line 149). Other switches are not read.
+    Qwen3's template thinks unless it is false ("enable_thinking is defined and enable_thinking is false"), and so
+    does the Qwen/Qwen3.5-9B checkpoint's own chat_template.jinja (revision c2022362, line 149): served with its
+    default, it thinks. vLLM v0.33.0's test copy rust/src/chat/tests/templates/qwen35.jinja (line 149) is the
+    other kind, thinking only when it is true ("... is true"), so a template's own lines decide, never its family
+    name. Other switches are not read.
   * Modalities: "text", plus "image" for a vision_config, "audio" for an audio_config, and "video" for a
     video_config or a video_preprocessor_config.json in the listing.
 
