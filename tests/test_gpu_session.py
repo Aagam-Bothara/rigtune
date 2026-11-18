@@ -313,6 +313,28 @@ def test_a_phase_left_running_has_its_process_group_ended_before_it_is_set_aside
             engine.kill()
 
 
+def test_a_phase_left_running_is_ended_before_any_phase_starts_even_one_this_run_leaves_out(tmp_path):
+    """On the A40 a killed runner's comparison ran on for 45 minutes beside the next runner's phases, because a
+    phase left running was ended only when the plan reached it."""
+    root = tmp_path / "s"
+    (root / "cal").mkdir(parents=True)
+    engine = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"],
+                              start_new_session=os.name == "posix")
+    try:
+        (root / "cal" / "manifest.json").write_text(json.dumps(
+            {"phase": "cal", "status": "running", "pid": engine.pid,
+             "pgid": engine.pid if os.name == "posix" else None, "host": gs.socket.gethostname()}))
+        s = session(tmp_path, [{"name": "first", "cmd": counting("first")}, {"name": "cal", "cmd": counting("cal")}])
+        assert s.run(only=["first"]) == {"first": "done"}
+        assert engine.wait(timeout=30) is not None
+        log = (root / "session.log").read_text(encoding="utf-8")
+        assert log.index("LEFT     cal") < log.index("KILL     cal") < log.index("START    first")
+        assert manifest(root, "_attempts/cal.1")["status"] == "interrupted" and not (root / "cal").exists()
+    finally:
+        if engine.poll() is None:
+            engine.kill()
+
+
 def test_the_processes_of_a_session_are_read_from_proc(tmp_path):
     """The session field is the sixth of /proc/<pid>/stat, counted after the command name, which may hold spaces
     and parentheses; a zombie is already dead and is left out."""

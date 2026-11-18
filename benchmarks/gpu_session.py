@@ -24,7 +24,8 @@ the commands need (HF_TOKEN) is exported in the shell that starts the runner, an
   changed since: then it is reported `stale` and kept, and `--redo-stale` runs it again. Any other phase is run
   again, after its earlier directory is moved, whole, to <root>/_attempts/<phase>.<n>, so an interrupted or
   failed attempt's files are kept as evidence rather than overwritten. A phase left `running` by a runner that
-  died has its recorded process group and session killed (and the plan's `cleanup` run) before it is moved.
+  died is ended as soon as the next runner starts, before any phase, whatever its place in the plan: its
+  recorded process group and session are killed, the plan's `cleanup` runs, and it is moved aside.
 - A phase that fails never stops the session. A phase whose `needs` names one that is not `done` is recorded
   as `blocked` and not run; every other phase still runs.
 - `requires`: a command that must exit 0 for the phase to run (an option a parallel series adds, say). When it
@@ -542,6 +543,17 @@ class Session:
         self.after_unit(dest)
         return dest
 
+    def end_left_running(self) -> None:
+        """Before any phase starts: end every phase an earlier runner left `running` and set it aside, whatever
+        its place in the plan and whether or not this run includes it. Ending it only when the plan reached it
+        let a killed runner's comparison run for 45 minutes on the A40 beside the phases the next runner started,
+        and the llm-optimizer run measured beside it had to be repeated."""
+        for d in self.units():
+            m = read_manifest(d)
+            if d.parent == self.root and m.get("status") == RUNNING:
+                self._log(f"LEFT     {d.name}: left running by an earlier runner; ending it before any phase starts")
+                self._set_aside(d.name)
+
     def bare_files(self) -> set:
         """The files a phase that never ran holds."""
         return {MANIFEST, SUMS}
@@ -726,6 +738,7 @@ class Session:
         self._lock()
         try:
             self.repair()
+            self.end_left_running()
             for name in redo:
                 self.redo(name)
             results: Dict[str, str] = {}
