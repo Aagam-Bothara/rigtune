@@ -1,0 +1,4468 @@
+[
+ {
+  "card": "NVIDIA A40",
+  "certified": true,
+  "checks": {
+   "C01 the engine probe answers every question and agrees with the source checks": "pass",
+   "C02 a stock launch starts, serves, and its log yields weights and KV memory": "pass",
+   "C03 every launch flag rigtune emits starts and serves": "pass",
+   "C04 a launch that reports reuse puts cached tokens in a repeated request's usage": "pass",
+   "C05 the /metrics counters rigtune reads are exposed": "skip",
+   "C06-ngram speculative decoding ngram:12 starts and serves": "pass",
+   "C07 an oversized configuration that fails to start is classified as out of memory at start-up": "skip",
+   "C08 a multimodal checkpoint's text-only launch starts and serves": "skip",
+   "C09 a host-RAM KV-cache tier starts and a repeated request reports reuse": "pass",
+   "C10 the hybrid model starts at the planner's configuration; its pools are recorded beside the plan": "skip",
+   "C11 fp8 weights start and serve on this card": "pass",
+   "C12 the load generator measures a fake engine faithfully at 64 and 128 users": "fail"
+  },
+  "date": "2026-11-17",
+  "details": {
+   "C01": {
+    "data": {
+     "checks": {
+      "cache_report": {
+       "probe": true,
+       "source": true
+      },
+      "hicache": {
+       "probe": [
+        "file",
+        "file_cap",
+        "hicache"
+       ],
+       "source": [
+        "file",
+        "file_cap",
+        "hicache"
+       ]
+      },
+      "spec_methods": {
+       "probe": [
+        "draft",
+        "eagle3",
+        "ngram"
+       ],
+       "source": [
+        "draft",
+        "eagle3",
+        "ngram"
+       ]
+      },
+      "tier_details": {
+       "probe": true,
+       "source": true
+      }
+     },
+     "disagreements": [],
+     "seconds": 15.0,
+     "unanswered": {}
+    },
+    "detail": "",
+    "id": "C01",
+    "name": "the engine probe answers every question and agrees with the source checks",
+    "status": "pass"
+   },
+   "C02": {
+    "data": {
+     "errors": [],
+     "measured": {
+      "baseline_mb": null,
+      "details": {},
+      "device_peak_mb": null,
+      "kv_mb": 41410.56,
+      "kv_tokens": 3534246,
+      "non_kv_mb": null,
+      "source": "sglang-log",
+      "weights_mb": 1003.52,
+      "workspace_mb": null
+     }
+    },
+    "detail": "",
+    "id": "C02",
+    "name": "a stock launch starts, serves, and its log yields weights and KV memory",
+    "status": "pass"
+   },
+   "C03": {
+    "data": {
+     "launches": {
+      "kv-fp8_e5m2": {
+       "errors": [],
+       "key": "sglang/bf16/ctx4096/b256/gmu0.88/kvfp8_e5m2",
+       "ready": true
+      },
+      "prefill-2048": {
+       "errors": [],
+       "key": "sglang/bf16/ctx4096/b256/gmu0.88/pb2048",
+       "ready": true
+      },
+      "prefix-off": {
+       "errors": [],
+       "key": "sglang/bf16/ctx4096/b256/gmu0.88/nopc",
+       "ready": true
+      },
+      "prefix-on": {
+       "errors": [],
+       "key": "sglang/bf16/ctx4096/b256/gmu0.88/pc",
+       "ready": true
+      }
+     }
+    },
+    "detail": "",
+    "id": "C03",
+    "name": "every launch flag rigtune emits starts and serves",
+    "status": "pass"
+   },
+   "C04": {
+    "data": {
+     "cached_tokens": [
+      0,
+      918
+     ]
+    },
+    "detail": "",
+    "id": "C04",
+    "name": "a launch that reports reuse puts cached tokens in a repeated request's usage",
+    "status": "pass"
+   },
+   "C05": {
+    "data": {
+     "applies": false
+    },
+    "detail": "rigtune reads no sglang metrics",
+    "id": "C05",
+    "name": "the /metrics counters rigtune reads are exposed",
+    "status": "skip"
+   },
+   "C06-ngram": {
+    "data": {
+     "accepted_tokens": null,
+     "errors": [],
+     "notes": []
+    },
+    "detail": "",
+    "id": "C06-ngram",
+    "name": "speculative decoding ngram:12 starts and serves",
+    "status": "pass"
+   },
+   "C07": {
+    "data": {},
+    "detail": "sglang/bf16/ctx32768/b1024/gmu0.90/pb32768 started on this card: nothing to classify",
+    "id": "C07",
+    "name": "an oversized configuration that fails to start is classified as out of memory at start-up",
+    "status": "skip"
+   },
+   "C08": {
+    "data": {},
+    "detail": "no --multimodal-model given",
+    "id": "C08",
+    "name": "a multimodal checkpoint's text-only launch starts and serves",
+    "status": "skip"
+   },
+   "C09": {
+    "data": {
+     "cached_tokens": [
+      0,
+      918
+     ]
+    },
+    "detail": "",
+    "id": "C09",
+    "name": "a host-RAM KV-cache tier starts and a repeated request reports reuse",
+    "status": "pass"
+   },
+   "C10": {
+    "data": {},
+    "detail": "no --hybrid-model given",
+    "id": "C10",
+    "name": "the hybrid model starts at the planner's configuration; its pools are recorded beside the plan",
+    "status": "skip"
+   },
+   "C11": {
+    "data": {
+     "errors": [],
+     "key": "sglang/fp8/ctx4096/b256/gmu0.88",
+     "ready": true
+    },
+    "detail": "",
+    "id": "C11",
+    "name": "fp8 weights start and serve on this card",
+    "status": "pass"
+   },
+   "C12": {
+    "data": {
+     "levels": [
+      {
+       "client_tok_s": 5583.087551710253,
+       "client_ttft_p50_ms": 76.18842900001255,
+       "client_ttft_p95_ms": 211.47783599917602,
+       "engine_tok_s": 5849.989233809353,
+       "engine_ttft_p50_ms": 20.94105700007276,
+       "engine_ttft_p95_ms": 22.25764499962679,
+       "failed": 0,
+       "loop_lag_p99_ms": 147.15678396987641,
+       "passed": false,
+       "requests": 128,
+       "throughput_ratio": 0.954375696871958,
+       "ttft_error_p50_ms": 55.24737199993979,
+       "ttft_error_p95_ms": 189.22019099954923,
+       "users": 64
+      },
+      {
+       "client_tok_s": 5029.759207049793,
+       "client_ttft_p50_ms": 126.59372399957647,
+       "client_ttft_p95_ms": 3520.0422269999763,
+       "engine_tok_s": 5129.177514707644,
+       "engine_ttft_p50_ms": 20.61176550023447,
+       "engine_ttft_p95_ms": 21.17425800042838,
+       "failed": 0,
+       "loop_lag_p99_ms": 2513.4260399436243,
+       "passed": false,
+       "requests": 256,
+       "throughput_ratio": 0.98061710530143,
+       "ttft_error_p50_ms": 105.981958499342,
+       "ttft_error_p95_ms": 3498.867968999548,
+       "users": 128
+      }
+     ]
+    },
+    "detail": "64 users: p95 time to first token 189.2 ms over the engine's (allowed 5.0), throughput 0.954 of the engine's (allowed 0.97); 128 users: p95 time to first token 3498.9 ms over the engine's (allowed 5.0)",
+    "id": "C12",
+    "name": "the load generator measures a fake engine faithfully at 64 and 128 users",
+    "status": "fail"
+   }
+  },
+  "engine": "sglang",
+  "libs": {
+   "flashinfer": "0.7.2",
+   "tokenizers": "0.23.2",
+   "torch": "2.14.1",
+   "transformers": "5.19.0"
+  },
+  "probe": {
+   "arch_sets": {
+    "mamba_extra_buffer": [
+     "BailingMoeV2_5ForCausalLM",
+     "BailingMoeV3ForCausalLM",
+     "BailingMoeV3VLForConditionalGeneration",
+     "FalconH1ForCausalLM",
+     "Glm5NextForConditionalGeneration",
+     "GraniteMoeHybridForCausalLM",
+     "InklingForConditionalGeneration",
+     "InklingForConditionalGenerationMTP",
+     "InternS2PreviewForConditionalGeneration",
+     "KimiK3ForConditionalGeneration",
+     "KimiLinearForCausalLM",
+     "MiniCPMV4_6ForConditionalGeneration",
+     "MiniCPMV4_7ForConditionalGeneration",
+     "NemotronHForCausalLM",
+     "NemotronHPuzzleForCausalLM",
+     "NemotronH_Omni_Reasoning_V3",
+     "Qwen3NextForCausalLM",
+     "Qwen3_5ForCausalLM",
+     "Qwen3_5ForConditionalGeneration",
+     "Qwen3_5MoeForCausalLM",
+     "Qwen3_5MoeForConditionalGeneration",
+     "Qwen4ExpForConditionalGeneration"
+    ],
+    "swa_sink": [
+     "GptOssForCausalLM",
+     "GraniteMoeSWAForCausalLM",
+     "GraniteSWAForCausalLM",
+     "IQuestQ1ForCausalLM",
+     "IQuestQ1MTP"
+    ]
+   },
+   "archs": [
+    "AfmoeForCausalLM",
+    "ApertusForCausalLM",
+    "ArceeForCausalLM",
+    "BaichuanForCausalLM",
+    "BailingMM2NativeForConditionalGeneration",
+    "BailingMMNativeForConditionalGeneration",
+    "BailingMoEForCausalLM",
+    "BailingMoeForCausalLM",
+    "BailingMoeForCausalLMNextN",
+    "BailingMoeV2ForCausalLM",
+    "BailingMoeV2_5ForCausalLM",
+    "BailingMoeV3ForCausalLM",
+    "BailingMoeV3VLForConditionalGeneration",
+    "BeamForCausalLM",
+    "BertForSequenceClassification",
+    "BertModel",
+    "CLIPModel",
+    "ChatGLMModel",
+    "Cohere2ForCausalLM",
+    "Cohere2MoeForCausalLM",
+    "Cohere2VisionForConditionalGeneration",
+    "CohereForCausalLM",
+    "Contriever",
+    "Cosmos3EdgeForConditionalGeneration",
+    "Cosmos3ForConditionalGeneration",
+    "DFlash2BeamDraftModel",
+    "DFlash2DraftModel",
+    "DFlashDraftModel",
+    "DFlashLagunaForCausalLM",
+    "DSparkDraftModel",
+    "DSparkMiniMaxDraftModel",
+    "DbrxForCausalLM",
+    "DeciLMForCausalLM",
+    "DeepseekForCausalLM",
+    "DeepseekOCRForCausalLM",
+    "DeepseekV2ForCausalLM",
+    "DeepseekV32ForCausalLM",
+    "DeepseekV3ForCausalLM",
+    "DeepseekV3ForCausalLMNextN",
+    "DeepseekV4ForCausalLM",
+    "DeepseekV4ForCausalLMDSpark",
+    "DeepseekV4ForCausalLMNextN",
+    "DeepseekVL2ForCausalLM",
+    "DiffusionGemmaForBlockDiffusion",
+    "Dots3NoteForCausalLM",
+    "Dots3NoteForCausalLMNextN",
+    "DotsOCRForCausalLM",
+    "DotsVLMForCausalLM",
+    "Eagle3DeepseekV2ForCausalLM",
+    "EmbeddingGemma2Model",
+    "EmbeddingGemmaModel",
+    "Ernie4_5_ForCausalLM",
+    "Ernie4_5_MoeForCausalLM",
+    "Ernie4_5_MoeForCausalLMMTP",
+    "Ernie4_5_VLMoeForConditionalGeneration",
+    "Exaone4ForCausalLM",
+    "ExaoneForCausalLM",
+    "ExaoneMoEForCausalLM",
+    "ExaoneMoEForCausalLMMTP",
+    "ExaoneMoeForCausalLM",
+    "FalconH1ForCausalLM",
+    "GPT2LMHeadModel",
+    "GPTBigCodeForCausalLM",
+    "GPTJForCausalLM",
+    "Gemma2ForCausalLM",
+    "Gemma2ForSequenceClassification",
+    "Gemma3ForCausalLM",
+    "Gemma3ForConditionalGeneration",
+    "Gemma3nForCausalLM",
+    "Gemma3nForConditionalGeneration",
+    "Gemma4AssistantForCausalLM",
+    "Gemma4ForCausalLM",
+    "Gemma4ForConditionalGeneration",
+    "Gemma4UnifiedAssistantForCausalLM",
+    "Gemma4UnifiedForConditionalGeneration",
+    "GemmaForCausalLM",
+    "GigaChat35ForCausalLM",
+    "GigaChat35ForCausalLMNextN",
+    "Glm4ForCausalLM",
+    "Glm4MoeForCausalLM",
+    "Glm4MoeForCausalLMNextN",
+    "Glm4MoeLiteForCausalLM",
+    "Glm4MoeLiteForCausalLMNextN",
+    "Glm4vForConditionalGeneration",
+    "Glm4vMoeForConditionalGeneration",
+    "Glm5NextForConditionalGeneration",
+    "Glm5NextForConditionalGenerationNextN",
+    "GlmAsrForConditionalGeneration",
+    "GlmImageForConditionalGeneration",
+    "GlmMoeDsaForCausalLM",
+    "GlmMoeDsaForCausalLMNextN",
+    "GlmOcrForConditionalGeneration",
+    "GlmOcrForConditionalGenerationNextN",
+    "GptOssForCausalLM",
+    "GraniteForCausalLM",
+    "GraniteMoeForCausalLM",
+    "GraniteMoeHybridForCausalLM",
+    "GraniteMoeSWAForCausalLM",
+    "GraniteMoeSharedForCausalLM",
+    "GraniteSWAForCausalLM",
+    "Grok1ForCausalLM",
+    "Grok1ModelForCausalLM",
+    "HYV3ForCausalLM",
+    "HYV3ForCausalLMNextN",
+    "HYV4ForCausalLM",
+    "HYV4ForCausalLMNextN",
+    "HrmTextForCausalLM",
+    "HunYuanDenseV1ForCausalLM",
+    "HunYuanMoEV1ForCausalLM",
+    "IQuestCoderForCausalLM",
+    "IQuestLoopCoderForCausalLM",
+    "IQuestQ1ForCausalLM",
+    "IQuestQ1MTP",
+    "InklingForConditionalGeneration",
+    "InklingForConditionalGenerationMTP",
+    "InternLM2ForCausalLM",
+    "InternLM2ForRewardModel",
+    "InternLM3ForCausalLM",
+    "InternS1ForConditionalGeneration",
+    "InternS1ProForConditionalGeneration",
+    "InternS2MobiusForConditionalGeneration",
+    "InternS2PreviewForConditionalGeneration",
+    "InternVLChatModel",
+    "JetNemotronForCausalLM",
+    "JetVLMForConditionalGeneration",
+    "K2HorizonForCausalLM",
+    "KimiK25ForConditionalGeneration",
+    "KimiK3ForConditionalGeneration",
+    "KimiK3LinearForCausalLM",
+    "KimiLinearForCausalLM",
+    "KimiVLForConditionalGeneration",
+    "LLaDA2MoeModelLM",
+    "LagunaForCausalLM",
+    "Lfm2BidirectionalModel",
+    "Lfm2DSparkDraftModel",
+    "Lfm2ForCausalLM",
+    "Lfm2MoeForCausalLM",
+    "Lfm2VlForConditionalGeneration",
+    "LiLiCorrDraftModel",
+    "LightOnOCRForConditionalGeneration",
+    "LingDSparkModel",
+    "Llama4ForCausalLM",
+    "Llama4ForConditionalGeneration",
+    "LlamaEmbeddingModel",
+    "LlamaForCausalLM",
+    "LlamaForCausalLMEagle",
+    "LlamaForCausalLMEagle3",
+    "LlamaForClassification",
+    "LlamaForSequenceClassification",
+    "LlamaForSequenceClassificationWithNormal_Weights",
+    "LlavaForConditionalGeneration",
+    "LlavaLlamaForCausalLM",
+    "LlavaMistralForCausalLM",
+    "LlavaQwenForCausalLM",
+    "LlavaVidForCausalLM",
+    "LocateAnythingForConditionalGeneration",
+    "LongcatFlashForCausalLM",
+    "LongcatFlashForCausalLMNextN",
+    "Mamba2ForCausalLM",
+    "MellumForCausalLM",
+    "MiDashengLMModel",
+    "MiMoForCausalLM",
+    "MiMoMTP",
+    "MiMoV2ASRForCausalLM",
+    "MiMoV2FlashForCausalLM",
+    "MiMoV2ForCausalLM",
+    "MiMoV2MTP",
+    "MindSporeForCausalLM",
+    "MiniCPM3ForCausalLM",
+    "MiniCPMForCausalLM",
+    "MiniCPMO",
+    "MiniCPMSALAForCausalLM",
+    "MiniCPMV",
+    "MiniCPMV4_6ForConditionalGeneration",
+    "MiniCPMV4_7ForConditionalGeneration",
+    "MiniMaxDFlash2DraftModel",
+    "MiniMaxM2ForCausalLM",
+    "MiniMaxM3SparseForCausalLM",
+    "MiniMaxM3SparseForConditionalGeneration",
+    "Ministral3ForCausalLM",
+    "Mistral3ForConditionalGeneration",
+    "MistralForCausalLM",
+    "MistralForCausalLMEagle",
+    "MistralLarge3ForCausalLM",
+    "MistralLarge3ForCausalLMEagle",
+    "MistralModel",
+    "MixtralForCausalLM",
+    "MllamaForConditionalGeneration",
+    "MossVLForConditionalGeneration",
+    "MultiModalityCausalLM",
+    "MuseGlimmerAssistantModel",
+    "MuseGlimmerForCausalLM",
+    "MuseGlimmerForConditionalGeneration",
+    "MuseSparkForConditionalGeneration",
+    "NVILAForConditionalGeneration",
+    "NVILALiteForConditionalGeneration",
+    "NanbeigeForCausalLM",
+    "NanbeigeForSequenceClassification",
+    "NemotronHForCausalLM",
+    "NemotronHForCausalLMMTP",
+    "NemotronHPuzzleForCausalLM",
+    "NemotronH_Nano_Omni_Reasoning_V3",
+    "NemotronH_Nano_VL_V2",
+    "NemotronH_Omni_Reasoning_V3",
+    "OPTForCausalLM",
+    "Olmo2ForCausalLM",
+    "OlmoForCausalLM",
+    "OlmoeForCausalLM",
+    "OrionForCausalLM",
+    "POINTSV15ChatModel",
+    "PaddleOCRVLForConditionalGeneration",
+    "PersimmonForCausalLM",
+    "Phi3ForCausalLM",
+    "Phi3SmallForCausalLM",
+    "Phi4MMForCausalLM",
+    "PhiForCausalLM",
+    "PhiMoEForCausalLM",
+    "PixtralForConditionalGeneration",
+    "PixtralVisionModel",
+    "QWenLMHeadModel",
+    "QuantMixtralForCausalLM",
+    "Qwen2AudioForConditionalGeneration",
+    "Qwen2ForCausalLM",
+    "Qwen2ForCausalLMEagle",
+    "Qwen2ForRewardModel",
+    "Qwen2ForSequenceClassification",
+    "Qwen2MoeForCausalLM",
+    "Qwen2VLForConditionalGeneration",
+    "Qwen2_5_VLForConditionalGeneration",
+    "Qwen3ASRForConditionalGeneration",
+    "Qwen3DSparkModel",
+    "Qwen3ForCausalLM",
+    "Qwen3ForRewardModel",
+    "Qwen3ForSequenceClassification",
+    "Qwen3Model",
+    "Qwen3MoeForCausalLM",
+    "Qwen3MoeForCausalLMMTP",
+    "Qwen3NextForCausalLM",
+    "Qwen3NextForCausalLMMTP",
+    "Qwen3OmniMoeForConditionalGeneration",
+    "Qwen3VLForConditionalGeneration",
+    "Qwen3VLMoeForConditionalGeneration",
+    "Qwen3_5ForCausalLM",
+    "Qwen3_5ForCausalLMMTP",
+    "Qwen3_5ForConditionalGeneration",
+    "Qwen3_5MoeForCausalLM",
+    "Qwen3_5MoeForConditionalGeneration",
+    "Qwen4ExpForCausalLMMTP",
+    "Qwen4ExpForConditionalGeneration",
+    "SDARForCausalLM",
+    "SDARMoeForCausalLM",
+    "Sarashina2VisionForCausalLM",
+    "SarvamMLAForCausalLM",
+    "SarvamMoEForCausalLM",
+    "SolarForCausalLM",
+    "Spark2_5ForCausalLM",
+    "StableLmForCausalLM",
+    "Starcoder2ForCausalLM",
+    "Step3VLForConditionalGeneration",
+    "Step3p5ForCausalLM",
+    "Step3p5MTP",
+    "Step3p7ForConditionalGeneration",
+    "StepVLForConditionalGeneration",
+    "TeleFLMForCausalLM",
+    "TorchNativeLlamaForCausalLM",
+    "TorchNativePhi3ForCausalLM",
+    "TransformersEmbeddingModel",
+    "TransformersForCausalLM",
+    "TransformersForSequenceClassification",
+    "TransformersMoEEmbeddingModel",
+    "TransformersMoEForCausalLM",
+    "TransformersMoEForSequenceClassification",
+    "TransformersMultiModalEmbeddingModel",
+    "TransformersMultiModalForCausalLM",
+    "TransformersMultiModalForSequenceClassification",
+    "TransformersMultiModalMoEEmbeddingModel",
+    "TransformersMultiModalMoEForCausalLM",
+    "TransformersMultiModalMoEForSequenceClassification",
+    "UnlimitedOCRForCausalLM",
+    "VoxtralForConditionalGeneration",
+    "WhisperForConditionalGeneration",
+    "XLMRobertaForSequenceClassification",
+    "XLMRobertaModel",
+    "XllmForCausalLM",
+    "XverseForCausalLM",
+    "XverseMoeForCausalLM",
+    "YiVLForCausalLM",
+    "ZayaForCausalLM"
+   ],
+   "engine": "sglang",
+   "env_vars": [
+    "ASCEND_NPU_PHY_ID",
+    "DEEP_NORMAL_MODE_USE_INT8_QUANT",
+    "DISABLE_OPENAPI_DOC",
+    "ENABLE_ASCEND_TRANSFER_WITH_MOONCAKE",
+    "EXA_API_KEY",
+    "FLASHINFER_NVFP4_4OVER6",
+    "FLASHINFER_NVFP4_4OVER6_E4M3_USE_256",
+    "HF_HUB_DISABLE_XET",
+    "IS_H200",
+    "MOONCAKE_CHECK_SERVER",
+    "MOONCAKE_CLIENT",
+    "MOONCAKE_DEVICE",
+    "MOONCAKE_ENABLE_SSD_OFFLOAD",
+    "MOONCAKE_GLOBAL_SEGMENT_SIZE",
+    "MOONCAKE_LOCAL_HOSTNAME",
+    "MOONCAKE_MASTER",
+    "MOONCAKE_MASTER_METRICS_PORT",
+    "MOONCAKE_OFFLOAD_FILE_STORAGE_PATH",
+    "MOONCAKE_PROTOCOL",
+    "MOONCAKE_STANDALONE_STORAGE",
+    "MOONCAKE_TENANT_ID",
+    "MOONCAKE_TE_META_DATA_SERVER",
+    "SGLANG_AITER_ASM_PREFILL_HD128",
+    "SGLANG_AITER_FUSE_RMSNORM_PAD",
+    "SGLANG_AITER_GFX942_BLOCKSCALE_USE_CK",
+    "SGLANG_AITER_HONOR_EXPLICIT_MEM_FRACTION",
+    "SGLANG_AITER_INTREE_GEMM_TUNE",
+    "SGLANG_AITER_INTREE_MHC_TILE_M16",
+    "SGLANG_AITER_KV_CACHE_LAYOUT",
+    "SGLANG_AITER_MEGA_EPLB_FUSED_MAP_RECORD",
+    "SGLANG_AITER_MEGA_EPLB_PREFILL_ONLY",
+    "SGLANG_AITER_MEGA_RANK_SYNC",
+    "SGLANG_AITER_MLA_AUTO_KV_SPLITS",
+    "SGLANG_AITER_MLA_DECODE_BACKEND",
+    "SGLANG_AITER_MLA_GLUON",
+    "SGLANG_AITER_MLA_VERIFY_BACKEND",
+    "SGLANG_AITER_MOE_SORTING_DISPATCH_POLICY",
+    "SGLANG_AITER_PAGED_PREFILL_ASM",
+    "SGLANG_AITER_UNIFIED_DRAFT_EXTEND",
+    "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN",
+    "SGLANG_AMD_FLYDSL_MEGA_MOE_DECODE_MTPR",
+    "SGLANG_AMD_FLYDSL_MEGA_MOE_MTPR",
+    "SGLANG_AMD_FLYDSL_MEGA_QUANT",
+    "SGLANG_AMD_USE_FLYDSL_MEGA_MOE",
+    "SGLANG_AUTO_NUMA_BIND",
+    "SGLANG_BACKUP_PORT_BASE",
+    "SGLANG_BATCH_TOKENIZER_OUTPUTS",
+    "SGLANG_BLACKWELL_OVERLAP_SHARED_EXPERTS_OUTSIDE_SBO",
+    "SGLANG_CACHE_DIR",
+    "SGLANG_CACHE_HIT_RATE_WINDOW_SECONDS",
+    "SGLANG_CHECK_KV_PAGE_INVARIANTS",
+    "SGLANG_CHUNKED_PREFIX_CACHE_THRESHOLD",
+    "SGLANG_CLIP_MAX_NEW_TOKENS_ESTIMATION",
+    "SGLANG_COMPACTION_MAX_PAGES_PER_MOVE",
+    "SGLANG_CPU_QUANTIZATION",
+    "SGLANG_CRASH_ON_JIT_COMPILE",
+    "SGLANG_CRASH_ON_NUMA_BIND_FAILURE",
+    "SGLANG_CRASH_ON_TRITON_LOAD_AFTER_READY",
+    "SGLANG_CUDA_COREDUMP",
+    "SGLANG_CUDA_COREDUMP_BEFORE_CRASH",
+    "SGLANG_CUDA_COREDUMP_BEFORE_CRASH_WAIT_SECS",
+    "SGLANG_CUDA_COREDUMP_DIR",
+    "SGLANG_CUSTOM_ALL_REDUCE_V2_MAX_SIZE_KB",
+    "SGLANG_CUTE_AOT_CACHE_DIR",
+    "SGLANG_DATA_PARALLEL_BUDGET_INTERVAL",
+    "SGLANG_DEBUG_HISPARSE_SKIP_IO",
+    "SGLANG_DEBUG_MEMORY_POOL",
+    "SGLANG_DEBUG_POISON_POOL",
+    "SGLANG_DEBUG_REVERT_PR",
+    "SGLANG_DEBUG_SYMM_MEM",
+    "SGLANG_DEEPEP_BF16_DISPATCH",
+    "SGLANG_DEEPEP_LL_COMBINE_SEND_NUM_SMS",
+    "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK",
+    "SGLANG_DEEPEP_V2_ENABLE_PREFILL_EXPAND",
+    "SGLANG_DEEPEP_V2_FORCE_MAX_LEN",
+    "SGLANG_DEEPEP_V2_NUM_MAX_DISPATCH_TOKENS_PER_RANK",
+    "SGLANG_DEEPEP_V2_NUM_SMS",
+    "SGLANG_DEEPEP_V2_TRACE_CONTIG",
+    "SGLANG_DEEPEP_V2_TRACE_MASKED",
+    "SGLANG_DEEPGEMM_MASKED_MEMORY_BUDGET_FRACTION",
+    "SGLANG_DEEPGEMM_PDL",
+    "SGLANG_DEEPGEMM_SANITY_CHECK",
+    "SGLANG_DEEPGEMM_STANDARD_LAYOUT",
+    "SGLANG_DEFAULT_THINKING",
+    "SGLANG_DETECT_SLOW_RANK",
+    "SGLANG_DETERMINISTIC_NCCL_NCHANNELS",
+    "SGLANG_DFLASH_EAGER_DRAFT_SAMPLER",
+    "SGLANG_DG_CACHE_DIR",
+    "SGLANG_DG_USE_NVRTC",
+    "SGLANG_DIAG_BYPASS_HEALTH_GENERATE",
+    "SGLANG_DISABLED_MODEL_ARCHS",
+    "SGLANG_DISABLE_AITER_FUSED_FP8_DSA_INDEXER",
+    "SGLANG_DISABLE_CONSECUTIVE_PREFILL_OVERLAP",
+    "SGLANG_DISABLE_DRAFT_EXTEND_CUDA_GRAPH",
+    "SGLANG_DISABLE_DSA_INDEXER_FUSION",
+    "SGLANG_DISABLE_FUSED_MAMBA_SLOT_OPS",
+    "SGLANG_DISABLE_GFX1250_FP8_GEMM",
+    "SGLANG_DISABLE_HISPARSE_PREFETCH",
+    "SGLANG_DISABLE_KDA_PREFILL_GRAPH_EXTEND",
+    "SGLANG_DISABLE_LAZY_COMPACTION",
+    "SGLANG_DISABLE_LEAN_ATTENTION",
+    "SGLANG_DISABLE_M3_FP8_ATTN_GEMM",
+    "SGLANG_DISABLE_MSA",
+    "SGLANG_DISABLE_MSA_V1_Q8KV4",
+    "SGLANG_DISABLE_OUTLINES_DISK_CACHE",
+    "SGLANG_DISABLE_STATIC_WATERFILL",
+    "SGLANG_DISAGGREGATION_ALL_CP_RANKS_TRANSFER",
+    "SGLANG_DISAGGREGATION_BOOTSTRAP_ENTRY_CLEANUP_INTERVAL",
+    "SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT",
+    "SGLANG_DISAGGREGATION_DEFERRED_DECODE_KV_RELEASE",
+    "SGLANG_DISAGGREGATION_DEFERRED_DECODE_KV_RELEASE_TIMEOUT",
+    "SGLANG_DISAGGREGATION_ENGINE_INIT_TIMEOUT",
+    "SGLANG_DISAGGREGATION_FORCE_QUERY_PREFILL_DP_RANK",
+    "SGLANG_DISAGGREGATION_HEARTBEAT_INTERVAL",
+    "SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE",
+    "SGLANG_DISAGGREGATION_NIXL_BACKEND",
+    "SGLANG_DISAGGREGATION_NIXL_BACKEND_PARAMS",
+    "SGLANG_DISAGGREGATION_QUEUE_SIZE",
+    "SGLANG_DISAGGREGATION_SAMPLING_MASK_MAX_TOKENS",
+    "SGLANG_DISAGGREGATION_THREAD_POOL_SIZE",
+    "SGLANG_DISAGGREGATION_WAITING_TIMEOUT",
+    "SGLANG_DISAGGREGATION_ZMQ_MAX_SOCKETS",
+    "SGLANG_DISAGGREGATION_ZMQ_SEND_TIMEOUT",
+    "SGLANG_DISAGG_PREFILL_EARLY_SEND_CACHED_PREFIX",
+    "SGLANG_DISAGG_STAGING_BUFFER",
+    "SGLANG_DISAGG_STAGING_POOL_SIZE_MB",
+    "SGLANG_DISTRIBUTED_INIT_METHOD_OVERRIDE",
+    "SGLANG_DP_USE_REDUCE_SCATTER",
+    "SGLANG_DSA_FUSE_TOPK",
+    "SGLANG_DSA_HIP_DISABLE_PRESHUFFLE",
+    "SGLANG_DSA_MQA_LOGITS_FREE_MEM_FRACTION",
+    "SGLANG_DSA_PREFILL_DENSE_ATTN_KV_LEN_THRESHOLD",
+    "SGLANG_DSA_TOPK_BROADCAST",
+    "SGLANG_DSA_TOPK_FLASHINFER_DETERMINISTIC",
+    "SGLANG_DSA_TOPK_FLASHINFER_TIE_BREAK",
+    "SGLANG_DSPARK_ACCEPT_TAIL_MAX_BS",
+    "SGLANG_DSPARK_ACCEPT_TAIL_MIN_BS",
+    "SGLANG_DSPARK_BLOCK_ACCEPT_ESTIMATE_PATH",
+    "SGLANG_DSPARK_BLOCK_ACCEPT_ONLINE_INTERVAL",
+    "SGLANG_DSPARK_CONFIDENCE_RELAY_LAG_STEPS",
+    "SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS",
+    "SGLANG_DSPARK_DEBUG_CONFIDENCE_PREFIX_SCHEDULER",
+    "SGLANG_DSPARK_DEBUG_DUMP",
+    "SGLANG_DSPARK_DEFER_CONTEXT_KV",
+    "SGLANG_DSPARK_EMBED_IN_GRAPH",
+    "SGLANG_DSPARK_ENABLE_MULTI_STREAM",
+    "SGLANG_DSPARK_ENABLE_SPS_RECORD",
+    "SGLANG_DSPARK_FAST_KERNEL",
+    "SGLANG_DSPARK_FOLDED_PROPOSAL",
+    "SGLANG_DSPARK_FP32_LM_HEAD",
+    "SGLANG_DSPARK_FUSED_ACCEPT_TAIL",
+    "SGLANG_DSPARK_LOG_SPS_PRED_INTERVAL",
+    "SGLANG_DSPARK_NVLINK_VOCAB_GATHER",
+    "SGLANG_DSPARK_OPT_MARKOV_W2_BF16",
+    "SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD",
+    "SGLANG_DSPARK_SIMULATE_FOLD",
+    "SGLANG_DSPARK_STACKED_CTX_KV",
+    "SGLANG_DSPARK_STS_COLLECT_PATH",
+    "SGLANG_DSPARK_USE_GREEDY_DRAFT",
+    "SGLANG_DSV41_ENGRAM_HOST_TABLE_LAYOUT",
+    "SGLANG_DSV41_FUSED_WO_A",
+    "SGLANG_DSV41_REASONING_EFFORT",
+    "SGLANG_DSV4_COMPRESSED_KV_LAYOUT",
+    "SGLANG_DSV4_COMPRESS_STATE_DTYPE",
+    "SGLANG_DSV4_DECODER_TAIL_GRAPH_MAX_ROWS",
+    "SGLANG_DSV4_DECODER_TAIL_GRAPH_MIN_PREFILL_TOKENS",
+    "SGLANG_DSV4_DENSE_MXSCALE",
+    "SGLANG_DSV4_DENSE_MXSCALE_SHAPES",
+    "SGLANG_DSV4_FLYDSL_DECODE",
+    "SGLANG_DSV4_FLYDSL_DECODE_H128",
+    "SGLANG_DSV4_FLYDSL_DECODE_SOURCE",
+    "SGLANG_DSV4_FP4_DEQUANT",
+    "SGLANG_DSV4_FP4_EXPERTS",
+    "SGLANG_DSV4_FP4_LOGITS_BUDGET_MB",
+    "SGLANG_DSV4_FP8_DECODE_SPLIT_CTX",
+    "SGLANG_DSV4_FP8_DECODE_SPLIT_MODEL",
+    "SGLANG_DSV4_FP8_HCA_PERSIST",
+    "SGLANG_DSV4_FP8_HCA_PERSIST_MIN_ROWS",
+    "SGLANG_DSV4_KV_LAYOUT",
+    "SGLANG_DSV4_REASONING_EFFORT",
+    "SGLANG_DSV4_UNIFIED_KV_FP8",
+    "SGLANG_DSV4_USE_BF16_KV_QUANT_SOURCE",
+    "SGLANG_DYNAMIC_CHUNKING_SMOOTH_FACTOR",
+    "SGLANG_EAGER_INPUT_NO_COPY",
+    "SGLANG_EMBEDDINGS_SPARSE_HEAD",
+    "SGLANG_EMBEDDING_POOL_SIZE_MB",
+    "SGLANG_EMPTY_CACHE_INTERVAL",
+    "SGLANG_ENABLE_ASYNC_ASSERT",
+    "SGLANG_ENABLE_BF16_SPLITK_GEMM",
+    "SGLANG_ENABLE_COLOCATED_BATCH_GEN",
+    "SGLANG_ENABLE_CUDA_GRAPH_CAPTURE_TRACE",
+    "SGLANG_ENABLE_CUDA_GRAPH_DEDUP",
+    "SGLANG_ENABLE_DELAY_SAMPLE",
+    "SGLANG_ENABLE_DETERMINISTIC_INFERENCE",
+    "SGLANG_ENABLE_DISAGG_PREFILL_CONTINUOUS_INPUT_POLLING",
+    "SGLANG_ENABLE_DISAGG_SAMPLING_MASK",
+    "SGLANG_ENABLE_DP_GATHER_FP8",
+    "SGLANG_ENABLE_DP_SPEC_PREFILL_COORDINATION",
+    "SGLANG_ENABLE_DSA_Q8KV8_BORN_FP8_Q",
+    "SGLANG_ENABLE_DSA_Q8KV8_KV_CAT_FUSION",
+    "SGLANG_ENABLE_DSA_Q8KV8_QPREP_OVERLAP",
+    "SGLANG_ENABLE_DSA_Q8KV8_TOPK_LENGTH",
+    "SGLANG_ENABLE_DSV41_ENGRAM_HOST_TABLE",
+    "SGLANG_ENABLE_EMBED_REPLICATION",
+    "SGLANG_ENABLE_FAILED_SESSION_PROBE",
+    "SGLANG_ENABLE_FAST_INPUT_LOGPROBS",
+    "SGLANG_ENABLE_FLUX3_PRIMS_TS_AUTOTUNE",
+    "SGLANG_ENABLE_FP8_GEMM_CONFIG_TUNE",
+    "SGLANG_ENABLE_GDN_DECODE_FUSED_PROJ_CONV",
+    "SGLANG_ENABLE_GRAPH_POOL_BORROW",
+    "SGLANG_ENABLE_GRAPH_POOL_PRECARVE",
+    "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION",
+    "SGLANG_ENABLE_HICACHE_SWA_TAIL_ONLY_BACKUP",
+    "SGLANG_ENABLE_JIT_DEEPGEMM",
+    "SGLANG_ENABLE_KV_SHARD_ZERO_SM_GATHER",
+    "SGLANG_ENABLE_LILICORR_SAMPLING",
+    "SGLANG_ENABLE_LOGPROB_CHUNK",
+    "SGLANG_ENABLE_LORA_CSGMV_SPLIT_K",
+    "SGLANG_ENABLE_METADATA_GLUE_GRAPH",
+    "SGLANG_ENABLE_METRICS_DEVICE_TIMER",
+    "SGLANG_ENABLE_METRICS_DP_ATTENTION",
+    "SGLANG_ENABLE_MOE_DEFERRED_FINALIZE",
+    "SGLANG_ENABLE_MTP_BOUNDARY_KV_FIX",
+    "SGLANG_ENABLE_MUSE_SPARK_AG_NORM_FUSION",
+    "SGLANG_ENABLE_MUSE_SPARK_FINALIZE_AR",
+    "SGLANG_ENABLE_NAN_LOGITS_CHECK",
+    "SGLANG_ENABLE_NVTX_OPERATIONS",
+    "SGLANG_ENABLE_NVTX_SCHEDULER",
+    "SGLANG_ENABLE_OVERLAP_PLAN_STREAM",
+    "SGLANG_ENABLE_PCG_DSV2_DUAL_STREAM",
+    "SGLANG_ENABLE_PCIE_IPC_ALLREDUCE",
+    "SGLANG_ENABLE_POST_CAPTURE_KV_SIZING",
+    "SGLANG_ENABLE_PP_SPEC",
+    "SGLANG_ENABLE_PREFILL_WAR_READ_DONE",
+    "SGLANG_ENABLE_QWEN4_PLE_FUSION",
+    "SGLANG_ENABLE_QWEN_DEEPEP_SHARED_OVERLAP",
+    "SGLANG_ENABLE_RANK_CONSENSUS_CHECKER",
+    "SGLANG_ENABLE_REQUEST_DECOMPRESSION",
+    "SGLANG_ENABLE_REQUEST_HEADER_OVERRIDES",
+    "SGLANG_ENABLE_RESPONSE_TEMPLATE_TURN_GRAMMAR",
+    "SGLANG_ENABLE_SINGLE_CG_DRAFT",
+    "SGLANG_ENABLE_SPLITKV_VERIFY",
+    "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_BUSY",
+    "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE",
+    "SGLANG_ENABLE_TORCH_COMPILE",
+    "SGLANG_ENABLE_TORCH_INFERENCE_MODE",
+    "SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK",
+    "SGLANG_ENABLE_TREE_CACHE_SANITY_CHECK",
+    "SGLANG_ENABLE_WAITING_PREFIX_REFRESH",
+    "SGLANG_ENABLE_WAR_BARRIER",
+    "SGLANG_ENABLE_WEIGHT_LOADER_V2",
+    "SGLANG_ENCODER_BOOTSTRAP_EVICTED_TTL",
+    "SGLANG_ENCODER_BOOTSTRAP_HEALTH_CHECK_INTERVAL",
+    "SGLANG_ENCODER_BOOTSTRAP_HEALTH_CHECK_TIMEOUT",
+    "SGLANG_ENCODER_DISPATCH_MIN_ITEMS",
+    "SGLANG_ENCODER_DP_WORKER_MAX_INFLIGHT",
+    "SGLANG_ENCODER_GRPC_TIMEOUT_SECS",
+    "SGLANG_ENCODER_HTTP_TIMEOUT",
+    "SGLANG_ENCODER_IMAGE_PROCESSOR_USE_GPU",
+    "SGLANG_ENCODER_MAX_BATCH_SIZE",
+    "SGLANG_ENCODER_MM_LOAD_WORKERS",
+    "SGLANG_ENCODER_MM_RECEIVER_MODE",
+    "SGLANG_ENCODER_PREPROC_WORKERS",
+    "SGLANG_ENCODER_RECV_TIMEOUT",
+    "SGLANG_ENCODER_REQ_TIMEOUT",
+    "SGLANG_ENCODER_SEND_TIMEOUT",
+    "SGLANG_EPLB_HEATMAP_COLLECTION_INTERVAL",
+    "SGLANG_EPLB_P2P_BATCH_CHUNK_SIZE",
+    "SGLANG_EXACT_CHUNK_FILL",
+    "SGLANG_EXA_INCLUDE_HIGHLIGHTS",
+    "SGLANG_EXA_NUM_RESULTS",
+    "SGLANG_EXA_SEARCH_TYPE",
+    "SGLANG_EXPERIMENTAL_DSA_KPOOL_METADATA_FUSION",
+    "SGLANG_EXPERIMENTAL_LORA_OPTI",
+    "SGLANG_EXPERIMENTAL_ONLINE_C128_MTP",
+    "SGLANG_EXPERT_DISTRIBUTION_RECORDER_DIR",
+    "SGLANG_EXPERT_LOCATION_UPDATER_CANARY",
+    "SGLANG_EXPERT_LOCATION_UPDATER_LOG_INPUT",
+    "SGLANG_EXPERT_LOCATION_UPDATER_LOG_METRICS",
+    "SGLANG_EXPOSE_OWN_ENV_VARS",
+    "SGLANG_EXTERNAL_MM_MODEL_ARCH",
+    "SGLANG_EXTERNAL_MM_PROCESSOR_PACKAGE",
+    "SGLANG_EXTERNAL_MODEL_PACKAGE",
+    "SGLANG_FAILED_SESSION_IDLE_TIMEOUT_S",
+    "SGLANG_FAILED_SESSION_PROBE_INTERVAL_S",
+    "SGLANG_FAILED_SESSION_PROBE_MAX_INTERVAL_S",
+    "SGLANG_FLASHINFER_AUTOTUNE_CACHE",
+    "SGLANG_FLASHINFER_AUTOTUNE_EXTEND",
+    "SGLANG_FLASHINFER_CUTEDSL_NVFP4_W4A16",
+    "SGLANG_FLASHINFER_DECODE_SPLIT_TILE_SIZE",
+    "SGLANG_FLASHINFER_MEGAMOE_COMBINE_DTYPE",
+    "SGLANG_FLASHINFER_MEGAMOE_IN_KERNEL_FC2_REDUCE",
+    "SGLANG_FLASHINFER_MEGAMOE_MAX_TOKENS_PER_RANK",
+    "SGLANG_FLASHINFER_MOE_FUSED_FINALIZE",
+    "SGLANG_FLASHINFER_NUM_MAX_DISPATCH_TOKENS_PER_RANK",
+    "SGLANG_FLASHINFER_NVFP4_PER_TOKEN_ACTIVATION",
+    "SGLANG_FLASHINFER_PREFILL_SPLIT_TILE_SIZE",
+    "SGLANG_FLASHINFER_USE_PAGED",
+    "SGLANG_FLASHINFER_WORKSPACE_SIZE",
+    "SGLANG_FORCE_COARSE_WAR_BARRIER",
+    "SGLANG_FORCE_CONFIDENTIAL_COMPUTE",
+    "SGLANG_FORCE_CPU_IMAGE_PREPROCESSING",
+    "SGLANG_FORCE_CUSTOM_ALL_REDUCE_V2_PULL_SIZE_KB",
+    "SGLANG_FORCE_CUSTOM_ALL_REDUCE_V2_PUSH_SIZE_KB",
+    "SGLANG_FORCE_FP8_MARLIN",
+    "SGLANG_FORCE_FUSED_OP_BACKEND",
+    "SGLANG_FORCE_LEAN_GRID_CU_MULT",
+    "SGLANG_FORCE_MXFP8_BLOCK_CONVERT_DENSE",
+    "SGLANG_FORCE_SHUTDOWN",
+    "SGLANG_FORCE_STREAM_INTERVAL",
+    "SGLANG_FORWARD_UNKNOWN_TOOLS",
+    "SGLANG_FP4_IGNORED_LAYERS",
+    "SGLANG_FP8_IGNORED_LAYERS",
+    "SGLANG_FP8_PAGED_MQA_LOGITS_TORCH",
+    "SGLANG_GDN_DECODE_FUSION_LOG_LAYER_HITS",
+    "SGLANG_GDN_DECODE_FUSION_VERIFY_REAL_TENSORS",
+    "SGLANG_GEMMA_OUT_OF_PLACE_POSITION_MUTATION",
+    "SGLANG_GFX1250_W4A8_BACKEND",
+    "SGLANG_GFX1250_W4A8_KERNEL_GATHER",
+    "SGLANG_GLM_NEXTN_MOE_PTPC",
+    "SGLANG_GRAMMAR_MAX_POLL_ITERATIONS",
+    "SGLANG_GRAMMAR_POLL_INTERVAL",
+    "SGLANG_GRAPH_BATCH_CAPTURE",
+    "SGLANG_GRPC_PORT",
+    "SGLANG_GRPC_WORKER_THREADS",
+    "SGLANG_HACK_FLASHMLA_BACKEND",
+    "SGLANG_HICACHE_BUFFER_ANCHOR_LOCK_CAP",
+    "SGLANG_HICACHE_DECODE_OFFLOAD_STRIDE",
+    "SGLANG_HICACHE_FILE_BACKEND_ENABLE_METADATA_CACHE",
+    "SGLANG_HICACHE_FILE_BACKEND_EVICTION_RATIO",
+    "SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE",
+    "SGLANG_HICACHE_FILE_BACKEND_METADATA_TTL",
+    "SGLANG_HICACHE_FILE_BACKEND_MIN_FREE_SPACE",
+    "SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR",
+    "SGLANG_HICACHE_HF3FS_CONFIG_PATH",
+    "SGLANG_HICACHE_HOST_PARALLEL_ALLOC_THREADS",
+    "SGLANG_HICACHE_HOST_REGISTER_CHUNK_GB",
+    "SGLANG_HICACHE_MEMCACHE_CONFIG_PATH",
+    "SGLANG_HICACHE_MOONCAKE_CONFIG_PATH",
+    "SGLANG_HICACHE_MOONCAKE_REUSE_TE",
+    "SGLANG_HICACHE_NIXL_BACKEND_STORAGE_DIR",
+    "SGLANG_HICACHE_NIXL_USE_DIRECT_IO",
+    "SGLANG_HICACHE_SKIP_HOST_DUPLICATE_RECLAIM",
+    "SGLANG_HICACHE_TMA_TRANSFER",
+    "SGLANG_HIP_DSPARK_DRAFT_RAW_METADATA",
+    "SGLANG_HIP_DSV41_INDEX_K_PAGE8",
+    "SGLANG_HIP_DSV4_C4_INDEXER_ROWGROUP",
+    "SGLANG_HIP_FFN_NORM_MXFP8",
+    "SGLANG_HIP_FP4_INDEXER_ROWGROUP",
+    "SGLANG_HIP_MHC_BOUNDARY_WIDE_TILE",
+    "SGLANG_HIP_SHARED_ACT_MXFP8",
+    "SGLANG_HIP_WO_A_MXFP8",
+    "SGLANG_HTTP_SERVER_APP_PATH",
+    "SGLANG_HUGEPAGE_SIZE",
+    "SGLANG_HUMMING_INPUT_QUANT_CONFIG",
+    "SGLANG_HUMMING_MOE_GEMM_TYPE",
+    "SGLANG_HUMMING_ONLINE_QUANT_CONFIG",
+    "SGLANG_HUMMING_USE_F16_ACCUM",
+    "SGLANG_IMAGE_MAX_PIXELS",
+    "SGLANG_INIT_NEW_TOKEN_RATIO",
+    "SGLANG_INKLING_DEFAULT_REASONING_EFFORT",
+    "SGLANG_INKLING_RS_MM_PREPROCESS",
+    "SGLANG_INT4_WEIGHT",
+    "SGLANG_INVARIANT_CHECK",
+    "SGLANG_IN_DEEPGEMM_PRECOMPILE_STAGE",
+    "SGLANG_IS_FIRST_RANK_ON_NODE",
+    "SGLANG_IS_FLASHINFER_AVAILABLE",
+    "SGLANG_IS_IN_CI",
+    "SGLANG_IS_IN_CI_AMD",
+    "SGLANG_JIT_BENCHMARK_DISABLE_LOG_BANDWIDTH",
+    "SGLANG_JIT_BENCHMARK_DISABLE_LOG_FLOPS",
+    "SGLANG_JIT_CACHE_DEBUG",
+    "SGLANG_JIT_CACHE_DIR",
+    "SGLANG_JIT_CACHE_KEEP",
+    "SGLANG_JIT_DEEPGEMM_FAST_WARMUP",
+    "SGLANG_JIT_DEEPGEMM_PRECOMPILE",
+    "SGLANG_JIT_FORCE_RECOMPILE",
+    "SGLANG_JIT_KERNEL_RUN_FULL_TESTS",
+    "SGLANG_JIT_LOG_LEVEL",
+    "SGLANG_JIT_LOG_RESOURCE_USAGE",
+    "SGLANG_K3_AR_FUSION",
+    "SGLANG_K3_FUSED_FRONT",
+    "SGLANG_K3_RADIX4_TOPK",
+    "SGLANG_K3_SP_ATTN_RES",
+    "SGLANG_K3_SP_COLLECTIVE",
+    "SGLANG_KDA_PREFILL_GRAPH_MAX_SEQS",
+    "SGLANG_KILLPG_ON_SCHEDULER_EXCEPTION",
+    "SGLANG_KIMI_K3_VIT_CUDA_GRAPH_CACHE_CAPACITY",
+    "SGLANG_KIMI_K3_VIT_CUDA_GRAPH_MAX_SEQLEN",
+    "SGLANG_KIMI_K3_VIT_CUDA_GRAPH_MIN_HITS",
+    "SGLANG_KV_CANARY_ENABLE_MHA_V",
+    "SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE",
+    "SGLANG_KV_CANARY_ENABLE_VERIFY_TOKEN_ASSERT",
+    "SGLANG_KV_CANARY_ENABLE_WRITE_INPUT_ASSERT",
+    "SGLANG_KV_CANARY_PERTURB_NEXT_TOKEN_SWAP_PROB",
+    "SGLANG_KV_CANARY_PERTURB_REAL_KV_POST_FORWARD_PROB",
+    "SGLANG_KV_CANARY_PERTURB_REAL_KV_UNUSED_CACHE_PROB",
+    "SGLANG_KV_CANARY_PERTURB_REAL_KV_USED_PROB",
+    "SGLANG_KV_CANARY_PERTURB_REQ_TO_TOKEN_PROB",
+    "SGLANG_KV_CANARY_PERTURB_TARGET_GROUP",
+    "SGLANG_KV_CANARY_PERTURB_WARMUP_STEPS",
+    "SGLANG_KV_CANARY_RING_CAPACITY",
+    "SGLANG_KV_CANARY_STATS_PRINT_EVERY_N_STEPS",
+    "SGLANG_KV_CANARY_SWA_DIVERGENCE_STATS_INTERVAL",
+    "SGLANG_LAZY_COMPACTION_MAX_MOVES_PER_CALL",
+    "SGLANG_LILICORR_REQUIRE_SAMPLING",
+    "SGLANG_LOAD_SNAPSHOT_USE_ZMQ",
+    "SGLANG_LOGPROB_CHUNK_SIZE",
+    "SGLANG_LOG_DECODE_GRAPH_KEY",
+    "SGLANG_LOG_EXPERT_LOCATION_METADATA",
+    "SGLANG_LOG_FORWARD_ITERS",
+    "SGLANG_LOG_GC",
+    "SGLANG_LOG_LAZY_COMPACTION_STATS",
+    "SGLANG_LOG_LAZY_COMPACTION_STATS_INTERVAL_SEC",
+    "SGLANG_LOG_MS",
+    "SGLANG_LOG_PICKLE_IPC_OBJECTS",
+    "SGLANG_LOG_REQUEST_EXCEEDED_MS",
+    "SGLANG_LOG_REQUEST_HEADERS",
+    "SGLANG_LOG_SCHEDULER_STATUS_INTERVAL",
+    "SGLANG_LOG_SCHEDULER_STATUS_TARGET",
+    "SGLANG_LORA_DENSE_CONFIG_DIR",
+    "SGLANG_LORA_MOE_CONFIG_DIR",
+    "SGLANG_M3_ALLOW_CUSTOM_AR",
+    "SGLANG_M3_USE_AITER_FUSED_QKNORM",
+    "SGLANG_MAMBA_CONV_DTYPE",
+    "SGLANG_MAMBA_SSM_DTYPE",
+    "SGLANG_MAX_BATCH_REQS_PER_HTTP_REQ",
+    "SGLANG_MAX_KV_CHUNK_CAPACITY",
+    "SGLANG_MAX_NEW_TOKENS_LIMIT",
+    "SGLANG_MAX_THINK_TOKENS",
+    "SGLANG_MEMORY_SAVER_CUDA_GRAPH",
+    "SGLANG_MEM_PROFILE_MAX_ENTRIES",
+    "SGLANG_MINICPM_DENSE_AS_SPARSE",
+    "SGLANG_MINICPM_FORCE_DENSE",
+    "SGLANG_MINICPM_FUSE_TOPK",
+    "SGLANG_MINIMAX_M3_FUSED_MOE_COMBINE",
+    "SGLANG_MINIMAX_M3_FUSED_SWIGLU_MXFP8",
+    "SGLANG_MINIMAX_M3_INDEXER_CP",
+    "SGLANG_MINIMAX_M3_INDEX_TOPK_FREQ",
+    "SGLANG_MINIMAX_NPU_NATIVE_ATTN",
+    "SGLANG_MINIMAX_NPU_NATIVE_INDEXER",
+    "SGLANG_MINIMAX_NPU_PREFILL_FIA",
+    "SGLANG_MINIMAX_VIT_TOKEN_BLOCK",
+    "SGLANG_MIN_NEW_TOKEN_RATIO_FACTOR",
+    "SGLANG_MLA_DECODE_TUNE",
+    "SGLANG_MLA_DEDUP_CHUNK_TOKENS",
+    "SGLANG_MLA_HCA_KV_SPLITS",
+    "SGLANG_MLX_CACHE_LIMIT_GB",
+    "SGLANG_MLX_CLEAR_CACHE_STEPS",
+    "SGLANG_MLX_FUSE_SWIGLU",
+    "SGLANG_MLX_USE_CUSTOM_ROPE",
+    "SGLANG_MM_AVOID_RETOKENIZE",
+    "SGLANG_MM_BUFFER_SIZE_MB",
+    "SGLANG_MM_FEATURE_CACHE_MB",
+    "SGLANG_MM_ITEM_MEM_POOL_RECYCLE_INTERVAL_SEC",
+    "SGLANG_MM_PRECOMPUTE_HASH",
+    "SGLANG_MM_SKIP_COMPUTE_HASH",
+    "SGLANG_MOE_COPY_WEIGHT_VIEWS_BEFORE_H2D",
+    "SGLANG_MOE_DEFERRED_FINALIZE_MAX_TOKENS",
+    "SGLANG_MOE_NVFP4_DISPATCH",
+    "SGLANG_MOE_PADDING",
+    "SGLANG_MOONCAKE_CUSTOM_MEM_POOL",
+    "SGLANG_MOONCAKE_MAX_TRANSFER_BATCH_INDICES",
+    "SGLANG_MOONCAKE_SEND_AUX_TCP",
+    "SGLANG_MORI_COMBINE_DTYPE",
+    "SGLANG_MORI_DISPATCH_DTYPE",
+    "SGLANG_MORI_EP_V2",
+    "SGLANG_MORI_MOE_MAX_INPUT_TOKENS",
+    "SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK",
+    "SGLANG_MORI_NUM_WORKERS",
+    "SGLANG_MORI_POST_BATCH_SIZE",
+    "SGLANG_MORI_PREALLOC_MAX_RECV_TOKENS",
+    "SGLANG_MORI_QP_PER_TRANSFER",
+    "SGLANG_MORI_RECV_BOUND",
+    "SGLANG_MORI_SEND_AUX_RDMA",
+    "SGLANG_MORI_TRANSFER_SHARDS",
+    "SGLANG_MORI_TRANSFER_TIMEOUT_MS",
+    "SGLANG_MORI_WAIT_POLL_MS",
+    "SGLANG_MUSA_FA3_FORCE_UPDATE_METADATA",
+    "SGLANG_NATIVE_MOVE_KV_CACHE",
+    "SGLANG_NCCL_ALL_GATHER_IN_OVERLAP_SCHEDULER_SYNC_BATCH",
+    "SGLANG_NEW_TOKEN_RATIO_DECAY_STEPS",
+    "SGLANG_NGRAM_FORCE_GREEDY_VERIFY",
+    "SGLANG_NIXL_EP_BF16_DISPATCH",
+    "SGLANG_NIXL_EP_NUM_MAX_DISPATCH_TOKENS_PER_RANK",
+    "SGLANG_NPU_ARCH35_REQUANT_BLOCK_FP8",
+    "SGLANG_NPU_ATTN_BACKEND_NEEDS_CPU_SEQ_LENS",
+    "SGLANG_NPU_DISABLE_ACL_FORMAT_WEIGHT",
+    "SGLANG_NPU_ENABLE_SPARSE_KV_OFFLOAD",
+    "SGLANG_NPU_FINE_GRAINED_MOE_DUAL_STREAM",
+    "SGLANG_NPU_FORWARD_NATIVE_GELUTANH",
+    "SGLANG_NPU_FORWARD_NATIVE_GEMMA_RMS_NORM",
+    "SGLANG_NPU_MEMCACHE_ENABLE_WARMUP",
+    "SGLANG_NPU_MOE_SITU_MXFP8_FUSED",
+    "SGLANG_NPU_USE_FIAS_V2_BSND",
+    "SGLANG_NPU_USE_MLAPO",
+    "SGLANG_NPU_USE_MULTI_STREAM",
+    "SGLANG_NPU_USE_SCATTER_PA_KV_CACHE",
+    "SGLANG_NPU_USE_TRITON_PREFIX_KV_CACHE_STORE",
+    "SGLANG_NPU_W4A4_NEW_PACKING",
+    "SGLANG_NUMA_BIND_V2",
+    "SGLANG_NVFP4_CKPT_FP8_GEMM_IN_ATTN",
+    "SGLANG_NVFP4_CKPT_FP8_NEXTN_MOE",
+    "SGLANG_ONE_VISIBLE_DEVICE_PER_PROCESS",
+    "SGLANG_OPT_BEAM_DECODE_GEMV",
+    "SGLANG_OPT_BF16_FP32_GEMM_ALGO",
+    "SGLANG_OPT_CUDA_GRAPH_FILL_FAST_PATH",
+    "SGLANG_OPT_DEEPGEMM_HC_PRENORM",
+    "SGLANG_OPT_DEEPGEMM_MEGA_GATE",
+    "SGLANG_OPT_DEEPGEMM_MEGA_MOE_FUSE_SHARED_EXPERTS",
+    "SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK",
+    "SGLANG_OPT_DEEPGEMM_MEGA_MOE_RESERVED_SMS",
+    "SGLANG_OPT_DG_COMPACT_EAGER",
+    "SGLANG_OPT_DG_MASKED_M_CAP",
+    "SGLANG_OPT_DSV41_BF16_INDEX_LOGITS",
+    "SGLANG_OPT_DSV41_BLOCKWISE_REJECTION",
+    "SGLANG_OPT_DSV41_DSPARK_DRAFT_PREP_FORK",
+    "SGLANG_OPT_DSV41_DSPARK_MID_FOLD",
+    "SGLANG_OPT_DSV41_DSPARK_ONE_LAUNCH_COMMIT_STAGE",
+    "SGLANG_OPT_DSV41_DSPARK_POST_FOLD",
+    "SGLANG_OPT_DSV41_DSPARK_PREPARE_INPUTS_ONCE",
+    "SGLANG_OPT_DSV41_DSPARK_SIM_DRAW_AHEAD",
+    "SGLANG_OPT_DSV41_DSPARK_SKIP_PREFILLED_INPUTS",
+    "SGLANG_OPT_DSV41_ENGRAM_HOST_STAGING",
+    "SGLANG_OPT_DSV41_ENGRAM_PEER_SHARDS",
+    "SGLANG_OPT_DSV41_MEGA_MHC_PREFILL",
+    "SGLANG_OPT_DSV41_POST_FORWARD_CUDA_GRAPH",
+    "SGLANG_OPT_DSV41_SAMPLING_ACCEPT_GRAPH",
+    "SGLANG_OPT_DSV41_TARGET_METADATA_EARLY",
+    "SGLANG_OPT_DSV41_TARGET_VERIFY_METADATA_GLUE",
+    "SGLANG_OPT_DSV4_NONPAGED_INDEXER",
+    "SGLANG_OPT_DSV4_NONPAGED_INDEXER_MIN_QUERY_TOKENS",
+    "SGLANG_OPT_ENGRAM_EXTEND_HASH",
+    "SGLANG_OPT_FLASHINFER_DRAFT_HOST_INDPTR",
+    "SGLANG_OPT_FLASHINFER_VERIFY_HOST_PLAN",
+    "SGLANG_OPT_FLASHMLA_SPARSE_PREFILL",
+    "SGLANG_OPT_FLUX3_PRIMS_TS_TUNING_BUCKETS",
+    "SGLANG_OPT_FP8_WO_A_FUSED_INVROPE",
+    "SGLANG_OPT_FP8_WO_A_GEMM",
+    "SGLANG_OPT_FUSED_KDA_VERIFY",
+    "SGLANG_OPT_FUSED_QK_NORM_ROPE_VERIFY",
+    "SGLANG_OPT_FUSE_MHC_POST_PRE",
+    "SGLANG_OPT_FUSE_SWIGLU_INTERLEAVED",
+    "SGLANG_OPT_FUSE_WQA_WKV",
+    "SGLANG_OPT_GATE_GEMV_MODE",
+    "SGLANG_OPT_HIP_FLYDSL_MXFP8",
+    "SGLANG_OPT_HIP_OPUS_SPARSE_PREFILL",
+    "SGLANG_OPT_HOPPER_BLOCK_FP8_BF16",
+    "SGLANG_OPT_INKLING_MXFP8_FUSED_QUANT_STORE",
+    "SGLANG_OPT_LINEARIZED_SHARED_SINK",
+    "SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK",
+    "SGLANG_OPT_MASK_DP_PAD_MOE",
+    "SGLANG_OPT_MINIMAX_M3_FP8_INDEX_CACHE",
+    "SGLANG_OPT_MOE_QUANT_ONCE",
+    "SGLANG_OPT_MXFP4_DEFERRED_FINALIZED_SHAPE",
+    "SGLANG_OPT_NPU_BF16_WO_A_GEMM",
+    "SGLANG_OPT_Q8KV8_QPREP_VARIANT",
+    "SGLANG_OPT_RELEASE_PREFILL_SWA",
+    "SGLANG_OPT_SKIP_GLUED_REPLAY_VIEW",
+    "SGLANG_OPT_SM120_DIRECT_SWA_KV",
+    "SGLANG_OPT_SM120_MTP_ROUTER_TOP22",
+    "SGLANG_OPT_SM120_NVFP4_PHASE_LAYOUT",
+    "SGLANG_OPT_UNIFIED_CACHE_FREE_OUT_OF_WINDOW_SLOTS",
+    "SGLANG_OPT_USE_AITER_BATCHED_GEMM",
+    "SGLANG_OPT_USE_AITER_INDEXER",
+    "SGLANG_OPT_USE_AITER_SILU_MUL",
+    "SGLANG_OPT_USE_BF16_ROUTER_GEMM",
+    "SGLANG_OPT_USE_CUSTOM_ALL_REDUCE_V2",
+    "SGLANG_OPT_USE_FLASHINFER_MHC",
+    "SGLANG_OPT_USE_FUSED_GATE_TOPK",
+    "SGLANG_OPT_USE_FUSED_HASH_TOPK",
+    "SGLANG_OPT_USE_FUSED_QK_NORM_ROPE",
+    "SGLANG_OPT_USE_GATE_TOPK_JIT",
+    "SGLANG_OPT_USE_GUMBEL_SAMPLE",
+    "SGLANG_OPT_USE_INKLING_CUSTOM_AR",
+    "SGLANG_OPT_USE_INKLING_FUSED_AR_SCONV",
+    "SGLANG_OPT_USE_INKLING_FUSED_AR_SCONV_NORM",
+    "SGLANG_OPT_USE_INKLING_FUSED_AR_SHARED",
+    "SGLANG_OPT_USE_INKLING_FUSED_ATTN_PROLOGUE",
+    "SGLANG_OPT_USE_INKLING_FUSED_LOG_TAU",
+    "SGLANG_OPT_USE_INKLING_MULTI_STREAM_OVERLAP",
+    "SGLANG_OPT_USE_INKLING_REL_PROJ_DISPATCH",
+    "SGLANG_OPT_USE_INKLING_SHARED_FUSED_MOE",
+    "SGLANG_OPT_USE_INKLING_SHEARED_BIAS",
+    "SGLANG_OPT_USE_JIT_INDEXER_METADATA",
+    "SGLANG_OPT_USE_JIT_KERNEL_GROUPED_TOPK",
+    "SGLANG_OPT_USE_MINIMAX_DECODE_TOPK_RADIX",
+    "SGLANG_OPT_USE_MINIMAX_DENSE_SPARSE_DECODE",
+    "SGLANG_OPT_USE_MINIMAX_FP8_Q_EPILOGUE",
+    "SGLANG_OPT_USE_MINIMAX_FUSED_KV_INDEX_STORE",
+    "SGLANG_OPT_USE_MINIMAX_GLUON_PREFILL",
+    "SGLANG_OPT_USE_MSA_DECODE_UNDER_GRAPH",
+    "SGLANG_OPT_USE_MULTI_STREAM_OVERLAP",
+    "SGLANG_OPT_USE_ONLINE_COMPRESS",
+    "SGLANG_OPT_USE_TILELANG_INDEXER",
+    "SGLANG_OPT_USE_TILELANG_MHC_POST",
+    "SGLANG_OPT_USE_TILELANG_MHC_PRE",
+    "SGLANG_OPT_USE_TOPK_V2",
+    "SGLANG_OTLP_EXPORTER_MAX_EXPORT_BATCH_SIZE",
+    "SGLANG_OTLP_EXPORTER_SCHEDULE_DELAY_MILLIS",
+    "SGLANG_PARALLEL_PROMPT_ENCODE",
+    "SGLANG_PARALLEL_PROMPT_ENCODE_MIN_CHARS",
+    "SGLANG_PATCH_TOKENIZER",
+    "SGLANG_PCIE_IPC_MAX_NUMEL",
+    "SGLANG_PHASE_CHECKER_DEBUG",
+    "SGLANG_PLATFORM",
+    "SGLANG_PLUGINS",
+    "SGLANG_PORT",
+    "SGLANG_PPLX_NUM_MAX_DISPATCH_TOKENS_PER_RANK",
+    "SGLANG_PP_COMM_OVERLAP",
+    "SGLANG_PP_PARALLEL_DEEPGEMM_WARMUP",
+    "SGLANG_PP_SKIP_PURE_CHUNKED_OUTPUT_COMM",
+    "SGLANG_PREFETCH_BLOCK_SIZE_MB",
+    "SGLANG_PREFILL_DELAYER_MAX_DELAY_PASSES",
+    "SGLANG_PREFILL_DELAYER_MAX_PREFILL_BS_WINDOW_SIZE",
+    "SGLANG_PREFILL_DELAYER_TOKEN_USAGE_LOW_WATERMARK",
+    "SGLANG_PREFILL_TILE_BUDGET",
+    "SGLANG_PREFILL_TILE_BUDGET_MODE",
+    "SGLANG_PROFILE_BY_STAGE_DECODE_MIN_BS",
+    "SGLANG_PROFILE_RECORD_SHAPES",
+    "SGLANG_PROFILE_V2",
+    "SGLANG_PROFILE_WITH_STACK",
+    "SGLANG_PYSPY_DUMP_BEFORE_CRASH",
+    "SGLANG_QUANT_ALLOW_DOWNCASTING",
+    "SGLANG_QWEN4_PLE_FILE_DIR",
+    "SGLANG_QWEN4_PLE_FILE_PREFETCH",
+    "SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB",
+    "SGLANG_QWEN4_PLE_FILE_RSS_INTERVAL_S",
+    "SGLANG_QWEN4_PLE_FILE_SKIP_DEVICE_CHECK",
+    "SGLANG_RADIX_FORCE_MISS",
+    "SGLANG_RAGGED_VERIFY_MODE",
+    "SGLANG_RAY_BUNDLE_INDICES",
+    "SGLANG_RECORD_STEP_TIME",
+    "SGLANG_REQUEST_STATE_WAIT_TIMEOUT",
+    "SGLANG_REQ_RUNNING_TIMEOUT",
+    "SGLANG_REQ_WAITING_TIMEOUT",
+    "SGLANG_RESIZE_RESAMPLE",
+    "SGLANG_RETRACT_DECODE_STEPS",
+    "SGLANG_RETURN_ORIGINAL_LOGPROB",
+    "SGLANG_ROCM_DISABLE_LINEARQUANT",
+    "SGLANG_ROCM_FUSED_DECODE_MLA",
+    "SGLANG_ROCM_K3_FUSE_KDA_INPROJ",
+    "SGLANG_ROCM_K3_FUSE_KDA_INPROJ_MAX_TOKENS",
+    "SGLANG_ROCM_MXFP8_AITER_PRESHUFFLE",
+    "SGLANG_ROCM_OPT_DSPARK_FP8_LM_HEAD",
+    "SGLANG_ROCM_SMALLM_FP8_PROJ",
+    "SGLANG_ROCM_SMALLM_MOE",
+    "SGLANG_ROCM_SMALLM_ROUTER",
+    "SGLANG_ROCM_USE_AITER_FP4_ASM_GEMM",
+    "SGLANG_ROCM_USE_MULTI_STREAM",
+    "SGLANG_ROLE_NAMESPACES",
+    "SGLANG_ROLE_NAMESPACES_OUT",
+    "SGLANG_ROPE_CACHE_ALIGN",
+    "SGLANG_ROPE_CACHE_FP32",
+    "SGLANG_ROPE_CACHE_SAFETY_MARGIN",
+    "SGLANG_RUST_BUILD_MODE",
+    "SGLANG_RUST_SERVER",
+    "SGLANG_SAIL_GPU_ARCH",
+    "SGLANG_SANITIZE_NAN_LOGITS",
+    "SGLANG_SCHEDULER_DECREASE_PREFILL_IDLE",
+    "SGLANG_SCHEDULER_MAX_RECV_PER_POLL",
+    "SGLANG_SCHEDULER_RECV_SKIPPER_WEIGHT_DECODE",
+    "SGLANG_SCHEDULER_RECV_SKIPPER_WEIGHT_DEFAULT",
+    "SGLANG_SCHEDULER_RECV_SKIPPER_WEIGHT_NONE",
+    "SGLANG_SCHEDULER_RECV_SKIPPER_WEIGHT_TARGET_VERIFY",
+    "SGLANG_SCHEDULER_SKIP_ALL_GATHER",
+    "SGLANG_SET_CPU_AFFINITY",
+    "SGLANG_SHARED_EXPERT_TP1",
+    "SGLANG_SIMULATE_ACC_GREEDY",
+    "SGLANG_SIMULATE_ACC_LEN",
+    "SGLANG_SIMULATE_ACC_METHOD",
+    "SGLANG_SIMULATE_ACC_TOKEN_MODE",
+    "SGLANG_SIMULATE_ROUND_ROBIN_EXPERTS",
+    "SGLANG_SIMULATE_UNIFORM_EXPERTS",
+    "SGLANG_SKIP_SGL_KERNEL_VERSION_CHECK",
+    "SGLANG_SKIP_SOFTMAX_DECODE_THRESHOLD_SCALE_FACTOR",
+    "SGLANG_SKIP_SOFTMAX_PREFILL_THRESHOLD_SCALE_FACTOR",
+    "SGLANG_SM120_FLASHMLA_BACKEND",
+    "SGLANG_SORT_WEIGHT_FILES",
+    "SGLANG_SPEC_EXPANSION_SAFETY_FACTOR",
+    "SGLANG_SPEC_SKIP_ZERO_STEP_DRAFT_EXTEND",
+    "SGLANG_SPEC_TP_SYNC",
+    "SGLANG_STAGING_USE_TORCH",
+    "SGLANG_SWA_EVICTION_INTERVAL",
+    "SGLANG_SYMM_MEM_PREALLOC_GB_SIZE",
+    "SGLANG_SYNC_TOKEN_IDS_ACROSS_TP",
+    "SGLANG_TBO_DEBUG",
+    "SGLANG_TCP_STORE_PORT",
+    "SGLANG_TEST_CRASH_AFTER_STREAM_OUTPUTS",
+    "SGLANG_TEST_DISAGG_FAILURE_PROB",
+    "SGLANG_TEST_DISAGG_KV_CHECKSUM_MISMATCH_PROB",
+    "SGLANG_TEST_FORCE_OPTIMISTIC_PREFILL_RETRY_PROB",
+    "SGLANG_TEST_HICACHE_BACKEND_RANDOM_DELAY",
+    "SGLANG_TEST_HICACHE_BACKEND_RANDOM_FAILURE",
+    "SGLANG_TEST_HICACHE_H2D_DELAY_CYCLES",
+    "SGLANG_TEST_MAMBA_LAZY_ALLOC_FAIL",
+    "SGLANG_TEST_MAX_RETRY",
+    "SGLANG_TEST_METRICS_FILE",
+    "SGLANG_TEST_PD_DISAGG_BACKEND",
+    "SGLANG_TEST_PD_DISAGG_DEVICES",
+    "SGLANG_TEST_RAGGED_VERIFY_FORCE_UNIFORM_CAPTURE",
+    "SGLANG_TEST_REQUEST_TIME_STATS",
+    "SGLANG_TEST_RETRACT",
+    "SGLANG_TEST_RETRACT_INTERVAL",
+    "SGLANG_TEST_RETRACT_NO_PREFILL_BS",
+    "SGLANG_TEST_SCRIPTED_RUNTIME",
+    "SGLANG_TEST_SCRIPTED_RUNTIME_IPC_ADDR",
+    "SGLANG_TEST_SCRIPTED_RUNTIME_OUT_OF_BAND_ERROR_PATH",
+    "SGLANG_TEST_SCRIPTED_RUNTIME_SYS_PATH_ENTRY",
+    "SGLANG_TEST_SKIP_CACHE_HIT_ASSERT",
+    "SGLANG_TEST_STUCK_DETOKENIZER",
+    "SGLANG_TEST_STUCK_DP_CONTROLLER",
+    "SGLANG_TEST_STUCK_SCHEDULER_INIT",
+    "SGLANG_TEST_STUCK_TOKENIZER",
+    "SGLANG_TEST_TI2I_INPUT_IMAGE",
+    "SGLANG_TIMEOUT_KEEP_ALIVE",
+    "SGLANG_TOOL_STRICT_LEVEL",
+    "SGLANG_TORCH_PROFILER_DIR",
+    "SGLANG_TRACE_ASYNC",
+    "SGLANG_TRACE_ASYNC_FLUSH_THRESHOLD",
+    "SGLANG_TRACE_LOGITS_E2E",
+    "SGLANG_TRACE_LOGITS_E2E_SYNC",
+    "SGLANG_TRACE_QWEN_MOE_DEEPEP_E2E",
+    "SGLANG_TRACE_SAMPLER_E2E",
+    "SGLANG_TRITON_COMPACT_EXTEND_ATTENTION",
+    "SGLANG_TRITON_DECODE_ATTN_STATIC_KV_SPLITS",
+    "SGLANG_TRITON_DECODE_SPLIT_TILE_SIZE",
+    "SGLANG_TRITON_DENSE_PREFILL_ATTN",
+    "SGLANG_TRITON_FP8_PREFILL_ATTN",
+    "SGLANG_TRITON_LOAD_WARNING_THRESHOLD_GB",
+    "SGLANG_TRITON_SLOW_COMPILE_THRESHOLD_SECS",
+    "SGLANG_TRTLLM_MHA_DECODE_SEQ_LEN_SPLITS",
+    "SGLANG_TRTLLM_MOE_PDL_MAX_TOKENS",
+    "SGLANG_UNIFIED_RADIX_TREE_CORE_BACKEND",
+    "SGLANG_USE_1STAGE_ALLREDUCE",
+    "SGLANG_USE_AG_AFTER_QLORA",
+    "SGLANG_USE_AITER",
+    "SGLANG_USE_AITER_AG",
+    "SGLANG_USE_AITER_FP8_PER_TOKEN",
+    "SGLANG_USE_AITER_MOE_GU_ITLV",
+    "SGLANG_USE_AITER_UNIFIED_ATTN",
+    "SGLANG_USE_ATTN_TP_NGRAM",
+    "SGLANG_USE_BREAKABLE_CUDA_GRAPH",
+    "SGLANG_USE_CUDA_IPC_TRANSPORT",
+    "SGLANG_USE_CUSTOM_ROUTER_SUM",
+    "SGLANG_USE_CUSTOM_TRITON_KERNEL_CACHE",
+    "SGLANG_USE_DEEPGEMM_BMM",
+    "SGLANG_USE_HND_KVCACHE",
+    "SGLANG_USE_IPC_POOL_HANDLE_CACHE",
+    "SGLANG_USE_MESSAGE_QUEUE_BROADCASTER",
+    "SGLANG_USE_MLX",
+    "SGLANG_USE_MODELSCOPE",
+    "SGLANG_USE_PICKLE_IPC",
+    "SGLANG_USE_SAGE_ATTENTION_IMPL",
+    "SGLANG_USE_SGL_FA3_KERNEL",
+    "SGLANG_UVICORN_WORKER_HEALTHCHECK_TIMEOUT",
+    "SGLANG_VALIDATE_MAMBA_REPLAY_STATE_INDICES",
+    "SGLANG_VIT_ENABLE_CUDA_GRAPH",
+    "SGLANG_VIT_ENABLE_VECTORIZED_POS_EMBED",
+    "SGLANG_VLM_CACHE_SIZE_MB",
+    "SGLANG_WARMUP_TIMEOUT",
+    "SGLANG_WEIGHT_CACHE_READY_TEMPLATE",
+    "SGLANG_WEIGHT_CACHE_SOCKET_TEMPLATE",
+    "SGLANG_XPU_LN_MOD_NUM_WARPS",
+    "SGLANG_ZBAL_BOOTSTRAP_URL",
+    "SGLANG_ZBAL_LOCAL_MEM_SIZE",
+    "SGLANG_ZMQ_ALLOWED_PEERS",
+    "SGLANG_ZMQ_SOURCE_IP",
+    "USE_ROCM_AITER_ROPE_BACKEND",
+    "USE_TRITON_W8A8_FP8_KERNEL"
+   ],
+   "errors": {},
+   "features": null,
+   "flags": {
+    "--abort-on-priority-when-disabled": {
+     "choices": null,
+     "default": false
+    },
+    "--admin-api-key": {
+     "choices": null,
+     "default": null
+    },
+    "--allow-auto-truncate": {
+     "choices": null,
+     "default": false
+    },
+    "--allowed-media-domains": {
+     "choices": null,
+     "default": []
+    },
+    "--api-key": {
+     "choices": null,
+     "default": null
+    },
+    "--asr-max-buffer-seconds": {
+     "choices": null,
+     "default": 60
+    },
+    "--asr-max-concurrent-sessions": {
+     "choices": null,
+     "default": 32
+    },
+    "--attention-backend": {
+     "choices": [
+      "triton",
+      "torch_native",
+      "flex_attention",
+      "dsa",
+      "nsa",
+      "qsa",
+      "dsv4",
+      "compressed",
+      "fa3",
+      "fa4",
+      "flashinfer",
+      "llada2_cfg_flashinfer",
+      "flashmla",
+      "trtllm_mla",
+      "cutedsl_mla",
+      "tokenspeed_mla",
+      "trtllm_mha",
+      "hpc_ops",
+      "minicpm_flashattn",
+      "minicpm_flashinfer",
+      "aiter",
+      "wave",
+      "intel_amx",
+      "ascend",
+      "intel_xpu"
+     ],
+     "default": null
+    },
+    "--attention-context-parallel-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--attention-data-parallel-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--attn-cp-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--attn-dp-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--base-gpu-id": {
+     "choices": null,
+     "default": 0
+    },
+    "--batch-notify-size": {
+     "choices": null,
+     "default": 16
+    },
+    "--bf16-gemm-backend": {
+     "choices": [
+      "auto",
+      "cutedsl",
+      "gemv",
+      "torch"
+     ],
+     "default": "auto"
+    },
+    "--boundary-reduction": {
+     "choices": [
+      "auto",
+      "ar",
+      "rs",
+      "rsv",
+      "rs+rsv"
+     ],
+     "default": "auto"
+    },
+    "--bucket-e2e-request-latency": {
+     "choices": null,
+     "default": null
+    },
+    "--bucket-inter-token-latency": {
+     "choices": null,
+     "default": null
+    },
+    "--bucket-time-to-first-token": {
+     "choices": null,
+     "default": null
+    },
+    "--c128-page-size": {
+     "choices": null,
+     "default": 16
+    },
+    "--chat-template": {
+     "choices": null,
+     "default": null
+    },
+    "--checkpoint-engine-wait-weights-before-ready": {
+     "choices": null,
+     "default": false
+    },
+    "--chunked-prefill-size": {
+     "choices": null,
+     "default": null
+    },
+    "--completion-template": {
+     "choices": null,
+     "default": null
+    },
+    "--config": {
+     "choices": null,
+     "default": null
+    },
+    "--constrained-json-disable-any-whitespace": {
+     "choices": null,
+     "default": false
+    },
+    "--constrained-json-max-whitespace-cnt": {
+     "choices": null,
+     "default": null
+    },
+    "--constrained-json-whitespace-pattern": {
+     "choices": null,
+     "default": null
+    },
+    "--context-bucket": {
+     "choices": null,
+     "default": null
+    },
+    "--context-length": {
+     "choices": null,
+     "default": null
+    },
+    "--cp-strategy": {
+     "choices": [
+      "zigzag",
+      "interleave"
+     ],
+     "default": null
+    },
+    "--cpu-offload-gb": {
+     "choices": null,
+     "default": 0
+    },
+    "--crash-dump-folder": {
+     "choices": null,
+     "default": null
+    },
+    "--cuda-graph-backend-decode": {
+     "choices": [
+      "full",
+      "breakable",
+      "disabled"
+     ],
+     "default": null
+    },
+    "--cuda-graph-backend-prefill": {
+     "choices": [
+      "full",
+      "breakable",
+      "disabled"
+     ],
+     "default": null
+    },
+    "--cuda-graph-bs-decode": {
+     "choices": null,
+     "default": null
+    },
+    "--cuda-graph-bs-prefill": {
+     "choices": null,
+     "default": null
+    },
+    "--cuda-graph-config": {
+     "choices": null,
+     "default": null
+    },
+    "--cuda-graph-max-bs-decode": {
+     "choices": null,
+     "default": null
+    },
+    "--cuda-graph-max-bs-prefill": {
+     "choices": null,
+     "default": null
+    },
+    "--cuda-graph-max-seq-len-prefill": {
+     "choices": null,
+     "default": null
+    },
+    "--cuda-graph-prefill-max-context": {
+     "choices": null,
+     "default": null
+    },
+    "--custom-weight-loader": {
+     "choices": null,
+     "default": null
+    },
+    "--data-parallel-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--dcp-comm-backend": {
+     "choices": [
+      "ag_rs",
+      "a2a",
+      "fi_a2a"
+     ],
+     "default": null
+    },
+    "--dcp-replicate-q-proj": {
+     "choices": null,
+     "default": null
+    },
+    "--dcp-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--debug-cuda-graph": {
+     "choices": null,
+     "default": false
+    },
+    "--debug-tensor-dump-input-file": {
+     "choices": null,
+     "default": null
+    },
+    "--debug-tensor-dump-layers": {
+     "choices": null,
+     "default": null
+    },
+    "--debug-tensor-dump-output-folder": {
+     "choices": null,
+     "default": null
+    },
+    "--decode-attention-backend": {
+     "choices": [
+      "triton",
+      "torch_native",
+      "flex_attention",
+      "dsa",
+      "nsa",
+      "qsa",
+      "dsv4",
+      "compressed",
+      "fa3",
+      "fa4",
+      "flashinfer",
+      "llada2_cfg_flashinfer",
+      "flashmla",
+      "trtllm_mla",
+      "cutedsl_mla",
+      "tokenspeed_mla",
+      "trtllm_mha",
+      "hpc_ops",
+      "minicpm_flashattn",
+      "minicpm_flashinfer",
+      "aiter",
+      "wave",
+      "intel_amx",
+      "ascend",
+      "intel_xpu"
+     ],
+     "default": null
+    },
+    "--decode-context-parallel-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--decode-log-interval": {
+     "choices": null,
+     "default": 40
+    },
+    "--decoupled-spec-bind-endpoint": {
+     "choices": null,
+     "default": null
+    },
+    "--decoupled-spec-connect-endpoints": {
+     "choices": null,
+     "default": null
+    },
+    "--decoupled-spec-rank": {
+     "choices": null,
+     "default": null
+    },
+    "--decoupled-spec-role": {
+     "choices": [
+      "null",
+      "verifier",
+      "drafter"
+     ],
+     "default": "null"
+    },
+    "--decrypted-config-file": {
+     "choices": null,
+     "default": null
+    },
+    "--decrypted-draft-config-file": {
+     "choices": null,
+     "default": null
+    },
+    "--deepep-config": {
+     "choices": null,
+     "default": null
+    },
+    "--deepep-dispatcher-output-dtype": {
+     "choices": [
+      "auto",
+      "bf16",
+      "fp8",
+      "int8",
+      "nvfp4"
+     ],
+     "default": "auto"
+    },
+    "--deepep-mode": {
+     "choices": [
+      "auto",
+      "normal",
+      "low_latency"
+     ],
+     "default": "auto"
+    },
+    "--deepep-v2-mode": {
+     "choices": [
+      "direct",
+      "hybrid"
+     ],
+     "default": "direct"
+    },
+    "--default-chat-template-kwargs": {
+     "choices": null,
+     "default": null
+    },
+    "--default-priority-value": {
+     "choices": null,
+     "default": null
+    },
+    "--delete-ckpt-after-loading": {
+     "choices": null,
+     "default": false
+    },
+    "--detokenizer-worker-num": {
+     "choices": null,
+     "default": 1
+    },
+    "--device": {
+     "choices": null,
+     "default": null
+    },
+    "--disable-aiter-allreduce-fusion-in-decode": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-aiter-allreduce-fusion-in-prefill": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-attn-tp-gather": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-chunked-prefix-cache": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-cuda-graph": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-cuda-graph-padding": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-custom-all-reduce": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-decode-cuda-graph": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-fast-image-processor": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-flashinfer-autotune": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-flashinfer-cutlass-moe-fp4-allgather": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-hybrid-swa-memory": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-outlines-disk-cache": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-overlap-schedule": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-prefill-cuda-graph": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-priority-preemption": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-radix-cache": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-shared-experts-fusion": {
+     "choices": null,
+     "default": false
+    },
+    "--disable-tokenizer-batch-decode": {
+     "choices": null,
+     "default": false
+    },
+    "--disaggregation-bootstrap-port": {
+     "choices": null,
+     "default": 8998
+    },
+    "--disaggregation-decode-allocation-policy": {
+     "choices": [
+      "early",
+      "prefill_complete"
+     ],
+     "default": "early"
+    },
+    "--disaggregation-decode-enable-offload-kvcache": {
+     "choices": null,
+     "default": false
+    },
+    "--disaggregation-decode-enable-radix-cache": {
+     "choices": null,
+     "default": false
+    },
+    "--disaggregation-decode-extra-slots": {
+     "choices": null,
+     "default": null
+    },
+    "--disaggregation-decode-host-receive-threshold": {
+     "choices": null,
+     "default": 1.0
+    },
+    "--disaggregation-decode-polling-interval": {
+     "choices": null,
+     "default": 1
+    },
+    "--disaggregation-decode-retraction-backup": {
+     "choices": [
+      "cpu_tensor",
+      "host_pool",
+      "none"
+     ],
+     "default": null
+    },
+    "--disaggregation-enable-kv-checksum": {
+     "choices": null,
+     "default": false
+    },
+    "--disaggregation-ib-device": {
+     "choices": null,
+     "default": null
+    },
+    "--disaggregation-mode": {
+     "choices": [
+      "null",
+      "prefill",
+      "decode"
+     ],
+     "default": "null"
+    },
+    "--disaggregation-transfer-backend": {
+     "choices": [
+      "mooncake",
+      "nixl",
+      "ascend",
+      "fake",
+      "mori",
+      "mooncake_tcp"
+     ],
+     "default": "mooncake"
+    },
+    "--dist-init-addr": {
+     "choices": null,
+     "default": null
+    },
+    "--dist-timeout": {
+     "choices": null,
+     "default": null
+    },
+    "--dllm-algorithm": {
+     "choices": null,
+     "default": null
+    },
+    "--dllm-algorithm-config": {
+     "choices": null,
+     "default": null
+    },
+    "--dllm-fdfo": {
+     "choices": null,
+     "default": true
+    },
+    "--download-dir": {
+     "choices": null,
+     "default": null
+    },
+    "--dp-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--dsa-decode-backend": {
+     "choices": [
+      "flashmla_sparse",
+      "flashmla_sparse_q8",
+      "flashmla_kv",
+      "flashmla_auto",
+      "flashinfer_sparse_mla",
+      "fa3",
+      "tilelang",
+      "triton",
+      "aiter",
+      "trtllm",
+      "intel_xpu"
+     ],
+     "default": null
+    },
+    "--dsa-paged-mqa-logits-backend": {
+     "choices": [
+      "auto",
+      "deepgemm",
+      "cutedsl",
+      "aiter"
+     ],
+     "default": "auto"
+    },
+    "--dsa-prefill-backend": {
+     "choices": [
+      "flashmla_sparse",
+      "flashmla_sparse_q8",
+      "flashmla_kv",
+      "flashmla_auto",
+      "flashinfer_sparse_mla",
+      "triton_sparse_mla",
+      "fa3",
+      "tilelang",
+      "triton",
+      "aiter",
+      "trtllm",
+      "intel_xpu"
+     ],
+     "default": null
+    },
+    "--dsa-topk-backend": {
+     "choices": [
+      "sgl-kernel",
+      "torch",
+      "flashinfer"
+     ],
+     "default": "sgl-kernel"
+    },
+    "--dsa-triton-union": {
+     "choices": [
+      0,
+      2,
+      4
+     ],
+     "default": 0
+    },
+    "--dsv4-attn-backend": {
+     "choices": [
+      "auto",
+      "flashmla",
+      "flashmla_mega",
+      "trtllm"
+     ],
+     "default": "auto"
+    },
+    "--dsv4-prefill-backend": {
+     "choices": [
+      "auto",
+      "flashmla_sparse",
+      "flashmla_sparse_q8"
+     ],
+     "default": "auto"
+    },
+    "--dtype": {
+     "choices": [
+      "auto",
+      "half",
+      "float16",
+      "bfloat16",
+      "float",
+      "float32"
+     ],
+     "default": "auto"
+    },
+    "--dwdp-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--dynamic-batch-tokenizer-batch-size": {
+     "choices": null,
+     "default": 32
+    },
+    "--dynamic-batch-tokenizer-batch-timeout": {
+     "choices": null,
+     "default": 0.002
+    },
+    "--elastic-ep-backend": {
+     "choices": [
+      "none",
+      "mooncake",
+      "nixl"
+     ],
+     "default": null
+    },
+    "--elastic-ep-initial-size": {
+     "choices": null,
+     "default": null
+    },
+    "--elastic-ep-join-mode": {
+     "choices": [
+      "scale",
+      "recover"
+     ],
+     "default": null
+    },
+    "--elastic-ep-join-rank-offset": {
+     "choices": null,
+     "default": 0
+    },
+    "--elastic-ep-scale-timeout": {
+     "choices": null,
+     "default": 600
+    },
+    "--enable-adaptive-dispatch-to-encoder": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-aiter-allreduce-fusion": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-amd-monokernel": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-attn-tp-input-scattered": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-broadcast-mm-inputs-process": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-cache-report": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-cp-decode-attn-tp": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-cudagraph-gc": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-custom-logit-processor": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-decoder-swa-bounded-replay": {
+     "choices": null,
+     "default": null
+    },
+    "--enable-deepseek-v4-fp4-indexer": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-dense-mlp-attn-tp": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-deterministic-inference": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-dp-attention": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-dp-attention-local-control-broadcast": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-dp-lm-head": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-draft-weights-cpu-backup": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-dsa-cache-layer-split": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-dsa-fused-indexer": {
+     "choices": null,
+     "default": null
+    },
+    "--enable-dynamic-batch-tokenizer": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-dynamic-chunking": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-elastic-expert-backup": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-encoder-swa-bounded-replay": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-eplb": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-flashinfer-allreduce-fusion": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-flexkv": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-forward-pass-metrics": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-fp32-lm-head": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-fused-moe-sum-all-reduce": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-fused-qk-norm-rope": {
+     "choices": null,
+     "default": null
+    },
+    "--enable-hicache": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-hierarchical-cache": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-hisparse": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-http-worker-reuseport": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-http2": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-int8-mamba-checkpoint": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-kv-cache-sharding": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-layernorm-sp": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-layerwise-nvtx-marker": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-lean-attention": {
+     "choices": null,
+     "default": null
+    },
+    "--enable-linear-replayssm": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-linear-replayssm-spec": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-linker-mla-dedup": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-lmcache": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-lora": {
+     "choices": null,
+     "default": null
+    },
+    "--enable-lora-overlap-loading": {
+     "choices": null,
+     "default": null
+    },
+    "--enable-mamba-cache-stochastic-rounding": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-megamoe-for-layernorm-sp": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-memory-saver": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-metrics": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-metrics-for-all-schedulers": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-mfu-metrics": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-mis": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-mixed-chunk": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-mm-global-cache": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-mscclpp": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-multi-layer-eagle": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-multimodal": {
+     "choices": null,
+     "default": null
+    },
+    "--enable-nccl-nvls": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-nvidia-megakernel": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-p2p-check": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-page-major-kv-layout": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-paged-experts": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-pd-role-switch": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-pdmux": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-precise-embedding-interpolation": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-prefill-cp": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-prefill-delayer": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-prefix-mm-cache": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-priority-scheduling": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-profile-cuda-graph": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-quant-communications": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-request-time-stats-logging": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-response-store": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-return-aux-hidden-states": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-return-hidden-states": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-return-indexer-topk": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-return-routed-experts": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-scattered-sconv": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-session-radix-cache": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-shared-experts-attn-tp": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-single-batch-overlap": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-ssl-refresh": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-streaming-session": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-strict-thinking": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-symm-mem": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-tf32-matmul": {
+     "choices": null,
+     "default": null
+    },
+    "--enable-tokenizer-batch-encode": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-torch-compile": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-torch-compile-debug-mode": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-torch-symm-mem": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-tp-lm-head-all-to-all": {
+     "choices": null,
+     "default": null
+    },
+    "--enable-trace": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-two-batch-overlap": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-unified-cache-external-linker": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-unified-memory": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-w4a4-mxfp4-megamoe": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-waterfill": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-watermark": {
+     "choices": null,
+     "default": false
+    },
+    "--enable-weights-cpu-backup": {
+     "choices": null,
+     "default": false
+    },
+    "--encoder-bootstrap-port": {
+     "choices": null,
+     "default": 8997
+    },
+    "--encoder-only": {
+     "choices": null,
+     "default": false
+    },
+    "--encoder-register-urls": {
+     "choices": null,
+     "default": []
+    },
+    "--encoder-transfer-backend": {
+     "choices": [
+      "auto",
+      "zmq_to_scheduler",
+      "zmq_to_tokenizer",
+      "mooncake"
+     ],
+     "default": "auto"
+    },
+    "--encoder-urls": {
+     "choices": null,
+     "default": []
+    },
+    "--enforce-disable-flashinfer-allreduce-fusion": {
+     "choices": null,
+     "default": false
+    },
+    "--enforce-shared-experts-fusion": {
+     "choices": null,
+     "default": false
+    },
+    "--engine-info-bootstrap-port": {
+     "choices": null,
+     "default": 6789
+    },
+    "--ep": {
+     "choices": null,
+     "default": 1
+    },
+    "--ep-dispatch-algorithm": {
+     "choices": [
+      "static",
+      "dynamic",
+      "fake",
+      "lp"
+     ],
+     "default": null
+    },
+    "--ep-num-redundant-experts": {
+     "choices": null,
+     "default": 0
+    },
+    "--ep-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--eplb-algorithm": {
+     "choices": null,
+     "default": "auto"
+    },
+    "--eplb-min-rebalancing-utilization-threshold": {
+     "choices": null,
+     "default": 1.0
+    },
+    "--eplb-rebalance-layers-per-chunk": {
+     "choices": null,
+     "default": null
+    },
+    "--eplb-rebalance-num-iterations": {
+     "choices": null,
+     "default": 1000
+    },
+    "--expert-balancedness-report-mode": {
+     "choices": [
+      "off",
+      "server_log",
+      "prometheus",
+      "both"
+     ],
+     "default": "off"
+    },
+    "--expert-distribution-recorder-buffer-size": {
+     "choices": null,
+     "default": null
+    },
+    "--expert-distribution-recorder-mode": {
+     "choices": [
+      "stat",
+      "stat_approx",
+      "per_pass",
+      "per_token"
+     ],
+     "default": null
+    },
+    "--expert-parallel-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--experts-shared-outer-loras": {
+     "choices": null,
+     "default": null
+    },
+    "--export-metrics-to-file": {
+     "choices": null,
+     "default": false
+    },
+    "--export-metrics-to-file-dir": {
+     "choices": null,
+     "default": null
+    },
+    "--extra-metric-labels": {
+     "choices": null,
+     "default": null
+    },
+    "--fastapi-root-path": {
+     "choices": null,
+     "default": ""
+    },
+    "--file-storage-path": {
+     "choices": null,
+     "default": null
+    },
+    "--flashinfer-a2a-dispatch-type": {
+     "choices": [
+      "auto",
+      "bf16",
+      "nvfp4",
+      "mxfp8"
+     ],
+     "default": null
+    },
+    "--flashinfer-allreduce-fusion-backend": {
+     "choices": [
+      "auto",
+      "trtllm",
+      "mnnvl",
+      "cutedsl"
+     ],
+     "default": null
+    },
+    "--flashinfer-autotune-skip-ops": {
+     "choices": null,
+     "default": null
+    },
+    "--flashinfer-mla-disable-ragged": {
+     "choices": null,
+     "default": false
+    },
+    "--flashinfer-mxfp4-moe-precision": {
+     "choices": [
+      "default",
+      "bf16",
+      "fp8"
+     ],
+     "default": "default"
+    },
+    "--flexkv-config-file": {
+     "choices": null,
+     "default": null
+    },
+    "--forward-hooks": {
+     "choices": null,
+     "default": null
+    },
+    "--forward-pass-metrics-ipc-name": {
+     "choices": null,
+     "default": null
+    },
+    "--forward-pass-metrics-worker-id": {
+     "choices": null,
+     "default": ""
+    },
+    "--fp4-gemm-backend": {
+     "choices": [
+      "auto",
+      "flashinfer_cudnn",
+      "flashinfer_cutedsl",
+      "flashinfer_cutlass",
+      "flashinfer_trtllm",
+      "marlin"
+     ],
+     "default": "auto"
+    },
+    "--fp8-gemm-backend": {
+     "choices": [
+      "auto",
+      "deep_gemm",
+      "flashinfer_trtllm",
+      "flashinfer_cutlass",
+      "flashinfer_deepgemm",
+      "flashinfer_cutedsl",
+      "cutlass",
+      "triton",
+      "aiter"
+     ],
+     "default": "auto"
+    },
+    "--fuseep-mode": {
+     "choices": [
+      1,
+      2
+     ],
+     "default": 2
+    },
+    "--gated-launch-port": {
+     "choices": null,
+     "default": null
+    },
+    "--gc-threshold": {
+     "choices": null,
+     "default": null
+    },
+    "--gc-warning-threshold-secs": {
+     "choices": null,
+     "default": 0.0
+    },
+    "--generation-tokens-buckets": {
+     "choices": null,
+     "default": null
+    },
+    "--gpu-id-step": {
+     "choices": null,
+     "default": 1
+    },
+    "--grammar-backend": {
+     "choices": [
+      "xgrammar",
+      "outlines",
+      "llguidance",
+      "none"
+     ],
+     "default": null
+    },
+    "--grpc-http-sidecar-port": {
+     "choices": null,
+     "default": null
+    },
+    "--grpc-mode": {
+     "choices": null,
+     "default": false
+    },
+    "--grpc-port": {
+     "choices": null,
+     "default": null
+    },
+    "--grpc-response-timeout-secs": {
+     "choices": null,
+     "default": 300
+    },
+    "--help": {
+     "choices": null,
+     "default": "==SUPPRESS=="
+    },
+    "--hf-chat-template-name": {
+     "choices": null,
+     "default": null
+    },
+    "--hicache-host-memory-fraction": {
+     "choices": null,
+     "default": 0.8
+    },
+    "--hicache-host-memory-mode": {
+     "choices": [
+      "cache",
+      "buffer_only"
+     ],
+     "default": "cache"
+    },
+    "--hicache-io-backend": {
+     "choices": [
+      "direct",
+      "kernel",
+      "kernel_ascend"
+     ],
+     "default": "kernel"
+    },
+    "--hicache-mem-layout": {
+     "choices": [
+      "layer_first",
+      "page_first",
+      "page_first_direct",
+      "page_first_kv_split",
+      "page_head"
+     ],
+     "default": "page_first"
+    },
+    "--hicache-ratio": {
+     "choices": null,
+     "default": null
+    },
+    "--hicache-size": {
+     "choices": null,
+     "default": 0
+    },
+    "--hicache-storage-backend": {
+     "choices": [
+      "file",
+      "sim",
+      "mooncake",
+      "npu_memcache",
+      "hf3fs",
+      "nixl",
+      "aibrix",
+      "dynamic",
+      "eic",
+      "simm",
+      "mori",
+      "shm",
+      "tensorcast",
+      "seaweedfs"
+     ],
+     "default": null
+    },
+    "--hicache-storage-backend-extra-config": {
+     "choices": null,
+     "default": null
+    },
+    "--hicache-storage-prefetch-policy": {
+     "choices": [
+      "best_effort",
+      "wait_complete",
+      "timeout"
+     ],
+     "default": "timeout"
+    },
+    "--hicache-storage-prefetch-retry-max-attempts": {
+     "choices": null,
+     "default": 8
+    },
+    "--hicache-storage-prefetch-retry-poll-interval": {
+     "choices": null,
+     "default": 8
+    },
+    "--hicache-write-policy": {
+     "choices": [
+      "write_back",
+      "write_through",
+      "write_through_selective"
+     ],
+     "default": "write_through"
+    },
+    "--hierarchical-sparse-attention-extra-config": {
+     "choices": null,
+     "default": null
+    },
+    "--hisparse-config": {
+     "choices": null,
+     "default": null
+    },
+    "--host": {
+     "choices": null,
+     "default": "127.0.0.1"
+    },
+    "--http2-initial-connection-window-size": {
+     "choices": null,
+     "default": 1048576
+    },
+    "--http2-max-concurrent-streams": {
+     "choices": null,
+     "default": 200
+    },
+    "--image-processor-backend": {
+     "choices": [
+      "auto",
+      "torchvision",
+      "pil"
+     ],
+     "default": "auto"
+    },
+    "--incremental-streaming-output": {
+     "choices": null,
+     "default": false
+    },
+    "--init-expert-location": {
+     "choices": null,
+     "default": "trivial"
+    },
+    "--int8-mamba-ckpt-size": {
+     "choices": null,
+     "default": null
+    },
+    "--is-embedding": {
+     "choices": null,
+     "default": false
+    },
+    "--json-model-override-args": {
+     "choices": null,
+     "default": "{}"
+    },
+    "--kt-cpuinfer": {
+     "choices": null,
+     "default": null
+    },
+    "--kt-max-deferred-experts-per-token": {
+     "choices": null,
+     "default": null
+    },
+    "--kt-method": {
+     "choices": null,
+     "default": "AMXINT4"
+    },
+    "--kt-num-gpu-experts": {
+     "choices": null,
+     "default": null
+    },
+    "--kt-threadpool-count": {
+     "choices": null,
+     "default": 2
+    },
+    "--kt-weight-path": {
+     "choices": null,
+     "default": null
+    },
+    "--kv-cache-dtype": {
+     "choices": [
+      "auto",
+      "fp8_e5m2",
+      "fp8_e4m3",
+      "mxfp8",
+      "bf16",
+      "bfloat16",
+      "nvfp4",
+      "fp4_mx_block16"
+     ],
+     "default": "auto"
+    },
+    "--kv-canary": {
+     "choices": [
+      "none",
+      "log",
+      "raise"
+     ],
+     "default": "none"
+    },
+    "--kv-canary-real-data": {
+     "choices": [
+      "none",
+      "partial",
+      "all"
+     ],
+     "default": "none"
+    },
+    "--kv-canary-sweep-interval": {
+     "choices": null,
+     "default": 0
+    },
+    "--kv-events-config": {
+     "choices": null,
+     "default": null
+    },
+    "--language-model-only": {
+     "choices": null,
+     "default": false
+    },
+    "--language-only": {
+     "choices": null,
+     "default": false
+    },
+    "--limit-mm-data-per-request": {
+     "choices": null,
+     "default": null
+    },
+    "--linear-attn-backend": {
+     "choices": [
+      "triton",
+      "cutedsl",
+      "flashinfer",
+      "flashkda",
+      "nvidia_kda",
+      "ptx_kda",
+      "helion",
+      "intel_xpu"
+     ],
+     "default": "triton"
+    },
+    "--linear-attn-decode-backend": {
+     "choices": [
+      "triton",
+      "cutedsl",
+      "flashinfer",
+      "flashkda",
+      "nvidia_kda",
+      "ptx_kda",
+      "helion",
+      "intel_xpu"
+     ],
+     "default": null
+    },
+    "--linear-attn-prefill-backend": {
+     "choices": [
+      "triton",
+      "cutedsl",
+      "flashinfer",
+      "flashkda",
+      "nvidia_kda",
+      "ptx_kda",
+      "helion",
+      "intel_xpu"
+     ],
+     "default": null
+    },
+    "--linear-attn-verify-backend": {
+     "choices": [
+      "triton",
+      "cutedsl",
+      "flashinfer",
+      "flashkda",
+      "nvidia_kda",
+      "ptx_kda",
+      "helion",
+      "intel_xpu",
+      "nv_cutedsl"
+     ],
+     "default": null
+    },
+    "--linear-replayssm-cache-len": {
+     "choices": null,
+     "default": 16
+    },
+    "--lmcache-config-file": {
+     "choices": null,
+     "default": null
+    },
+    "--load-balance-method": {
+     "choices": [
+      "auto",
+      "round_robin",
+      "follow_bootstrap_room",
+      "total_requests",
+      "total_tokens"
+     ],
+     "default": "auto"
+    },
+    "--load-format": {
+     "choices": [
+      "auto",
+      "pt",
+      "safetensors",
+      "instanttensor",
+      "npcache",
+      "dummy",
+      "sharded_state",
+      "presharded",
+      "gguf",
+      "expert_pack",
+      "bitsandbytes",
+      "mistral",
+      "layered",
+      "flash_rl",
+      "remote",
+      "remote_instance",
+      "fastsafetensors",
+      "private",
+      "runai_streamer"
+     ],
+     "default": "auto"
+    },
+    "--load-publish-endpoint": {
+     "choices": null,
+     "default": null
+    },
+    "--load-snapshot-publish-interval": {
+     "choices": null,
+     "default": 15
+    },
+    "--log-level": {
+     "choices": null,
+     "default": "info"
+    },
+    "--log-level-http": {
+     "choices": null,
+     "default": null
+    },
+    "--log-requests": {
+     "choices": null,
+     "default": false
+    },
+    "--log-requests-format": {
+     "choices": [
+      "text",
+      "json"
+     ],
+     "default": "text"
+    },
+    "--log-requests-level": {
+     "choices": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "default": 2
+    },
+    "--log-requests-target": {
+     "choices": null,
+     "default": null
+    },
+    "--lora-backend": {
+     "choices": [
+      "triton",
+      "csgmv",
+      "ascend",
+      "torch_native",
+      "triton_v2"
+     ],
+     "default": "csgmv"
+    },
+    "--lora-drain-wait-threshold": {
+     "choices": null,
+     "default": 0.0
+    },
+    "--lora-eviction-policy": {
+     "choices": [
+      "lru",
+      "fifo"
+     ],
+     "default": "lru"
+    },
+    "--lora-paths": {
+     "choices": null,
+     "default": null
+    },
+    "--lora-strict-loading": {
+     "choices": null,
+     "default": false
+    },
+    "--lora-target-modules": {
+     "choices": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "q_a_proj",
+      "kv_a_proj_with_mqa",
+      "q_b_proj",
+      "kv_b_proj",
+      "wq_b",
+      "wk",
+      "weights_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj",
+      "qkv_proj",
+      "gate_up_proj",
+      "embed_tokens",
+      "lm_head",
+      "qkvr",
+      "wo_ud",
+      "all"
+     ],
+     "default": null
+    },
+    "--lora-use-virtual-experts": {
+     "choices": null,
+     "default": false
+    },
+    "--mamba-backend": {
+     "choices": [
+      "triton",
+      "flashinfer"
+     ],
+     "default": "triton"
+    },
+    "--mamba-cache-philox-rounds": {
+     "choices": null,
+     "default": 0
+    },
+    "--mamba-full-memory-ratio": {
+     "choices": null,
+     "default": null
+    },
+    "--mamba-max-states-per-path": {
+     "choices": null,
+     "default": -1
+    },
+    "--mamba-radix-cache-strategy": {
+     "choices": [
+      "auto",
+      "no_buffer",
+      "extra_buffer",
+      "extra_buffer_lazy"
+     ],
+     "default": "auto"
+    },
+    "--mamba-ssm-dtype": {
+     "choices": [
+      "float32",
+      "bfloat16",
+      "float16"
+     ],
+     "default": null
+    },
+    "--mamba-track-interval": {
+     "choices": null,
+     "default": 256
+    },
+    "--max-ep-size": {
+     "choices": null,
+     "default": null
+    },
+    "--max-loaded-loras": {
+     "choices": null,
+     "default": null
+    },
+    "--max-lora-chunk-size": {
+     "choices": [
+      16,
+      32,
+      64,
+      128
+     ],
+     "default": 16
+    },
+    "--max-lora-rank": {
+     "choices": null,
+     "default": null
+    },
+    "--max-loras-per-batch": {
+     "choices": null,
+     "default": 8
+    },
+    "--max-mamba-cache-size": {
+     "choices": null,
+     "default": null
+    },
+    "--max-prefill-tokens": {
+     "choices": null,
+     "default": 16384
+    },
+    "--max-queued-requests": {
+     "choices": null,
+     "default": null
+    },
+    "--max-running-requests": {
+     "choices": null,
+     "default": null
+    },
+    "--max-total-tokens": {
+     "choices": null,
+     "default": null
+    },
+    "--media-url-max-file-size-mb": {
+     "choices": null,
+     "default": 64
+    },
+    "--mem-fraction-static": {
+     "choices": null,
+     "default": null
+    },
+    "--min-free-slots-delay": {
+     "choices": null,
+     "default": null
+    },
+    "--mlx-enable-sampling": {
+     "choices": null,
+     "default": false
+    },
+    "--mm-attention-backend": {
+     "choices": [
+      "sdpa",
+      "fa3",
+      "fa4",
+      "triton_attn",
+      "ascend_attn",
+      "aiter_attn",
+      "flashinfer_cudnn",
+      "amx_attn",
+      "xpu_attn"
+     ],
+     "default": null
+    },
+    "--mm-enable-dp-encoder": {
+     "choices": null,
+     "default": null
+    },
+    "--mm-feature-transport": {
+     "choices": [
+      "cpu",
+      "cuda_ipc",
+      "cuda_vmm"
+     ],
+     "default": null
+    },
+    "--mm-global-cache-backend": {
+     "choices": [
+      "mooncake"
+     ],
+     "default": "mooncake"
+    },
+    "--mm-io-worker-num": {
+     "choices": null,
+     "default": 0
+    },
+    "--mm-preprocess-cache-size-mb": {
+     "choices": null,
+     "default": null
+    },
+    "--mm-process-config": {
+     "choices": null,
+     "default": null
+    },
+    "--mm-processor-worker-num": {
+     "choices": null,
+     "default": 0
+    },
+    "--model": {
+     "choices": null,
+     "default": null
+    },
+    "--model-checksum": {
+     "choices": null,
+     "default": null
+    },
+    "--model-config-parser": {
+     "choices": null,
+     "default": "auto"
+    },
+    "--model-impl": {
+     "choices": null,
+     "default": "auto"
+    },
+    "--model-loader-extra-config": {
+     "choices": null,
+     "default": "{}"
+    },
+    "--model-path": {
+     "choices": null,
+     "default": null
+    },
+    "--modelexpress-config": {
+     "choices": null,
+     "default": null
+    },
+    "--modelopt-checkpoint-restore-path": {
+     "choices": null,
+     "default": null
+    },
+    "--modelopt-checkpoint-save-path": {
+     "choices": null,
+     "default": null
+    },
+    "--modelopt-export-path": {
+     "choices": null,
+     "default": null
+    },
+    "--modelopt-quant": {
+     "choices": null,
+     "default": null
+    },
+    "--moe-a2a-backend": {
+     "choices": [
+      "none",
+      "deepep",
+      "mooncake",
+      "nixl",
+      "mori",
+      "ascend_fuseep",
+      "flashinfer",
+      "megamoe",
+      "deepep_v2",
+      "pplx",
+      "ascend_tp",
+      "flashinfer_megamoe"
+     ],
+     "default": "none"
+    },
+    "--moe-data-parallel-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--moe-dense-tp-size": {
+     "choices": null,
+     "default": null
+    },
+    "--moe-dp-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--moe-runner-backend": {
+     "choices": [
+      "auto",
+      "deep_gemm",
+      "triton",
+      "triton_kernel",
+      "flashinfer_trtllm",
+      "experimental_sgl_trtllm",
+      "flashinfer_trtllm_routed",
+      "flashinfer_cutlass",
+      "flashinfer_mxfp4",
+      "flashinfer_cutedsl",
+      "flashinfer_megamoe",
+      "cutlass",
+      "aiter",
+      "marlin",
+      "humming",
+      "experimental_sgl_marlin",
+      "lora_cutedsl",
+      "lora_triton",
+      "lora_marlin",
+      "hpc_ops",
+      "megamoe",
+      "intel_xpu"
+     ],
+     "default": "auto"
+    },
+    "--monokernel-backend": {
+     "choices": [
+      "amd"
+     ],
+     "default": false
+    },
+    "--mooncake-ib-device": {
+     "choices": null,
+     "default": null
+    },
+    "--msprobe-dump-config": {
+     "choices": null,
+     "default": null
+    },
+    "--nccl-init-addr": {
+     "choices": null,
+     "default": null
+    },
+    "--nccl-port": {
+     "choices": null,
+     "default": null
+    },
+    "--nnodes": {
+     "choices": null,
+     "default": 1
+    },
+    "--no-dcp-replicate-q-proj": {
+     "choices": null,
+     "default": null
+    },
+    "--no-dllm-fdfo": {
+     "choices": null,
+     "default": true
+    },
+    "--no-enable-decoder-swa-bounded-replay": {
+     "choices": null,
+     "default": null
+    },
+    "--no-enable-dsa-fused-indexer": {
+     "choices": null,
+     "default": null
+    },
+    "--no-enable-fused-qk-norm-rope": {
+     "choices": null,
+     "default": null
+    },
+    "--no-enable-tf32-matmul": {
+     "choices": null,
+     "default": null
+    },
+    "--no-enable-tp-lm-head-all-to-all": {
+     "choices": null,
+     "default": null
+    },
+    "--no-experts-shared-outer-loras": {
+     "choices": null,
+     "default": null
+    },
+    "--no-lora-strict-loading": {
+     "choices": null,
+     "default": false
+    },
+    "--no-mm-enable-dp-encoder": {
+     "choices": null,
+     "default": null
+    },
+    "--no-ple-offload-embedding": {
+     "choices": null,
+     "default": null
+    },
+    "--no-speculative-enable-w4a4-mxfp4-megamoe": {
+     "choices": null,
+     "default": null
+    },
+    "--node-rank": {
+     "choices": null,
+     "default": 0
+    },
+    "--num-continuous-decode-steps": {
+     "choices": null,
+     "default": 1
+    },
+    "--num-reserved-decode-tokens": {
+     "choices": null,
+     "default": 512
+    },
+    "--numa-node": {
+     "choices": null,
+     "default": null
+    },
+    "--offload-group-size": {
+     "choices": null,
+     "default": -1
+    },
+    "--offload-mode": {
+     "choices": null,
+     "default": "cpu"
+    },
+    "--offload-num-in-group": {
+     "choices": null,
+     "default": 1
+    },
+    "--offload-prefetch-step": {
+     "choices": null,
+     "default": 1
+    },
+    "--optimistic-prefill-attempts": {
+     "choices": null,
+     "default": 0
+    },
+    "--otlp-service-name": {
+     "choices": null,
+     "default": null
+    },
+    "--otlp-traces-endpoint": {
+     "choices": null,
+     "default": "localhost:4317"
+    },
+    "--page-size": {
+     "choices": null,
+     "default": null
+    },
+    "--paged-experts-num-resident": {
+     "choices": null,
+     "default": null
+    },
+    "--pdmux-config-path": {
+     "choices": null,
+     "default": null
+    },
+    "--pipeline-parallel-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--ple-offload-backend": {
+     "choices": [
+      "pinned",
+      "file"
+     ],
+     "default": "pinned"
+    },
+    "--ple-offload-dir": {
+     "choices": null,
+     "default": null
+    },
+    "--ple-offload-embedding": {
+     "choices": null,
+     "default": null
+    },
+    "--port": {
+     "choices": null,
+     "default": 30000
+    },
+    "--pp-async-batch-depth": {
+     "choices": null,
+     "default": 0
+    },
+    "--pp-max-micro-batch-size": {
+     "choices": null,
+     "default": null
+    },
+    "--pp-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--pre-warm-nccl": {
+     "choices": null,
+     "default": false
+    },
+    "--preferred-sampling-params": {
+     "choices": null,
+     "default": null
+    },
+    "--prefill-attention-backend": {
+     "choices": [
+      "triton",
+      "torch_native",
+      "flex_attention",
+      "dsa",
+      "nsa",
+      "qsa",
+      "dsv4",
+      "compressed",
+      "fa3",
+      "fa4",
+      "flashinfer",
+      "llada2_cfg_flashinfer",
+      "flashmla",
+      "trtllm_mla",
+      "cutedsl_mla",
+      "tokenspeed_mla",
+      "trtllm_mha",
+      "hpc_ops",
+      "minicpm_flashattn",
+      "minicpm_flashinfer",
+      "aiter",
+      "wave",
+      "intel_amx",
+      "ascend",
+      "intel_xpu"
+     ],
+     "default": null
+    },
+    "--prefill-decode-interval": {
+     "choices": null,
+     "default": null
+    },
+    "--prefill-decode-interval-min-bs": {
+     "choices": null,
+     "default": 0
+    },
+    "--prefill-delayer-forward-passes-buckets": {
+     "choices": null,
+     "default": null
+    },
+    "--prefill-delayer-max-delay-ms": {
+     "choices": null,
+     "default": null
+    },
+    "--prefill-delayer-max-delay-passes": {
+     "choices": null,
+     "default": 30
+    },
+    "--prefill-delayer-queue-min-ratio": {
+     "choices": null,
+     "default": null
+    },
+    "--prefill-delayer-token-usage-low-watermark": {
+     "choices": null,
+     "default": null
+    },
+    "--prefill-delayer-wait-seconds-buckets": {
+     "choices": null,
+     "default": null
+    },
+    "--prefill-kv-cache-dequant-dtype": {
+     "choices": [
+      "auto",
+      "nvfp4",
+      "fp8_e4m3"
+     ],
+     "default": "auto"
+    },
+    "--prefill-max-requests": {
+     "choices": null,
+     "default": null
+    },
+    "--prefill-only-disable-kv-cache": {
+     "choices": null,
+     "default": false
+    },
+    "--priority-scheduling-preemption-threshold": {
+     "choices": null,
+     "default": 10
+    },
+    "--prompt-tokens-buckets": {
+     "choices": null,
+     "default": null
+    },
+    "--qsa-indexer-dtype": {
+     "choices": [
+      "auto",
+      "bfloat16",
+      "fp8_e4m3"
+     ],
+     "default": "auto"
+    },
+    "--quantization": {
+     "choices": [
+      "awq",
+      "fp8",
+      "mxfp8",
+      "gptq",
+      "gptq_marlin",
+      "awq_marlin",
+      "bitsandbytes",
+      "gguf",
+      "modelopt",
+      "modelopt_fp8",
+      "modelopt_fp4",
+      "nvfp4_online",
+      "modelopt_mixed",
+      "petit_nvfp4",
+      "w8a8_int8",
+      "w8a8_fp8",
+      "moe_wna16",
+      "w4afp8",
+      "mxfp4",
+      "auto-round",
+      "auto-round-int8",
+      "compressed-tensors",
+      "modelslim",
+      "mxfp_w4a8",
+      "quark",
+      "quark_int4fp8_moe",
+      "quark_mxfp4",
+      "mlx_q4",
+      "mlx_q8",
+      "unquant",
+      "humming"
+     ],
+     "default": null
+    },
+    "--quantization-param-path": {
+     "choices": null,
+     "default": null
+    },
+    "--quantize-and-serve": {
+     "choices": null,
+     "default": false
+    },
+    "--radix-cache-backend": {
+     "choices": null,
+     "default": null
+    },
+    "--radix-eviction-policy": {
+     "choices": [
+      "lru",
+      "lfu",
+      "slru",
+      "priority",
+      "tlru"
+     ],
+     "default": "lru"
+    },
+    "--radix-eviction-policy-config": {
+     "choices": null,
+     "default": null
+    },
+    "--random-seed": {
+     "choices": null,
+     "default": null
+    },
+    "--reasoning-parser": {
+     "choices": [
+      "auto",
+      "apertus2509",
+      "beam",
+      "deepseek-r1",
+      "deepseek-v3",
+      "deepseek-v4",
+      "deepseek-v41",
+      "dots",
+      "glm45",
+      "ling3",
+      "hunyuan",
+      "gpt-oss",
+      "k2_horizon",
+      "kimi",
+      "kimi_k2",
+      "kimi_k3",
+      "mimo",
+      "muse",
+      "poolside_v1",
+      "qwen3",
+      "qwen3-thinking",
+      "minimax",
+      "minimax-append-think",
+      "minimax-m3",
+      "nanbeige",
+      "step3",
+      "step3p5",
+      "mistral",
+      "nemotron_3",
+      "granite_thinking_parser",
+      "interns1",
+      "gemma4",
+      "inkling",
+      "iquest_q1",
+      "cohere_command4",
+      "gigachat35",
+      "response_template"
+     ],
+     "default": null
+    },
+    "--remote-instance-weight-loader-backend": {
+     "choices": [
+      "transfer_engine",
+      "nccl",
+      "modelexpress"
+     ],
+     "default": "nccl"
+    },
+    "--remote-instance-weight-loader-seed-instance-ip": {
+     "choices": null,
+     "default": null
+    },
+    "--remote-instance-weight-loader-seed-instance-service-port": {
+     "choices": null,
+     "default": null
+    },
+    "--remote-instance-weight-loader-send-weights-group-ports": {
+     "choices": null,
+     "default": null
+    },
+    "--remote-instance-weight-loader-start-seed-via-transfer-engine": {
+     "choices": null,
+     "default": false
+    },
+    "--retraction-policy": {
+     "choices": [
+      "length",
+      "priority"
+     ],
+     "default": "length"
+    },
+    "--return-aux-hidden-state-layer-ids": {
+     "choices": null,
+     "default": null
+    },
+    "--return-hidden-states-mode": {
+     "choices": [
+      "last",
+      "full"
+     ],
+     "default": null
+    },
+    "--return-input-ids": {
+     "choices": null,
+     "default": false
+    },
+    "--return-output-ids": {
+     "choices": null,
+     "default": false
+    },
+    "--revision": {
+     "choices": null,
+     "default": null
+    },
+    "--rl-on-policy-target": {
+     "choices": [
+      "fsdp"
+     ],
+     "default": null
+    },
+    "--rl-quant-profile": {
+     "choices": null,
+     "default": null
+    },
+    "--sampling-backend": {
+     "choices": [
+      "flashinfer",
+      "ascend",
+      "intel_xpu",
+      "pytorch"
+     ],
+     "default": null
+    },
+    "--sampling-defaults": {
+     "choices": [
+      "openai",
+      "model"
+     ],
+     "default": "model"
+    },
+    "--sampling-mask-max-tokens": {
+     "choices": null,
+     "default": 4096
+    },
+    "--schedule-conservativeness": {
+     "choices": null,
+     "default": 1.0
+    },
+    "--schedule-low-priority-values-first": {
+     "choices": null,
+     "default": false
+    },
+    "--schedule-policy": {
+     "choices": [
+      "lpm",
+      "random",
+      "fcfs",
+      "dfs-weight",
+      "lof",
+      "priority",
+      "routing-key",
+      "hrrn",
+      "shortest-prefill-first"
+     ],
+     "default": "fcfs"
+    },
+    "--scheduler-recv-interval": {
+     "choices": null,
+     "default": 1
+    },
+    "--served-model-name": {
+     "choices": null,
+     "default": null
+    },
+    "--shared-experts-tp-size": {
+     "choices": null,
+     "default": null
+    },
+    "--show-time-cost": {
+     "choices": null,
+     "default": false
+    },
+    "--sidecar": {
+     "choices": null,
+     "default": null
+    },
+    "--sidecar-args": {
+     "choices": null,
+     "default": null
+    },
+    "--skip-server-warmup": {
+     "choices": null,
+     "default": false
+    },
+    "--skip-tokenizer-init": {
+     "choices": null,
+     "default": false
+    },
+    "--sleep-on-idle": {
+     "choices": null,
+     "default": false
+    },
+    "--sm-group-num": {
+     "choices": null,
+     "default": 8
+    },
+    "--smg-grpc-mode": {
+     "choices": null,
+     "default": false
+    },
+    "--smg-http-sidecar-port": {
+     "choices": null,
+     "default": null
+    },
+    "--soft-watchdog-timeout": {
+     "choices": null,
+     "default": null
+    },
+    "--spec-trace-dir": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-accept-threshold-acc": {
+     "choices": null,
+     "default": 1.0
+    },
+    "--speculative-accept-threshold-single": {
+     "choices": null,
+     "default": 1.0
+    },
+    "--speculative-adaptive": {
+     "choices": null,
+     "default": false
+    },
+    "--speculative-adaptive-config": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-algorithm": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-attention-mode": {
+     "choices": [
+      "prefill",
+      "decode"
+     ],
+     "default": "prefill"
+    },
+    "--speculative-dflash-block-size": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-domino-candidate-pool-size": {
+     "choices": null,
+     "default": 2048
+    },
+    "--speculative-draft-attention-backend": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-draft-kv-cache-dtype": {
+     "choices": [
+      "auto",
+      "fp8_e5m2",
+      "fp8_e4m3",
+      "bf16",
+      "bfloat16"
+     ],
+     "default": null
+    },
+    "--speculative-draft-load-format": {
+     "choices": [
+      "auto",
+      "pt",
+      "safetensors",
+      "instanttensor",
+      "npcache",
+      "dummy",
+      "sharded_state",
+      "presharded",
+      "gguf",
+      "expert_pack",
+      "bitsandbytes",
+      "mistral",
+      "layered",
+      "flash_rl",
+      "remote",
+      "remote_instance",
+      "fastsafetensors",
+      "private",
+      "runai_streamer"
+     ],
+     "default": null
+    },
+    "--speculative-draft-model": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-draft-model-path": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-draft-model-quantization": {
+     "choices": [
+      "awq",
+      "fp8",
+      "mxfp8",
+      "gptq",
+      "gptq_marlin",
+      "awq_marlin",
+      "bitsandbytes",
+      "gguf",
+      "modelopt",
+      "modelopt_fp8",
+      "modelopt_fp4",
+      "nvfp4_online",
+      "modelopt_mixed",
+      "petit_nvfp4",
+      "w8a8_int8",
+      "w8a8_fp8",
+      "moe_wna16",
+      "w4afp8",
+      "mxfp4",
+      "auto-round",
+      "auto-round-int8",
+      "compressed-tensors",
+      "modelslim",
+      "mxfp_w4a8",
+      "quark",
+      "quark_int4fp8_moe",
+      "quark_mxfp4",
+      "mlx_q4",
+      "mlx_q8",
+      "unquant",
+      "humming"
+     ],
+     "default": null
+    },
+    "--speculative-draft-model-revision": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-draft-sink-size": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-draft-window-size": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-dsa-topk-backend": {
+     "choices": [
+      "sgl-kernel",
+      "torch",
+      "flashinfer"
+     ],
+     "default": "sgl-kernel"
+    },
+    "--speculative-dspark-align-verify-tokens-to-graph-tier": {
+     "choices": null,
+     "default": false
+    },
+    "--speculative-dspark-block-size": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-dspark-confidence-sts-path": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-dspark-sps-table-path": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-eagle-topk": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-enable-w4a4-mxfp4-megamoe": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-moe-a2a-backend": {
+     "choices": [
+      "none",
+      "deepep",
+      "mooncake",
+      "nixl",
+      "mori",
+      "ascend_fuseep",
+      "flashinfer",
+      "megamoe",
+      "deepep_v2",
+      "pplx",
+      "ascend_tp"
+     ],
+     "default": null
+    },
+    "--speculative-moe-runner-backend": {
+     "choices": [
+      "auto",
+      "deep_gemm",
+      "triton",
+      "triton_kernel",
+      "flashinfer_trtllm",
+      "experimental_sgl_trtllm",
+      "flashinfer_trtllm_routed",
+      "flashinfer_cutlass",
+      "flashinfer_mxfp4",
+      "flashinfer_cutedsl",
+      "flashinfer_megamoe",
+      "cutlass",
+      "aiter",
+      "marlin",
+      "humming",
+      "experimental_sgl_marlin",
+      "lora_cutedsl",
+      "lora_triton",
+      "lora_marlin",
+      "hpc_ops",
+      "megamoe",
+      "intel_xpu"
+     ],
+     "default": null
+    },
+    "--speculative-ngram-capacity": {
+     "choices": null,
+     "default": 10000000
+    },
+    "--speculative-ngram-external-corpus-max-tokens": {
+     "choices": null,
+     "default": 10000000
+    },
+    "--speculative-ngram-external-corpus-path": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-ngram-external-sam-budget": {
+     "choices": null,
+     "default": 0
+    },
+    "--speculative-ngram-match-type": {
+     "choices": [
+      "BFS",
+      "PROB"
+     ],
+     "default": "BFS"
+    },
+    "--speculative-ngram-max-bfs-breadth": {
+     "choices": null,
+     "default": 10
+    },
+    "--speculative-ngram-max-trie-depth": {
+     "choices": null,
+     "default": 18
+    },
+    "--speculative-ngram-min-bfs-breadth": {
+     "choices": null,
+     "default": 1
+    },
+    "--speculative-num-draft-tokens": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-num-steps": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-token-map": {
+     "choices": null,
+     "default": null
+    },
+    "--speculative-use-block-verification": {
+     "choices": null,
+     "default": false
+    },
+    "--speculative-use-rejection-sampling": {
+     "choices": null,
+     "default": false
+    },
+    "--ssl-ca-certs": {
+     "choices": null,
+     "default": null
+    },
+    "--ssl-certfile": {
+     "choices": null,
+     "default": null
+    },
+    "--ssl-keyfile": {
+     "choices": null,
+     "default": null
+    },
+    "--ssl-keyfile-password": {
+     "choices": null,
+     "default": null
+    },
+    "--startup-weight-load-mode": {
+     "choices": [
+      "serial",
+      "overlap"
+     ],
+     "default": "serial"
+    },
+    "--stream-interval": {
+     "choices": null,
+     "default": 1
+    },
+    "--stream-response-default-include-usage": {
+     "choices": null,
+     "default": false
+    },
+    "--strip-thinking-cache": {
+     "choices": null,
+     "default": false
+    },
+    "--swa-full-tokens-ratio": {
+     "choices": null,
+     "default": null
+    },
+    "--swa-prefix-tails": {
+     "choices": null,
+     "default": null
+    },
+    "--tbo-token-distribution-threshold": {
+     "choices": null,
+     "default": 0.48
+    },
+    "--tensor-parallel-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--tokenizer-backend": {
+     "choices": [
+      "huggingface",
+      "fastokens"
+     ],
+     "default": "huggingface"
+    },
+    "--tokenizer-metrics-allowed-custom-labels": {
+     "choices": null,
+     "default": null
+    },
+    "--tokenizer-metrics-custom-labels-header": {
+     "choices": null,
+     "default": "x-custom-labels"
+    },
+    "--tokenizer-mode": {
+     "choices": [
+      "auto",
+      "slow"
+     ],
+     "default": "auto"
+    },
+    "--tokenizer-path": {
+     "choices": null,
+     "default": null
+    },
+    "--tokenizer-worker-num": {
+     "choices": null,
+     "default": 1
+    },
+    "--tool-call-parser": {
+     "choices": [
+      "auto",
+      "apertus2509",
+      "beam",
+      "cohere_command4",
+      "deepseekv3",
+      "deepseekv31",
+      "deepseekv32",
+      "deepseekv4",
+      "deepseekv41",
+      "dots",
+      "glm",
+      "glm45",
+      "glm47",
+      "gpt-oss",
+      "k2_horizon",
+      "kimi_k2",
+      "kimi_k3",
+      "lfm2",
+      "ling3",
+      "llama3",
+      "mimo",
+      "minicpm5",
+      "mistral",
+      "muse",
+      "poolside_v1",
+      "pythonic",
+      "qwen",
+      "qwen25",
+      "qwen3_coder",
+      "spark25",
+      "step3",
+      "step3p5",
+      "minimax-m2",
+      "minimax-m3",
+      "nanbeige",
+      "trinity",
+      "interns1",
+      "hermes",
+      "hunyuan",
+      "gigachat3",
+      "gigachat35",
+      "gemma4",
+      "inkling",
+      "iquest_q1",
+      "response_template"
+     ],
+     "default": null
+    },
+    "--tool-server": {
+     "choices": null,
+     "default": null
+    },
+    "--torch-compile-max-bs": {
+     "choices": null,
+     "default": 32
+    },
+    "--tp-size": {
+     "choices": null,
+     "default": 1
+    },
+    "--trace-modules": {
+     "choices": null,
+     "default": "request"
+    },
+    "--triton-attention-num-kv-splits": {
+     "choices": null,
+     "default": 8
+    },
+    "--triton-attention-reduce-in-fp32": {
+     "choices": null,
+     "default": false
+    },
+    "--triton-attention-split-tile-size": {
+     "choices": null,
+     "default": null
+    },
+    "--trust-mm-content-hashes": {
+     "choices": null,
+     "default": false
+    },
+    "--trust-remote-code": {
+     "choices": null,
+     "default": false
+    },
+    "--trust-request-chat-template": {
+     "choices": null,
+     "default": false
+    },
+    "--unified-cache-external-linker-backend": {
+     "choices": [
+      "mooncake",
+      "mori",
+      "dynamic"
+     ],
+     "default": "mooncake"
+    },
+    "--unified-cache-external-linker-config": {
+     "choices": null,
+     "default": null
+    },
+    "--uno-lora-path": {
+     "choices": null,
+     "default": null
+    },
+    "--use-ray": {
+     "choices": null,
+     "default": false
+    },
+    "--uvicorn-access-log-exclude-prefixes": {
+     "choices": null,
+     "default": []
+    },
+    "--warmups": {
+     "choices": null,
+     "default": null
+    },
+    "--watchdog-timeout": {
+     "choices": null,
+     "default": 300
+    },
+    "--watermark-config": {
+     "choices": null,
+     "default": null
+    },
+    "--weight-cache-mode": {
+     "choices": [
+      "off",
+      "daemon",
+      "client"
+     ],
+     "default": "off"
+    },
+    "--weight-cache-socket": {
+     "choices": null,
+     "default": null
+    },
+    "--weight-cache-timeout": {
+     "choices": null,
+     "default": 1800
+    },
+    "--weight-loader-disable-mmap": {
+     "choices": null,
+     "default": false
+    },
+    "--weight-loader-drop-cache-after-load": {
+     "choices": null,
+     "default": false
+    },
+    "--weight-loader-prefetch-checkpoints": {
+     "choices": null,
+     "default": false
+    },
+    "--weight-loader-prefetch-num-threads": {
+     "choices": null,
+     "default": 4
+    },
+    "--weight-version": {
+     "choices": null,
+     "default": "default"
+    },
+    "-h": {
+     "choices": null,
+     "default": "==SUPPRESS=="
+    }
+   },
+   "kernel": null,
+   "kv_dtypes": null,
+   "libs": {
+    "flashinfer": "0.7.2",
+    "tokenizers": "0.23.2",
+    "torch": "2.14.1",
+    "transformers": "5.19.0"
+   },
+   "probed_at": "2026-11-17T01:24:34Z",
+   "provenance": "probe",
+   "request_fields": [
+    "bootstrap_host",
+    "bootstrap_port",
+    "bootstrap_room",
+    "cache_salt",
+    "chat_template_kwargs",
+    "continue_final_message",
+    "custom_logit_processor",
+    "custom_params",
+    "data_parallel_rank",
+    "disagg_prefill_dp_rank",
+    "ebnf",
+    "extra_key",
+    "frequency_penalty",
+    "ignore_eos",
+    "images_config",
+    "input_ids",
+    "logit_bias",
+    "logprobs",
+    "lora_path",
+    "max_completion_tokens",
+    "max_dynamic_patch",
+    "max_tokens",
+    "messages",
+    "min_dynamic_patch",
+    "min_p",
+    "min_tokens",
+    "mm_processor_kwargs",
+    "model",
+    "n",
+    "no_stop_trim",
+    "parallel_tool_calls",
+    "presence_penalty",
+    "priority",
+    "reasoning_effort",
+    "regex",
+    "repetition_penalty",
+    "response_format",
+    "return_cached_tokens_details",
+    "return_flat_raw_output_top_logprobs",
+    "return_flat_raw_top_logprobs_b64",
+    "return_hidden_states",
+    "return_input_ids_in_sglext",
+    "return_meta_info",
+    "return_output_ids_in_sglext",
+    "return_prompt_token_ids",
+    "return_routed_experts",
+    "return_sampling_mask",
+    "return_spec_tokens_details",
+    "return_token_ids",
+    "rid",
+    "routed_dp_rank",
+    "routed_experts_start_len",
+    "sampling_logprobs_mode",
+    "seed",
+    "separate_reasoning",
+    "session_id",
+    "session_params",
+    "skip_special_tokens",
+    "stop",
+    "stop_regex",
+    "stop_token_ids",
+    "stream",
+    "stream_options",
+    "stream_reasoning",
+    "task",
+    "temperature",
+    "thinking",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_logprobs",
+    "top_p",
+    "use_audio_in_video",
+    "user",
+    "video_config",
+    "watermark"
+   ],
+   "seconds": 15.0,
+   "spec_fields": null,
+   "spec_methods": [
+    "DFLASH",
+    "DSPARK",
+    "EAGLE",
+    "EAGLE3",
+    "FROZEN_KV_MTP",
+    "NEXTN",
+    "NGRAM",
+    "NONE",
+    "STANDALONE",
+    "UNO"
+   ],
+   "version": "0.5.23"
+  },
+  "source": "rigtune conformance (rigtune 0.2.1) with small Qwen/Qwen2.5-0.5B-Instruct",
+  "torch": "2.14.1",
+  "transformers": "5.19.0",
+  "version": "0.5.23"
+ }
+]

@@ -20,7 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_every_record_is_where_its_engine_and_version_say():
     names = sorted(p.name for p in engines.DATA.glob("*.json"))
-    assert names == ["sglang-0.5.19.json", "vllm-0.11.0.json", "vllm-0.29.0.json"]
+    assert names == ["sglang-0.5.19.json", "sglang-0.5.23.json", "vllm-0.11.0.json", "vllm-0.29.0.json",
+                     "vllm-0.33.0.json"]
     for path in engines.DATA.glob("*.json"):
         for rec in json.loads(path.read_text(encoding="utf-8")):
             t = engines.Tested.model_validate(rec)
@@ -29,22 +30,26 @@ def test_every_record_is_where_its_engine_and_version_say():
 
 
 def test_the_checked_releases():
-    assert engines.checked_versions("vllm") == ["0.11.0", "0.29.0"]
-    assert engines.checked_versions("sglang") == ["0.5.19"]
-    # 0.33.0 and 0.5.23 are added by a run on them, not before.
-    assert "0.33.0" not in engines.checked_versions("vllm") and "0.5.23" not in engines.checked_versions("sglang")
+    assert engines.checked_versions("vllm") == ["0.11.0", "0.29.0", "0.33.0"]
+    assert engines.checked_versions("sglang") == ["0.5.19", "0.5.23"]
+    # 0.33.0 and 0.5.23 were added by the A40 conformance run of 17 November 2026, which certified both.
+    for engine, version in (("vllm", "0.33.0"), ("sglang", "0.5.23")):
+        (rec,) = [t for t in engines.tested()[engine] if t.version == version]
+        assert rec.card == "NVIDIA A40" and rec.date == "2026-11-17" and rec.source.startswith("rigtune conformance")
 
 
 @pytest.mark.parametrize("engine, version, note", [
     ("vllm", "0.29.0", None),
     ("vllm", "0.11.0", None),
     ("sglang", "0.5.19", None),
-    ("vllm", "0.33.0", "vllm 0.33.0 has not been checked with rigtune (checked: 0.11.0, 0.29.0); its flags, "
-                       "defaults and memory rules may differ from what rigtune plans for"),
-    ("vllm", "0.29.1", "vllm 0.29.1 has not been checked with rigtune (checked: 0.11.0, 0.29.0); its flags, "
-                       "defaults and memory rules may differ from what rigtune plans for"),  # a patch release too
-    ("sglang", "0.5.23", "sglang 0.5.23 has not been checked with rigtune (checked: 0.5.19); its flags, defaults "
-                         "and memory rules may differ from what rigtune plans for"),
+    ("vllm", "0.33.0", None),
+    ("sglang", "0.5.23", None),
+    ("vllm", "0.34.0", "vllm 0.34.0 has not been checked with rigtune (checked: 0.11.0, 0.29.0, 0.33.0); its "
+                       "flags, defaults and memory rules may differ from what rigtune plans for"),
+    ("vllm", "0.29.1", "vllm 0.29.1 has not been checked with rigtune (checked: 0.11.0, 0.29.0, 0.33.0); its "
+                       "flags, defaults and memory rules may differ from what rigtune plans for"),  # a patch release too
+    ("sglang", "0.5.24", "sglang 0.5.24 has not been checked with rigtune (checked: 0.5.19, 0.5.23); its flags, "
+                         "defaults and memory rules may differ from what rigtune plans for"),
     ("sglang", None, None),  # not installed
     ("llamacpp-cuda", "b6000", None),  # no table kept for it
     ("vllm-cpu", "0.29.0", None),
@@ -84,10 +89,10 @@ def _without_timing(notes):
 def test_an_unchecked_release_is_logged_once_and_noted_and_still_calibrated(hw_rtx4090, caplog, monkeypatch):
     monkeypatch.setattr(engines, "_warned", set())
     with caplog.at_level(logging.WARNING, logger="rigtune.engines"):
-        first, second = _calibrate(hw_rtx4090, "0.33.0"), _calibrate(hw_rtx4090, "0.33.0")
-    note = engines.support_note("vllm", "0.33.0")
+        first, second = _calibrate(hw_rtx4090, "0.34.0"), _calibrate(hw_rtx4090, "0.34.0")
+    note = engines.support_note("vllm", "0.34.0")
     assert note in first.notes and note in second.notes
-    assert caplog.text.count("vllm 0.33.0 has not been checked") == 1
+    assert caplog.text.count("vllm 0.34.0 has not been checked") == 1
     # The note is all it changes: the same pick, trials and every other note as on a checked release.
     checked = _calibrate(hw_rtx4090, "0.29.0")
     assert first.config.key() == checked.config.key()
@@ -108,14 +113,14 @@ def test_the_probe_prints_the_table_and_the_note(hw_rtx4090, monkeypatch):
     from rigtune.cli import app
 
     hw = hw_rtx4090.model_copy(deep=True)
-    hw.backends["vllm"] = hw.backends["vllm"].model_copy(update={"version": "0.33.0"})
+    hw.backends["vllm"] = hw.backends["vllm"].model_copy(update={"version": "0.34.0"})
     hw.backends["sglang"] = hw.backends["sglang"].model_copy(update={"version": "0.5.19"})
     monkeypatch.setattr(hardware, "probe", lambda: hw)
     r = CliRunner().invoke(app, ["probe"], env={"COLUMNS": "250"})
     assert r.exit_code == 0, r.output
     assert "Engine releases rigtune was checked with" in r.output
     assert "vllm 0.29.0" in r.output and "sglang 0.5.19" in r.output and "5.23.0" in r.output
-    assert "note: vllm 0.33.0 has not been checked with rigtune" in r.output
+    assert "note: vllm 0.34.0 has not been checked with rigtune" in r.output
     assert "sglang 0.5.19 has not been checked" not in r.output
 
 
