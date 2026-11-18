@@ -1,0 +1,1470 @@
+{
+ "results": "73654fa3ea2b4c08__Qwen__Qwen3.5-9B__file-dolly-heldout-fc5b6407__balanced.json",
+ "model_id": "Qwen/Qwen3.5-9B",
+ "gpu": "NVIDIA A100-SXM4-80GB",
+ "workload": "file-dolly-heldout-fc5b6407",
+ "calibrated_on": "file-dolly-d03d5896",
+ "objective": "balanced",
+ "ttft_ceiling_ms": 500.0,
+ "tpot_ceiling_ms": 50.0,
+ "thresholds": {
+  "stock": 0.2,
+  "tuner": 0.1,
+  "expert": 0.1,
+  "loss_margin": 0.0
+ },
+ "rigtune": {
+  "config_key": "vllm/bf16/ctx8192/b64/gmu0.95/sd=mtp:3",
+  "median_tok_s": 1069.6464504862163,
+  "scored_concurrency": 8,
+  "counted_runs": 3,
+  "runs_tok_s": [
+   1070.6694269408197,
+   1069.6464504862163,
+   1067.3247786632376
+  ],
+  "range_tok_s": [
+   1067.3247786632376,
+   1070.6694269408197
+  ],
+  "met_limits": true,
+  "answers": {
+   "answers": 96,
+   "mean_tokens": 372.1354166666667,
+   "finish_reasons": {
+    "length": 55,
+    "stop": 41
+   },
+   "repeated_4gram_share": 0.08436264144489514,
+   "looping_answers": 6,
+   "judged_for_repetition": 96
+  },
+  "workload_answers": "same",
+  "graded": {
+   "eval_set": "gsm8k",
+   "sha256": "adb277d0d7ce9025bca782c78fb3b95537fb4868093c1433cc65b284763e568d",
+   "items": 1319,
+   "tolerance": 0.03,
+   "correct": 1249,
+   "answered": 1319,
+   "reference": "vllm-default",
+   "lost": 11,
+   "gained": 9,
+   "paired": 1319,
+   "lower_bound": -0.008863018089671451,
+   "noise_flips": 15,
+   "noise_paired": 1319,
+   "passed": true,
+   "reason": "holds: 11 lost and 9 gained of 1319 items against vllm-default; the lower bound of the difference is -0.9 points, against -3; vllm-default itself differed on 15 of 1319 items between two passes; 25 of its 1319 answers stopped at the 1024-token limit and are graded wrong",
+   "graded_with": "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the answer budget",
+   "cut_off": 25
+  }
+ },
+ "rows": [
+  {
+   "label": "vllm-default",
+   "kind": "stock",
+   "config_key": "vllm/bf16/ctx262144/b256/gmu0.90",
+   "threshold": 0.2,
+   "outcome": "win",
+   "reason": "+89.4%, worst paired round +88.3%, both at least +20%, ranges apart",
+   "median_tok_s": 564.6470897268744,
+   "runs_tok_s": [
+    564.6470897268744,
+    567.9231270229843,
+    553.5614836792568
+   ],
+   "range_tok_s": [
+    553.5614836792568,
+    567.9231270229843
+   ],
+   "gain": 0.8943628151942045,
+   "worst_paired_gain": 0.8834352742302161,
+   "overlap": false,
+   "counted_runs": 3,
+   "lean": null,
+   "answers": {
+    "answers": 96,
+    "mean_tokens": 381.0104166666667,
+    "finish_reasons": {
+     "length": 58,
+     "stop": 38
+    },
+    "repeated_4gram_share": 0.087978618679781,
+    "looping_answers": 6,
+    "judged_for_repetition": 96
+   },
+   "workload_answers": "same",
+   "graded": {
+    "eval_set": "gsm8k",
+    "sha256": "adb277d0d7ce9025bca782c78fb3b95537fb4868093c1433cc65b284763e568d",
+    "items": 1319,
+    "tolerance": 0.03,
+    "correct": 1251,
+    "answered": 1319,
+    "reference": null,
+    "lost": null,
+    "gained": null,
+    "paired": null,
+    "lower_bound": null,
+    "noise_flips": 15,
+    "noise_paired": 1319,
+    "passed": true,
+    "reason": "the reference for its engine; vllm-default itself differed on 15 of 1319 items between two passes; 20 of its 1319 answers stopped at the 1024-token limit and are graded wrong",
+    "graded_with": "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the answer budget",
+    "cut_off": 20
+   }
+  },
+  {
+   "label": "sglang-default",
+   "kind": "stock",
+   "config_key": "sglang/bf16/ctx262144/b256/gmu0.88",
+   "threshold": 0.2,
+   "outcome": "win",
+   "reason": "+84.3%, worst paired round +82.6%, both at least +20%, ranges apart",
+   "median_tok_s": 580.3701661327306,
+   "runs_tok_s": [
+    578.4956172933773,
+    585.6695779709204,
+    580.3701661327306
+   ],
+   "range_tok_s": [
+    578.4956172933773,
+    585.6695779709204
+   ],
+   "gain": 0.8430417566322461,
+   "worst_paired_gain": 0.8263650541523027,
+   "overlap": false,
+   "counted_runs": 3,
+   "lean": null,
+   "answers": {
+    "answers": 96,
+    "mean_tokens": 375.4270833333333,
+    "finish_reasons": {
+     "length": 58,
+     "stop": 38
+    },
+    "repeated_4gram_share": 0.08940281595335585,
+    "looping_answers": 5,
+    "judged_for_repetition": 96
+   },
+   "workload_answers": "same",
+   "graded": {
+    "eval_set": "gsm8k",
+    "sha256": "adb277d0d7ce9025bca782c78fb3b95537fb4868093c1433cc65b284763e568d",
+    "items": 1319,
+    "tolerance": 0.03,
+    "correct": 1253,
+    "answered": 1319,
+    "reference": null,
+    "lost": null,
+    "gained": null,
+    "paired": null,
+    "lower_bound": null,
+    "noise_flips": 8,
+    "noise_paired": 1319,
+    "passed": true,
+    "reason": "the reference for its engine; sglang-default itself differed on 8 of 1319 items between two passes; 20 of its 1319 answers stopped at the 1024-token limit and are graded wrong",
+    "graded_with": "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the answer budget",
+    "cut_off": 20
+   }
+  },
+  {
+   "label": "vllm-bare",
+   "kind": "stock",
+   "config_key": "engine defaults",
+   "threshold": 0.2,
+   "outcome": "win",
+   "reason": "+88.6%, worst paired round +86.1%, both at least +20%, ranges apart",
+   "median_tok_s": 567.2243130107233,
+   "runs_tok_s": [
+    564.9507445719045,
+    574.7571378137546,
+    567.2243130107233
+   ],
+   "range_tok_s": [
+    564.9507445719045,
+    574.7571378137546
+   ],
+   "gain": 0.885755645431924,
+   "worst_paired_gain": 0.8610407424515125,
+   "overlap": false,
+   "counted_runs": 3,
+   "lean": null,
+   "answers": {
+    "answers": 96,
+    "mean_tokens": 381.6979166666667,
+    "finish_reasons": {
+     "length": 59,
+     "stop": 37
+    },
+    "repeated_4gram_share": 0.08796489895691036,
+    "looping_answers": 6,
+    "judged_for_repetition": 96
+   },
+   "workload_answers": "same",
+   "graded": {
+    "eval_set": "gsm8k",
+    "sha256": "adb277d0d7ce9025bca782c78fb3b95537fb4868093c1433cc65b284763e568d",
+    "items": 1319,
+    "tolerance": 0.03,
+    "correct": 1253,
+    "answered": 1319,
+    "reference": "vllm-default",
+    "lost": 6,
+    "gained": 8,
+    "paired": 1319,
+    "lower_bound": -0.004578109593782795,
+    "noise_flips": 15,
+    "noise_paired": 1319,
+    "passed": true,
+    "reason": "holds: 6 lost and 8 gained of 1319 items against vllm-default; the lower bound of the difference is -0.5 points, against -3; vllm-default itself differed on 15 of 1319 items between two passes; 21 of its 1319 answers stopped at the 1024-token limit and are graded wrong",
+    "graded_with": "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the answer budget",
+    "cut_off": 21
+   }
+  },
+  {
+   "label": "sglang-bare",
+   "kind": "stock",
+   "config_key": "engine defaults",
+   "threshold": 0.2,
+   "outcome": "win",
+   "reason": "+83.6%, worst paired round +82.8%, both at least +20%, ranges apart",
+   "median_tok_s": 582.5630275527456,
+   "runs_tok_s": [
+    581.100156682371,
+    585.1030098264425,
+    582.5630275527456
+   ],
+   "range_tok_s": [
+    581.100156682371,
+    585.1030098264425
+   ],
+   "gain": 0.8361042494914765,
+   "worst_paired_gain": 0.8281335637010354,
+   "overlap": false,
+   "counted_runs": 3,
+   "lean": null,
+   "answers": {
+    "answers": 96,
+    "mean_tokens": 376.4895833333333,
+    "finish_reasons": {
+     "length": 59,
+     "stop": 37
+    },
+    "repeated_4gram_share": 0.09077698491198029,
+    "looping_answers": 5,
+    "judged_for_repetition": 96
+   },
+   "workload_answers": "same",
+   "graded": {
+    "eval_set": "gsm8k",
+    "sha256": "adb277d0d7ce9025bca782c78fb3b95537fb4868093c1433cc65b284763e568d",
+    "items": 1319,
+    "tolerance": 0.03,
+    "correct": 1246,
+    "answered": 1319,
+    "reference": "sglang-default",
+    "lost": 12,
+    "gained": 5,
+    "paired": 1319,
+    "lower_bound": -0.012488240606396975,
+    "noise_flips": 8,
+    "noise_paired": 1319,
+    "passed": true,
+    "reason": "holds: 12 lost and 5 gained of 1319 items against sglang-default; the lower bound of the difference is -1.2 points, against -3; sglang-default itself differed on 8 of 1319 items between two passes; 27 of its 1319 answers stopped at the 1024-token limit and are graded wrong",
+    "graded_with": "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the answer budget",
+    "cut_off": 27
+   }
+  },
+  {
+   "label": "vllm-expert-ngram",
+   "kind": "expert",
+   "config_key": "vllm/bf16/ctx262144/b256/gmu0.90/speculative_config={\"method\": \"ngram\", \"num_speculative_tokens\": 5, \"prompt_lookup_max\": 4}",
+   "threshold": 0.1,
+   "outcome": "win",
+   "reason": "+85.1%, worst paired round +82.4%, both at least +10%, ranges apart",
+   "median_tok_s": 578.0228060357241,
+   "runs_tok_s": [
+    558.9370569679104,
+    578.0228060357241,
+    585.1389127484526
+   ],
+   "range_tok_s": [
+    558.9370569679104,
+    585.1389127484526
+   ],
+   "gain": 0.8505263794385787,
+   "worst_paired_gain": 0.8240536655644939,
+   "overlap": false,
+   "counted_runs": 3,
+   "lean": null,
+   "answers": {
+    "answers": 96,
+    "mean_tokens": 379.96875,
+    "finish_reasons": {
+     "length": 59,
+     "stop": 37
+    },
+    "repeated_4gram_share": 0.07984389591495976,
+    "looping_answers": 5,
+    "judged_for_repetition": 96
+   },
+   "workload_answers": "same",
+   "graded": {
+    "eval_set": "gsm8k",
+    "sha256": "adb277d0d7ce9025bca782c78fb3b95537fb4868093c1433cc65b284763e568d",
+    "items": 1319,
+    "tolerance": 0.03,
+    "correct": 1249,
+    "answered": 1319,
+    "reference": "vllm-default",
+    "lost": 11,
+    "gained": 9,
+    "paired": 1319,
+    "lower_bound": -0.008863018089671451,
+    "noise_flips": 15,
+    "noise_paired": 1319,
+    "passed": true,
+    "reason": "holds: 11 lost and 9 gained of 1319 items against vllm-default; the lower bound of the difference is -0.9 points, against -3; vllm-default itself differed on 15 of 1319 items between two passes; 27 of its 1319 answers stopped at the 1024-token limit and are graded wrong",
+    "graded_with": "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the answer budget",
+    "cut_off": 27
+   }
+  },
+  {
+   "label": "vllm-expert-kv-fp8",
+   "kind": "expert",
+   "config_key": "vllm/bf16/ctx262144/b256/gmu0.90/kvfp8_e5m2",
+   "threshold": 0.1,
+   "outcome": "win",
+   "reason": "+89.0%, worst paired round +85.3%, both at least +10%, ranges apart",
+   "median_tok_s": 565.9883747722287,
+   "runs_tok_s": [
+    577.6561583814206,
+    565.9883747722287,
+    565.780157006392
+   ],
+   "range_tok_s": [
+    565.780157006392,
+    577.6561583814206
+   ],
+   "gain": 0.8898735347995006,
+   "worst_paired_gain": 0.8534718472331551,
+   "overlap": false,
+   "counted_runs": 3,
+   "lean": null,
+   "answers": {
+    "answers": 96,
+    "mean_tokens": 355.1666666666667,
+    "finish_reasons": {
+     "length": 54,
+     "stop": 42
+    },
+    "repeated_4gram_share": 0.08588424274829959,
+    "looping_answers": 6,
+    "judged_for_repetition": 96
+   },
+   "workload_answers": "same",
+   "graded": {
+    "eval_set": "gsm8k",
+    "sha256": "adb277d0d7ce9025bca782c78fb3b95537fb4868093c1433cc65b284763e568d",
+    "items": 1319,
+    "tolerance": 0.03,
+    "correct": 1248,
+    "answered": 1319,
+    "reference": "vllm-default",
+    "lost": 11,
+    "gained": 8,
+    "paired": 1319,
+    "lower_bound": -0.009528922509438435,
+    "noise_flips": 15,
+    "noise_paired": 1319,
+    "passed": true,
+    "reason": "holds: 11 lost and 8 gained of 1319 items against vllm-default; the lower bound of the difference is -1.0 points, against -3; vllm-default itself differed on 15 of 1319 items between two passes; 24 of its 1319 answers stopped at the 1024-token limit and are graded wrong",
+    "graded_with": "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the answer budget",
+    "cut_off": 24
+   }
+  },
+  {
+   "label": "sglang-expert-ngram",
+   "kind": "expert",
+   "config_key": "sglang/bf16/ctx262144/b256/gmu0.88/speculative_algorithm=NGRAM",
+   "threshold": 0.1,
+   "outcome": "win",
+   "reason": "+108.5%, worst paired round +104.3%, both at least +10%, ranges apart",
+   "median_tok_s": 512.9274677438411,
+   "runs_tok_s": [
+    512.9274677438411,
+    510.6163307493164,
+    522.5512845451756
+   ],
+   "range_tok_s": [
+    510.6163307493164,
+    522.5512845451756
+   ],
+   "gain": 1.0853756481226382,
+   "worst_paired_gain": 1.04252637057859,
+   "overlap": false,
+   "counted_runs": 3,
+   "lean": null,
+   "answers": {
+    "answers": 96,
+    "mean_tokens": 374.7708333333333,
+    "finish_reasons": {
+     "length": 58,
+     "stop": 38
+    },
+    "repeated_4gram_share": 0.09089308753403286,
+    "looping_answers": 6,
+    "judged_for_repetition": 96
+   },
+   "workload_answers": "same",
+   "graded": {
+    "eval_set": "gsm8k",
+    "sha256": "adb277d0d7ce9025bca782c78fb3b95537fb4868093c1433cc65b284763e568d",
+    "items": 1319,
+    "tolerance": 0.03,
+    "correct": 1249,
+    "answered": 1319,
+    "reference": "sglang-default",
+    "lost": 10,
+    "gained": 6,
+    "paired": 1319,
+    "lower_bound": -0.009893777325158898,
+    "noise_flips": 8,
+    "noise_paired": 1319,
+    "passed": true,
+    "reason": "holds: 10 lost and 6 gained of 1319 items against sglang-default; the lower bound of the difference is -1.0 points, against -3; sglang-default itself differed on 8 of 1319 items between two passes; 20 of its 1319 answers stopped at the 1024-token limit and are graded wrong",
+    "graded_with": "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the answer budget",
+    "cut_off": 20
+   }
+  },
+  {
+   "label": "sglang-expert-kv-fp8-e4m3",
+   "kind": "expert",
+   "config_key": "sglang/bf16/ctx262144/b256/gmu0.88/kvfp8_e4m3",
+   "threshold": 0.1,
+   "outcome": "win",
+   "reason": "+84.3%, worst paired round +83.5%, both at least +10%, ranges apart",
+   "median_tok_s": 580.539630082305,
+   "runs_tok_s": [
+    580.539630082305,
+    582.999970714994,
+    576.4818770538338
+   ],
+   "range_tok_s": [
+    576.4818770538338,
+    582.999970714994
+   ],
+   "gain": 0.8425037586746127,
+   "worst_paired_gain": 0.8347281375921798,
+   "overlap": false,
+   "counted_runs": 3,
+   "lean": null,
+   "answers": {
+    "answers": 96,
+    "mean_tokens": 385.5833333333333,
+    "finish_reasons": {
+     "length": 61,
+     "stop": 35
+    },
+    "repeated_4gram_share": 0.08541192364757332,
+    "looping_answers": 5,
+    "judged_for_repetition": 96
+   },
+   "workload_answers": "same",
+   "graded": {
+    "eval_set": "gsm8k",
+    "sha256": "adb277d0d7ce9025bca782c78fb3b95537fb4868093c1433cc65b284763e568d",
+    "items": 1319,
+    "tolerance": 0.03,
+    "correct": 1250,
+    "answered": 1319,
+    "reference": "sglang-default",
+    "lost": 11,
+    "gained": 8,
+    "paired": 1319,
+    "lower_bound": -0.009528922509438435,
+    "noise_flips": 8,
+    "noise_paired": 1319,
+    "passed": true,
+    "reason": "holds: 11 lost and 8 gained of 1319 items against sglang-default; the lower bound of the difference is -1.0 points, against -3; sglang-default itself differed on 8 of 1319 items between two passes; 24 of its 1319 answers stopped at the 1024-token limit and are graded wrong",
+    "graded_with": "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the answer budget",
+    "cut_off": 24
+   }
+  },
+  {
+   "label": "sglang-expert-torch-compile",
+   "kind": "expert",
+   "config_key": "sglang/bf16/ctx262144/b256/gmu0.88/enable_torch_compile=True",
+   "threshold": 0.1,
+   "outcome": "not applicable",
+   "reason": "could not start or failed: out of memory at start-up; failed to start (rc=-9)",
+   "median_tok_s": null,
+   "runs_tok_s": [
+    null,
+    null,
+    null
+   ],
+   "range_tok_s": null,
+   "gain": null,
+   "worst_paired_gain": null,
+   "overlap": null,
+   "counted_runs": 0,
+   "lean": null,
+   "answers": null,
+   "workload_answers": "unknown: sglang-expert-torch-compile recorded no answers at 8 users",
+   "graded": {
+    "eval_set": "gsm8k",
+    "sha256": "adb277d0d7ce9025bca782c78fb3b95537fb4868093c1433cc65b284763e568d",
+    "items": 1319,
+    "tolerance": 0.03,
+    "correct": 0,
+    "answered": 0,
+    "reference": null,
+    "lost": null,
+    "gained": null,
+    "paired": null,
+    "lower_bound": null,
+    "noise_flips": null,
+    "noise_paired": null,
+    "passed": null,
+    "reason": "not graded: its engine never answered the items",
+    "graded_with": "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the answer budget",
+    "cut_off": null
+   }
+  },
+  {
+   "label": "autotune-vllm",
+   "kind": "tuner",
+   "config_key": "vllm/bf16/ctx4096/b256/gmu0.98/pb4096/pc",
+   "threshold": 0.1,
+   "outcome": "win",
+   "reason": "+89.2%, worst paired round +88.8%, both at least +10%, ranges apart",
+   "median_tok_s": 565.2612877065593,
+   "runs_tok_s": [
+    564.1758105920713,
+    565.410934189697,
+    565.2612877065593
+   ],
+   "range_tok_s": [
+    564.1758105920713,
+    565.410934189697
+   ],
+   "gain": 0.89230445061275,
+   "worst_paired_gain": 0.8881971963686137,
+   "overlap": false,
+   "counted_runs": 3,
+   "lean": null,
+   "answers": {
+    "answers": 96,
+    "mean_tokens": 378.3125,
+    "finish_reasons": {
+     "length": 59,
+     "stop": 37
+    },
+    "repeated_4gram_share": 0.09079191929544249,
+    "looping_answers": 6,
+    "judged_for_repetition": 96
+   },
+   "workload_answers": "same",
+   "graded": {
+    "eval_set": "gsm8k",
+    "sha256": "adb277d0d7ce9025bca782c78fb3b95537fb4868093c1433cc65b284763e568d",
+    "items": 1319,
+    "tolerance": 0.03,
+    "correct": 1256,
+    "answered": 1319,
+    "reference": "vllm-default",
+    "lost": 5,
+    "gained": 10,
+    "paired": 1319,
+    "lower_bound": -0.0022263511401213825,
+    "noise_flips": 15,
+    "noise_paired": 1319,
+    "passed": true,
+    "reason": "holds: 5 lost and 10 gained of 1319 items against vllm-default; the lower bound of the difference is -0.2 points, against -3; vllm-default itself differed on 15 of 1319 items between two passes; 20 of its 1319 answers stopped at the 1024-token limit and are graded wrong",
+    "graded_with": "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the answer budget",
+    "cut_off": 20
+   }
+  },
+  {
+   "label": "llm-optimizer-vllm",
+   "kind": "tuner",
+   "config_key": "vllm/bf16/ctx4096/b64/pb16384",
+   "threshold": 0.1,
+   "outcome": "win",
+   "reason": "+88.4%, worst paired round +87.4%, both at least +10%, ranges apart",
+   "median_tok_s": 567.7679956220718,
+   "runs_tok_s": [
+    564.6305204330342,
+    570.7543013239557,
+    567.7679956220718
+   ],
+   "range_tok_s": [
+    564.6305204330342,
+    570.7543013239557
+   ],
+   "gain": 0.8839498857526553,
+   "worst_paired_gain": 0.8740926665029078,
+   "overlap": false,
+   "counted_runs": 3,
+   "lean": null,
+   "answers": {
+    "answers": 96,
+    "mean_tokens": 380.1666666666667,
+    "finish_reasons": {
+     "length": 59,
+     "stop": 37
+    },
+    "repeated_4gram_share": 0.08809657569661784,
+    "looping_answers": 6,
+    "judged_for_repetition": 96
+   },
+   "workload_answers": "same",
+   "graded": {
+    "eval_set": "gsm8k",
+    "sha256": "adb277d0d7ce9025bca782c78fb3b95537fb4868093c1433cc65b284763e568d",
+    "items": 1319,
+    "tolerance": 0.03,
+    "correct": 1249,
+    "answered": 1319,
+    "reference": "vllm-default",
+    "lost": 10,
+    "gained": 8,
+    "paired": 1319,
+    "lower_bound": -0.008563409696187668,
+    "noise_flips": 15,
+    "noise_paired": 1319,
+    "passed": true,
+    "reason": "holds: 10 lost and 8 gained of 1319 items against vllm-default; the lower bound of the difference is -0.9 points, against -3; vllm-default itself differed on 15 of 1319 items between two passes; 26 of its 1319 answers stopped at the 1024-token limit and are graded wrong",
+    "graded_with": "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the answer budget",
+    "cut_off": 26
+   }
+  },
+  {
+   "label": "llm-optimizer-sglang",
+   "kind": "tuner",
+   "config_key": "sglang/bf16/ctx4096/b128/pb4096",
+   "threshold": 0.1,
+   "outcome": "win",
+   "reason": "+84.1%, worst paired round +83.9%, both at least +10%, ranges apart",
+   "median_tok_s": 581.0785497304482,
+   "runs_tok_s": [
+    582.0482590537006,
+    581.0785497304482,
+    579.8812015439153
+   ],
+   "range_tok_s": [
+    579.8812015439153,
+    582.0482590537006
+   ],
+   "gain": 0.8407949338043985,
+   "worst_paired_gain": 0.8394856616898467,
+   "overlap": false,
+   "counted_runs": 3,
+   "lean": null,
+   "answers": {
+    "answers": 96,
+    "mean_tokens": 376.0416666666667,
+    "finish_reasons": {
+     "length": 58,
+     "stop": 38
+    },
+    "repeated_4gram_share": 0.09099690450620508,
+    "looping_answers": 5,
+    "judged_for_repetition": 96
+   },
+   "workload_answers": "same",
+   "graded": {
+    "eval_set": "gsm8k",
+    "sha256": "adb277d0d7ce9025bca782c78fb3b95537fb4868093c1433cc65b284763e568d",
+    "items": 1319,
+    "tolerance": 0.03,
+    "correct": 1256,
+    "answered": 1319,
+    "reference": "sglang-default",
+    "lost": 3,
+    "gained": 6,
+    "paired": 1319,
+    "lower_bound": -0.0026640676088433113,
+    "noise_flips": 8,
+    "noise_paired": 1319,
+    "passed": true,
+    "reason": "holds: 3 lost and 6 gained of 1319 items against sglang-default; the lower bound of the difference is -0.3 points, against -3; sglang-default itself differed on 8 of 1319 items between two passes; 19 of its 1319 answers stopped at the 1024-token limit and are graded wrong",
+    "graded_with": "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the answer budget",
+    "cut_off": 19
+   }
+  },
+  {
+   "label": "vllm-expert-batched-tokens",
+   "kind": "expert",
+   "config_key": null,
+   "threshold": 0.1,
+   "outcome": "not applicable",
+   "reason": "not run: not on an A100: vLLM's own source: \"Setting large `max_num_batched_tokens` for A100 reduces throughput, see PR #17885 for more details.\" (vllm/engine/arg_utils.py EngineArgs.get_batch_defaults, NOTE(Kuntai), v0.29.0 and v0.33.0), so the row would not be what the page recommends",
+   "median_tok_s": null,
+   "runs_tok_s": [],
+   "range_tok_s": null,
+   "gain": null,
+   "worst_paired_gain": null,
+   "overlap": null,
+   "counted_runs": 0,
+   "lean": null,
+   "answers": null,
+   "workload_answers": null,
+   "graded": null
+  },
+  {
+   "label": "sglang-expert-eagle3",
+   "kind": "expert",
+   "config_key": null,
+   "threshold": 0.1,
+   "outcome": "not applicable",
+   "reason": "not run: rigtune lists no EAGLE-3 head for Qwen/Qwen3.5-9B (rigtune/speculative.py EAGLE3_HEADS)",
+   "median_tok_s": null,
+   "runs_tok_s": [],
+   "range_tok_s": null,
+   "gain": null,
+   "worst_paired_gain": null,
+   "overlap": null,
+   "counted_runs": 0,
+   "lean": null,
+   "answers": null,
+   "workload_answers": null,
+   "graded": null
+  },
+  {
+   "label": "aiconfigurator-vllm",
+   "kind": "tuner",
+   "config_key": null,
+   "threshold": 0.1,
+   "outcome": "not applicable",
+   "reason": "not run: AIConfigurator exited 1; see output.log",
+   "median_tok_s": null,
+   "runs_tok_s": [],
+   "range_tok_s": null,
+   "gain": null,
+   "worst_paired_gain": null,
+   "overlap": null,
+   "counted_runs": 0,
+   "lean": null,
+   "answers": null,
+   "workload_answers": null,
+   "graded": null
+  },
+  {
+   "label": "aiconfigurator-sglang",
+   "kind": "tuner",
+   "config_key": null,
+   "threshold": 0.1,
+   "outcome": "not applicable",
+   "reason": "not run: AIConfigurator exited 1; see output.log",
+   "median_tok_s": null,
+   "runs_tok_s": [],
+   "range_tok_s": null,
+   "gain": null,
+   "worst_paired_gain": null,
+   "overlap": null,
+   "counted_runs": 0,
+   "lean": null,
+   "answers": null,
+   "workload_answers": null,
+   "graded": null
+  }
+ ],
+ "overall": {
+  "outcome": "win on the rows that could be compared",
+  "text": "win on the 11 rows that could be compared; 5 not applicable, so not a win against every row",
+  "wins": 11,
+  "ahead_answers_unchecked": 0,
+  "ties": 0,
+  "behind": 0,
+  "behind_beyond_spread": 0,
+  "losses": 0,
+  "provisional": 0,
+  "not_applicable": 5,
+  "row_ahead_on_worse_answers": 0,
+  "row_answers_worse": 0,
+  "ahead_on_worse_answers": 0,
+  "rigtune_answers_worse": 0
+ },
+ "notes": [
+  "autotune-vllm: at up to 8 users, a batched-token budget of 4096 (a step here holds at most 8 x 135 + 8 = 1088 tokens); a context of 4096 (prompts here average 135 tokens, answers at most 512) cannot act, so on these settings it measures like its engine's stock row; measure at more users (compare --levels) to see them act",
+  "llm-optimizer-vllm: at up to 8 users, a batch cap of 64 (it binds above 64 users); a batched-token budget of 16384 (a step here holds at most 8 x 135 + 8 = 1088 tokens); a context of 4096 (prompts here average 135 tokens, answers at most 512) cannot act, so on these settings it measures like its engine's stock row; measure at more users (compare --levels) to see them act",
+  "llm-optimizer-sglang: at up to 8 users, a batch cap of 128 (it binds above 128 users); a batched-token budget of 4096 (a step here holds at most 8 x 135 + 8 = 1088 tokens); a context of 4096 (prompts here average 135 tokens, answers at most 512) cannot act, so on these settings it measures like its engine's stock row; measure at more users (compare --levels) to see them act",
+  "sglang-expert-torch-compile's answers were not checked: not graded: its engine never answered the items",
+  "vllm-expert-ngram is an expert row: vllm-default plus `--speculative-config '{\"method\": \"ngram\", \"num_speculative_tokens\": 5, \"prompt_lookup_max\": 4}'`: \"This document shows how to use [Speculative Decoding](https://arxiv.org/pdf/2302.01318) with vLLM to reduce inter-token latency under medium-to-low QPS (queries per second), memory-bound workloads.\" (docs/features/speculative_decoding/README.md, introduction, read at v0.29.0 and v0.33.0); \"| N-gram | Low to medium gain | Medium gain | Lightweight and easy to enable. |\" (docs/features/speculative_decoding/README.md, Method Selection at a Glance, read at v0.29.0 and v0.33.0)",
+  "vllm-expert-kv-fp8 is an expert row: vllm-default plus `--kv-cache-dtype fp8`: \"Quantizing the KV (Key-Value) cache to FP8 format can significantly reduce its memory footprint. This optimization enables you to store more tokens in memory, leading to improved throughput and support for longer context windows.\" (docs/features/quantization/quantized_kvcache.md, FP8 KV Cache Overview, read at v0.29.0 and v0.33.0)",
+  "vllm-expert-kv-fp8: this card does not have vllm's fp8 KV cache as rigtune runs it, so the row uses fp8_e5m2: `--kv-cache-dtype fp8_e5m2`: \"`kv_cache_dtype=\"fp8_e5m2\"`: Supported on CUDA 11.8+\" (docs/features/quantization/quantized_kvcache.md, Additional kv_cache_dtype Options, read at v0.29.0 and v0.33.0); on a card where rigtune does not run vLLM's fp8 (e4m3) cache, Ampere among them, the row uses the page's other fp8 format, which rigtune runs there through FlashInfer (rigtune/backends/vllm.py AMPERE_FP8_KV)",
+  "sglang-expert-ngram is an expert row: sglang-default plus `--speculative-algorithm NGRAM`: \"**No extra model available**: Use **NGRAM** (`--speculative-algorithm NGRAM`, CUDA-only).\" (docs/docs/advanced_features/speculative_decoding.mdx, Quick guidance, read at v0.5.19 and v0.5.23)",
+  "sglang-expert-kv-fp8-e4m3 is an expert row: sglang-default plus `--kv-cache-dtype fp8_e4m3`: \"Quantized KV cache is a memory optimization technique that primarily benefits throughput by allowing more tokens to be cached, but may introduce minimal accuracy degradation depending on the quantization format used.\" (docs/docs/advanced_features/quantized_kv_cache.mdx, introduction, read at v0.5.19 and v0.5.23); \"**Choose the right format**: Use `fp8_e4m3` for better accuracy (recommended), `fp8_e5m2` for larger dynamic range, or `nvfp4` / `fp4_mx_block16` for maximum memory savings (experimental)\" (docs/docs/advanced_features/quantized_kv_cache.mdx, best practices, read at v0.5.19 and v0.5.23)",
+  "sglang-expert-torch-compile is an expert row: sglang-default plus `--enable-torch-compile`: \"`torch.compile` accelerates small models on small batch sizes. You can enable it with `--enable-torch-compile`.\" (docs/docs/advanced_features/hyperparameter_tuning.mdx, Try other options, read at v0.5.19 and v0.5.23)",
+  "autotune-vllm is a tuner row: vLLM benchmarks/auto_tune/auto_tune.sh at 4ba787ec9959, patched to judge p95 time to first token <= 500 ms, rigtune's ceiling (the patch is auto_tune.diff beside its output); INPUT_LEN=63, OUTPUT_LEN=379, MAX_MODEL_LEN=4096; its search ran with --load-format dummy (random weights), random fixed-length prompts with --ignore-eos, and open-loop load; this row is re-measured with the real weights",
+  "llm-optimizer-vllm is a tuner row: BentoML llm-optimizer at 7be87d7, --framework vllm: its highest output throughput among 22 measured runs that met [{\"op\": \"<\", \"value\": 500.0, \"name\": \"p95_ttft_ms\"}, {\"op\": \"<\", \"value\": 50.0, \"name\": \"mean_itl_ms\"}], on its own client with random prompts of 63 tokens and answers of 379; its card 'A100'; this row is re-measured on the comparison's prompts; its search was cut off at the calibration's budget of 3600 s, so this is its pick among the 22 runs it finished, made by its own end-of-run code; its own figure: 664.2 output tok/s at max_concurrency 8; its server command: vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=64 --max-num-batched-tokens=16384 --max-model-len=4096",
+  "llm-optimizer-sglang is a tuner row: BentoML llm-optimizer at 7be87d7, --framework sglang: its highest output throughput among 27 measured runs that met [{\"op\": \"<\", \"value\": 500.0, \"name\": \"p95_ttft_ms\"}, {\"op\": \"<\", \"value\": 50.0, \"name\": \"mean_itl_ms\"}], on its own client with random prompts of 63 tokens and answers of 379; its card 'A100'; this row is re-measured on the comparison's prompts; its own figure: 672.7 output tok/s at max_concurrency 8; its server command: /workspace/venvs/sglang/bin/python -m sglang.launch_server --model-path Qwen/Qwen3.5-9B --host 127.0.0.1 --port 30000 --max-running-requests=128 --chunked-prefill-size=4096 --context-length=4096",
+  "vllm-expert-batched-tokens (expert) was not measured: not on an A100: vLLM's own source: \"Setting large `max_num_batched_tokens` for A100 reduces throughput, see PR #17885 for more details.\" (vllm/engine/arg_utils.py EngineArgs.get_batch_defaults, NOTE(Kuntai), v0.29.0 and v0.33.0), so the row would not be what the page recommends",
+  "sglang-expert-eagle3 (expert) was not measured: rigtune lists no EAGLE-3 head for Qwen/Qwen3.5-9B (rigtune/speculative.py EAGLE3_HEADS)",
+  "aiconfigurator-vllm (tuner) was not measured: AIConfigurator exited 1; see output.log",
+  "aiconfigurator-sglang (tuner) was not measured: AIConfigurator exited 1; see output.log",
+  "rigtune's pick was calibrated on `file-dolly-d03d5896`; every row here was measured on `file-dolly-heldout-fc5b6407`, which calibration never saw",
+  "every row was measured 3 times, interleaved; tok/s is the median run's, and the spread is (max - min) / median"
+ ],
+ "provenance": {
+  "rigtune_version": "0.2.1",
+  "rigtune_commit": null,
+  "os": "Linux 6.8.0-138-generic",
+  "python": "3.12.3",
+  "gpus": [
+   {
+    "name": "NVIDIA A100-SXM4-80GB",
+    "driver_version": "595.112.07",
+    "cuda_version": "13.2",
+    "vram_total_bytes": 85899345920
+   }
+  ],
+  "engines": {
+   "sglang": {
+    "version": "0.5.23",
+    "libs": {
+     "flashinfer": "0.7.2",
+     "tokenizers": "0.23.2",
+     "torch": "2.14.1",
+     "transformers": "5.19.0"
+    }
+   },
+   "vllm": {
+    "version": "0.33.0",
+    "libs": {
+     "arctic-inference": "0.1.1",
+     "flashinfer": "0.7.2.post1",
+     "tokenizers": "0.23.3",
+     "torch": "2.14.0",
+     "transformers": "5.20.2"
+    }
+   }
+  },
+  "files": {
+   "calibration_prompts": {
+    "name": "dolly.jsonl",
+    "sha256": "d03d589625eea015d475c8526a27ffc900517fa443c5930b3093f4d6ca7b69eb"
+   },
+   "measured_prompts": {
+    "name": "dolly-heldout.jsonl",
+    "sha256": "fc5b6407bbd865dbb38f5415f4de5a8a7f4130c6776fc7249007c3deb6ca3d17"
+   }
+  },
+  "launch_args_port": "launch_args show port 0; each run's engine got a free port in its place",
+  "model": {
+   "hf_id": "Qwen/Qwen3.5-9B",
+   "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+   "snapshot": "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
+  },
+  "workload": {
+   "name": "file-dolly-heldout-fc5b6407",
+   "source": "file:dolly-heldout.jsonl",
+   "seed": 0,
+   "temperature": 0.0,
+   "natural_stop": true,
+   "prompts": "a copy of the file is beside the results"
+  },
+  "command": [
+   "rigtune",
+   "compare",
+   "Qwen/Qwen3.5-9B",
+   "--workload",
+   "chat",
+   "--workload-file",
+   "dolly.jsonl",
+   "--objective",
+   "balanced",
+   "--ttft-ceiling",
+   "500",
+   "--tpot-ceiling",
+   "50",
+   "--speculative",
+   "all",
+   "--drafts",
+   "verified",
+   "--budget",
+   "60m",
+   "--eval-workload-file",
+   "dolly-heldout.jsonl",
+   "--repeats",
+   "3",
+   "--expert",
+   "--bare-stock",
+   "--rows",
+   "rows.json",
+   "--rows",
+   "llmopt-vllm-rows.json",
+   "--rows",
+   "rows.json",
+   "--rows",
+   "rows.json",
+   "--rows",
+   "rows.json",
+   "--verdict",
+   "--check-answers",
+   "gsm8k",
+   "--check-items",
+   "0",
+   "--out",
+   "results"
+  ],
+  "options": {
+   "objective": "balanced",
+   "workload": "file-dolly-d03d5896",
+   "measured_on": "file-dolly-heldout-fc5b6407",
+   "levels": null,
+   "repeats": 3,
+   "include": [],
+   "backend": null,
+   "ttft_ceiling_ms": 500.0,
+   "ttft_percentile": 95,
+   "tpot_ceiling_ms": 50.0,
+   "expert": true,
+   "bare_stock": true,
+   "rows": [
+    "rows.json",
+    "llmopt-vllm-rows.json",
+    "rows.json",
+    "rows.json",
+    "rows.json"
+   ],
+   "check_answers": "gsm8k",
+   "check_items": 0,
+   "max_accuracy_loss_points": 3.0,
+   "verdict_thresholds": {
+    "stock": 0.2,
+    "tuner": 0.1,
+    "expert": 0.1,
+    "loss_margin": 0.0
+   }
+  },
+  "rows_files": [
+   {
+    "name": "rows.json",
+    "sha256": "a405aace27781e7ac8ef989ad20b6b63e68ec6fce12c62ce2fe810ebad471d82",
+    "content": {
+     "rows": [
+      {
+       "label": "autotune-vllm",
+       "kind": "tuner",
+       "source": "vLLM benchmarks/auto_tune/auto_tune.sh at 4ba787ec9959, patched to judge p95 time to first token <= 500 ms, rigtune's ceiling (the patch is auto_tune.diff beside its output); INPUT_LEN=63, OUTPUT_LEN=379, MAX_MODEL_LEN=4096; its search ran with --load-format dummy (random weights), random fixed-length prompts with --ignore-eos, and open-loop load; this row is re-measured with the real weights",
+       "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 4096,
+        "batch": 256,
+        "gpu_memory_utilization": 0.98,
+        "prefill_budget": 4096,
+        "prefix_cache": true
+       }
+      }
+     ]
+    }
+   },
+   {
+    "name": "llmopt-vllm-rows.json",
+    "sha256": "bc447e2a4109d2300429107c1cdfdf060de732cd47a428a06e329a02e13697b4",
+    "content": {
+     "rows": [
+      {
+       "label": "llm-optimizer-vllm",
+       "kind": "tuner",
+       "source": "BentoML llm-optimizer at 7be87d7, --framework vllm: its highest output throughput among 22 measured runs that met [{\"op\": \"<\", \"value\": 500.0, \"name\": \"p95_ttft_ms\"}, {\"op\": \"<\", \"value\": 50.0, \"name\": \"mean_itl_ms\"}], on its own client with random prompts of 63 tokens and answers of 379; its card 'A100'; this row is re-measured on the comparison's prompts; its search was cut off at the calibration's budget of 3600 s, so this is its pick among the 22 runs it finished, made by its own end-of-run code; its own figure: 664.2 output tok/s at max_concurrency 8; its server command: vllm serve Qwen/Qwen3.5-9B --host 127.0.0.1 --port 8000 --max-num-seqs=64 --max-num-batched-tokens=16384 --max-model-len=4096",
+       "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 4096,
+        "prefill_budget": 16384,
+        "batch": 64
+       }
+      }
+     ]
+    }
+   },
+   {
+    "name": "rows.json",
+    "sha256": "c0978cfb660df6ad98dc1d9d56a77fb0b03d76da27017b4a11d81017df06a169",
+    "content": {
+     "rows": [
+      {
+       "label": "llm-optimizer-sglang",
+       "kind": "tuner",
+       "source": "BentoML llm-optimizer at 7be87d7, --framework sglang: its highest output throughput among 27 measured runs that met [{\"op\": \"<\", \"value\": 500.0, \"name\": \"p95_ttft_ms\"}, {\"op\": \"<\", \"value\": 50.0, \"name\": \"mean_itl_ms\"}], on its own client with random prompts of 63 tokens and answers of 379; its card 'A100'; this row is re-measured on the comparison's prompts; its own figure: 672.7 output tok/s at max_concurrency 8; its server command: /workspace/venvs/sglang/bin/python -m sglang.launch_server --model-path Qwen/Qwen3.5-9B --host 127.0.0.1 --port 30000 --max-running-requests=128 --chunked-prefill-size=4096 --context-length=4096",
+       "config": {
+        "backend": "sglang",
+        "quant": "bf16",
+        "prefill_budget": 4096,
+        "ctx": 4096,
+        "batch": 128
+       }
+      }
+     ]
+    }
+   },
+   {
+    "name": "rows.json",
+    "sha256": "b088cb45485de8f50d4f15b1c7c17251c7604f8942f45a5df8a08f465e893660",
+    "content": {
+     "rows": [
+      {
+       "label": "aiconfigurator-vllm",
+       "kind": "tuner",
+       "source": "NVIDIA AIConfigurator 0.12.0",
+       "skipped": "AIConfigurator exited 1; see output.log"
+      }
+     ]
+    }
+   },
+   {
+    "name": "rows.json",
+    "sha256": "f2bec3d29e7acb172d5bd471f38b5ddec2be5e96675a7f1aa7bc4cdded8a87c1",
+    "content": {
+     "rows": [
+      {
+       "label": "aiconfigurator-sglang",
+       "kind": "tuner",
+       "source": "NVIDIA AIConfigurator 0.12.0",
+       "skipped": "AIConfigurator exited 1; see output.log"
+      }
+     ]
+    }
+   }
+  ],
+  "expert_rows": {
+   "name": "expert_rows.json",
+   "sha256": "30ebee03b0f19e484afbfa04a83e16bed467ff8d479a4d8a535050112b8ce896",
+   "content": {
+    "about": "Expert rows for `rigtune compare --expert`. Each row is a stock row with one setting an engine's own documentation recommends, quoted from the page at the tags in read_at. Written before any comparison was measured with them; not to be adjusted after seeing results. A row that changes numerics (changes_numerics) should be read with --check-answers. `considered` lists every recommendation on those pages that was read and not turned into a row, with the reason.",
+    "rows": [
+     {
+      "label": "vllm-expert-batched-tokens",
+      "backend": "vllm",
+      "from": "vllm-default",
+      "changes_numerics": false,
+      "settings": [
+       {
+        "field": "prefill_budget",
+        "value": 16384,
+        "flag": "--max-num-batched-tokens 16384",
+        "applies_when_default_at_most": 8192,
+        "skip_on_gpu": {
+         "match": "a100",
+         "why": "vLLM's own source: \"Setting large `max_num_batched_tokens` for A100 reduces throughput, see PR #17885 for more details.\" (vllm/engine/arg_utils.py EngineArgs.get_batch_defaults, NOTE(Kuntai), v0.29.0 and v0.33.0)"
+        },
+        "cites": [
+         {
+          "page": "docs/configuration/optimization.md, Performance Tuning with Chunked Prefill",
+          "url": "https://github.com/vllm-project/vllm/blob/v0.33.0/docs/configuration/optimization.md#performance-tuning-with-chunked-prefill",
+          "read_at": [
+           "v0.29.0",
+           "v0.33.0"
+          ],
+          "quote": "For optimal throughput, we recommend setting `max_num_batched_tokens > 8192` especially for smaller models on large GPUs."
+         }
+        ],
+        "value_from": "the same section's own example, LLM(model=\"meta-llama/Llama-3.1-8B-Instruct\", max_num_batched_tokens=16384); the section also says higher values give better time to first token",
+        "default_from": "vllm/engine/arg_utils.py EngineArgs.get_batch_defaults (UsageContext.OPENAI_API_SERVER) at both tags: 2048 below 70 GiB and on an A100, 8192 from 70 GiB, 16384 from 160 GiB, where the recommendation is already met and the row would repeat the stock one"
+       }
+      ]
+     },
+     {
+      "label": "vllm-expert-ngram",
+      "backend": "vllm",
+      "from": "vllm-default",
+      "changes_numerics": false,
+      "settings": [
+       {
+        "field": "extra:speculative_config",
+        "value": "{\"method\": \"ngram\", \"num_speculative_tokens\": 5, \"prompt_lookup_max\": 4}",
+        "flag": "--speculative-config '{\"method\": \"ngram\", \"num_speculative_tokens\": 5, \"prompt_lookup_max\": 4}'",
+        "cites": [
+         {
+          "page": "docs/features/speculative_decoding/README.md, introduction",
+          "url": "https://github.com/vllm-project/vllm/blob/v0.33.0/docs/features/speculative_decoding/README.md",
+          "read_at": [
+           "v0.29.0",
+           "v0.33.0"
+          ],
+          "quote": "This document shows how to use [Speculative Decoding](https://arxiv.org/pdf/2302.01318) with vLLM to reduce inter-token latency under medium-to-low QPS (queries per second), memory-bound workloads."
+         },
+         {
+          "page": "docs/features/speculative_decoding/README.md, Method Selection at a Glance",
+          "url": "https://github.com/vllm-project/vllm/blob/v0.33.0/docs/features/speculative_decoding/README.md#method-selection-at-a-glance",
+          "read_at": [
+           "v0.29.0",
+           "v0.33.0"
+          ],
+          "quote": "| N-gram | Low to medium gain | Medium gain | Lightweight and easy to enable. |"
+         }
+        ],
+        "value_from": "docs/features/speculative_decoding/n_gram.md (identical at both tags), whose example is speculative_config={\"method\": \"ngram\", \"num_speculative_tokens\": 5, \"prompt_lookup_max\": 4}; passed as written, not through rigtune's own n-gram setting, which also sets prompt_lookup_min 2 where the example leaves it to mirror prompt_lookup_max"
+       }
+      ]
+     },
+     {
+      "label": "vllm-expert-kv-fp8",
+      "backend": "vllm",
+      "from": "vllm-default",
+      "changes_numerics": true,
+      "requires": [
+       "kv_dtype_offered"
+      ],
+      "settings": [
+       {
+        "field": "kv_dtype",
+        "value": "fp8",
+        "flag": "--kv-cache-dtype fp8",
+        "cites": [
+         {
+          "page": "docs/features/quantization/quantized_kvcache.md, FP8 KV Cache Overview",
+          "url": "https://github.com/vllm-project/vllm/blob/v0.33.0/docs/features/quantization/quantized_kvcache.md",
+          "read_at": [
+           "v0.29.0",
+           "v0.33.0"
+          ],
+          "quote": "Quantizing the KV (Key-Value) cache to FP8 format can significantly reduce its memory footprint. This optimization enables you to store more tokens in memory, leading to improved throughput and support for longer context windows."
+         }
+        ],
+        "value_from": "the same page's option 1, \"No calibration (default scales)\", configured with kv_cache_dtype=\"fp8\"; the page marks calibration with llm-compressor as \"[Recommended]\", which needs a checkpoint that carries the scales, so this row uses the default scales of 1.0",
+        "on_cards_without_it": {
+         "value": "fp8_e5m2",
+         "flag": "--kv-cache-dtype fp8_e5m2",
+         "cites": [
+          {
+           "page": "docs/features/quantization/quantized_kvcache.md, Additional kv_cache_dtype Options",
+           "url": "https://github.com/vllm-project/vllm/blob/v0.33.0/docs/features/quantization/quantized_kvcache.md",
+           "read_at": [
+            "v0.29.0",
+            "v0.33.0"
+           ],
+           "quote": "`kv_cache_dtype=\"fp8_e5m2\"`: Supported on CUDA 11.8+"
+          }
+         ],
+         "why": "on a card where rigtune does not run vLLM's fp8 (e4m3) cache, Ampere among them, the row uses the page's other fp8 format, which rigtune runs there through FlashInfer (rigtune/backends/vllm.py AMPERE_FP8_KV)"
+        }
+       }
+      ]
+     },
+     {
+      "label": "sglang-expert-ngram",
+      "backend": "sglang",
+      "from": "sglang-default",
+      "changes_numerics": false,
+      "requires": [
+       "cuda"
+      ],
+      "settings": [
+       {
+        "field": "extra:speculative_algorithm",
+        "value": "NGRAM",
+        "flag": "--speculative-algorithm NGRAM",
+        "cites": [
+         {
+          "page": "docs/docs/advanced_features/speculative_decoding.mdx, Quick guidance",
+          "url": "https://github.com/sgl-project/sglang/blob/v0.5.23/docs/docs/advanced_features/speculative_decoding.mdx",
+          "read_at": [
+           "v0.5.19",
+           "v0.5.23"
+          ],
+          "quote": "**No extra model available**: Use **NGRAM** (`--speculative-algorithm NGRAM`, CUDA-only)."
+         }
+        ],
+        "value_from": "the flag alone, every n-gram setting at SGLang's default"
+       }
+      ]
+     },
+     {
+      "label": "sglang-expert-eagle3",
+      "backend": "sglang",
+      "from": "sglang-default",
+      "changes_numerics": false,
+      "requires": [
+       "eagle3_head"
+      ],
+      "settings": [
+       {
+        "field": "extra:speculative_algorithm",
+        "value": "EAGLE3",
+        "flag": "--speculative-algorithm EAGLE3",
+        "cites": [
+         {
+          "page": "docs/docs/advanced_features/speculative_decoding.mdx, Quick guidance",
+          "url": "https://github.com/sgl-project/sglang/blob/v0.5.23/docs/docs/advanced_features/speculative_decoding.mdx",
+          "read_at": [
+           "v0.5.19",
+           "v0.5.23"
+          ],
+          "quote": "**Best speed/quality (recommended)**: Use **EAGLE-3** with `--speculative-algorithm EAGLE3`."
+         }
+        ],
+        "value_from": "the flag alone"
+       },
+       {
+        "field": "extra:speculative_draft_model_path",
+        "value": "{eagle3_head}",
+        "flag": "--speculative-draft-model-path <the model's EAGLE-3 head>",
+        "cites": [
+         {
+          "page": "docs/docs/advanced_features/speculative_decoding.mdx, EAGLE Decoding",
+          "url": "https://github.com/sgl-project/sglang/blob/v0.5.23/docs/docs/advanced_features/speculative_decoding.mdx#eagle-decoding",
+          "read_at": [
+           "v0.5.19",
+           "v0.5.23"
+          ],
+          "quote": "For `--speculative-num-steps`, `--speculative-eagle-topk`, and `--speculative-num-draft-tokens`: leave all three unset to use auto-tuning, or set all three explicitly when tuning."
+         }
+        ],
+        "value_from": "the head rigtune lists for the model (rigtune/speculative.py EAGLE3_HEADS); the three step settings are left unset, as the quote says. SGLang keeps the head's weights outside --mem-fraction-static, so at the stock row's fraction it may not start, which the comparison then records"
+       }
+      ]
+     },
+     {
+      "label": "sglang-expert-kv-fp8-e4m3",
+      "backend": "sglang",
+      "from": "sglang-default",
+      "changes_numerics": true,
+      "requires": [
+       "cuda"
+      ],
+      "settings": [
+       {
+        "field": "kv_dtype",
+        "value": "fp8_e4m3",
+        "flag": "--kv-cache-dtype fp8_e4m3",
+        "cites": [
+         {
+          "page": "docs/docs/advanced_features/quantized_kv_cache.mdx, introduction",
+          "url": "https://github.com/sgl-project/sglang/blob/v0.5.23/docs/docs/advanced_features/quantized_kv_cache.mdx",
+          "read_at": [
+           "v0.5.19",
+           "v0.5.23"
+          ],
+          "quote": "Quantized KV cache is a memory optimization technique that primarily benefits throughput by allowing more tokens to be cached, but may introduce minimal accuracy degradation depending on the quantization format used."
+         },
+         {
+          "page": "docs/docs/advanced_features/quantized_kv_cache.mdx, best practices",
+          "url": "https://github.com/sgl-project/sglang/blob/v0.5.23/docs/docs/advanced_features/quantized_kv_cache.mdx",
+          "read_at": [
+           "v0.5.19",
+           "v0.5.23"
+          ],
+          "quote": "**Choose the right format**: Use `fp8_e4m3` for better accuracy (recommended), `fp8_e5m2` for larger dynamic range, or `nvfp4` / `fp4_mx_block16` for maximum memory savings (experimental)"
+         }
+        ],
+        "value_from": "the format the page marks recommended; the page also warns that without scaling factors in the checkpoint the scales default to 1.0, \"which may cause accuracy issues\"",
+        "fallback": {
+         "value": "fp8_e5m2",
+         "flag": "--kv-cache-dtype fp8_e5m2",
+         "cites": [
+          {
+           "page": "docs/docs/advanced_features/quantized_kv_cache.mdx, best practices",
+           "url": "https://github.com/sgl-project/sglang/blob/v0.5.23/docs/docs/advanced_features/quantized_kv_cache.mdx",
+           "read_at": [
+            "v0.5.19",
+            "v0.5.23"
+           ],
+           "quote": "**Choose the right format**: Use `fp8_e4m3` for better accuracy (recommended), `fp8_e5m2` for larger dynamic range, or `nvfp4` / `fp4_mx_block16` for maximum memory savings (experimental)"
+          }
+         ],
+         "why": "rigtune has not run SGLang's fp8_e4m3 cache on Ampere (it runs fp8_e5m2 there, rigtune/backends/sglang.py kv_dtypes): when fp8_e4m3 fails to start, the row is measured with the page's other fp8 format and the notes say so"
+        }
+       }
+      ]
+     },
+     {
+      "label": "sglang-expert-torch-compile",
+      "backend": "sglang",
+      "from": "sglang-default",
+      "changes_numerics": false,
+      "settings": [
+       {
+        "field": "extra:enable_torch_compile",
+        "value": true,
+        "flag": "--enable-torch-compile",
+        "cites": [
+         {
+          "page": "docs/docs/advanced_features/hyperparameter_tuning.mdx, Try other options",
+          "url": "https://github.com/sgl-project/sglang/blob/v0.5.23/docs/docs/advanced_features/hyperparameter_tuning.mdx#try-other-options",
+          "read_at": [
+           "v0.5.19",
+           "v0.5.23"
+          ],
+          "quote": "`torch.compile` accelerates small models on small batch sizes. You can enable it with `--enable-torch-compile`."
+         }
+        ],
+        "value_from": "the flag alone; the page gives no size below which a model counts as small, so the row is offered for every model; a comparison that measures more users than acts_up_to_users says so in its notes",
+        "acts_up_to_users": {
+         "users": 32,
+         "cites": [
+          {
+           "page": "docs/docs/advanced_features/server_arguments.mdx, --torch-compile-max-bs (default 32)",
+           "url": "https://github.com/sgl-project/sglang/blob/v0.5.23/docs/docs/advanced_features/server_arguments.mdx",
+           "read_at": [
+            "v0.5.19",
+            "v0.5.23"
+           ],
+           "quote": "Set the maximum batch size when using torch compile."
+          }
+         ],
+         "why": "SGLang compiles batches of up to --torch-compile-max-bs, 32 by default, and runs larger ones as it would without the flag, so the busier levels measure the row outside the small batches the page recommends it for"
+        }
+       }
+      ]
+     }
+    ],
+    "considered": [
+     {
+      "engine": "vllm",
+      "page": "docs/configuration/optimization.md, Preemption",
+      "read_at": [
+       "v0.29.0",
+       "v0.33.0"
+      ],
+      "advice": "increase gpu_memory_utilization, or decrease max_num_seqs or max_num_batched_tokens",
+      "why_not": "only when preemption warnings are frequent: a condition read from a running server, not a setting fixed before it starts"
+     },
+     {
+      "engine": "vllm",
+      "page": "docs/configuration/optimization.md, Performance Tuning with Chunked Prefill",
+      "read_at": [
+       "v0.29.0",
+       "v0.33.0"
+      ],
+      "advice": "smaller values (e.g., 2048) achieve better ITL",
+      "why_not": "the other direction of the same knob, for inter-token latency; 2048 is already vLLM's default below 70 GiB, so the stock row has it there"
+     },
+     {
+      "engine": "vllm",
+      "page": "docs/configuration/conserving_memory.md, Context length and batch size",
+      "read_at": [
+       "v0.29.0",
+       "v0.33.0"
+      ],
+      "advice": "limit max_model_len and max_num_seqs",
+      "why_not": "advice for a model that runs out of memory; it trades capacity for fitting, not for speed"
+     },
+     {
+      "engine": "vllm",
+      "page": "docs/configuration/optimization.md, Input Processing: fastokens Backend",
+      "read_at": [
+       "v0.29.0",
+       "v0.33.0"
+      ],
+      "advice": "VLLM_USE_FASTOKENS=1 with the fastokens package installed",
+      "why_not": "an environment variable and an extra package, which a rigtune Config cannot set; the page says the change is unlikely to be visible when GPU prefill or decode is the bottleneck"
+     },
+     {
+      "engine": "vllm",
+      "page": "docs/configuration/optimization.md, Optimization Levels",
+      "read_at": [
+       "v0.29.0",
+       "v0.33.0"
+      ],
+      "advice": "-O2 (default) or -O3",
+      "why_not": "-O2 is the default and -O3 is currently equal to it"
+     },
+     {
+      "engine": "vllm",
+      "page": "docs/features/speculative_decoding/README.md, Method Selection at a Glance",
+      "read_at": [
+       "v0.29.0",
+       "v0.33.0"
+      ],
+      "advice": "EAGLE, MTP, draft models and PARD: high gain at low QPS",
+      "why_not": "each needs a second model or a checkpoint's own head, chosen per model; rigtune's own search (--speculative all) offers the ones it can verify"
+     },
+     {
+      "engine": "vllm",
+      "page": "docs/features/speculative_decoding/README.md, Method Selection at a Glance; docs/features/speculative_decoding/suffix.md",
+      "read_at": [
+       "v0.29.0",
+       "v0.33.0"
+      ],
+      "advice": "Suffix decoding: \"Low to medium gain\", \"No extra draft model; dynamic speculation depth\"",
+      "why_not": "the same gain the guide gives n-gram, which is the row; suffix decoding also needs a package a stock vLLM install lacks (\"Suffix Decoding requires [Arctic Inference]\"), so as a row it would be skipped wherever the stock engine runs. rigtune's own search (--speculative all) offers it where the package is installed"
+     },
+     {
+      "engine": "sglang",
+      "page": "docs/docs/advanced_features/hyperparameter_tuning.mdx, Tune --mem-fraction-static to increase KV cache pool capacity",
+      "read_at": [
+       "v0.5.19",
+       "v0.5.23"
+      ],
+      "advice": "set --mem-fraction-static as high as possible while reserving 5-8 GB; check available_gpu_mem in the log just before the server is ready",
+      "why_not": "the 5-8 GB is checked on a launched server (available_gpu_mem, measured after CUDA graphs are captured), so the guide gives no value to set before launch; a fraction computed from it would need a size for the CUDA graphs that the guide does not give"
+     },
+     {
+      "engine": "sglang",
+      "page": "docs/docs/advanced_features/hyperparameter_tuning.mdx, Achieve a high token usage",
+      "read_at": [
+       "v0.5.19",
+       "v0.5.23"
+      ],
+      "advice": "--schedule-conservativeness 0.3 when token usage stays under 0.9 with requests queued, 1.3 on frequent retractions",
+      "why_not": "conditional on the running server's log"
+     },
+     {
+      "engine": "sglang",
+      "page": "docs/docs/advanced_features/hyperparameter_tuning.mdx, Avoid out-of-memory errors",
+      "read_at": [
+       "v0.5.19",
+       "v0.5.23"
+      ],
+      "advice": "--chunked-prefill-size 4096 or 2048, lower --max-running-requests, lower --mem-fraction-static",
+      "why_not": "only after out-of-memory errors"
+     },
+     {
+      "engine": "sglang",
+      "page": "docs/docs/advanced_features/hyperparameter_tuning.mdx, Tune --cuda-graph-max-bs-decode",
+      "read_at": [
+       "v0.5.19",
+       "v0.5.23"
+      ],
+      "advice": "raise --cuda-graph-max-bs-decode",
+      "why_not": "\"for some models, especially at large tensor parallelism sizes\"; no value is given for one GPU"
+     },
+     {
+      "engine": "sglang",
+      "page": "docs/docs/advanced_features/hyperparameter_tuning.mdx, Try other options",
+      "read_at": [
+       "v0.5.19",
+       "v0.5.23"
+      ],
+      "advice": "--quantization fp8, --schedule-policy lpm",
+      "why_not": "fp8 weights are part of rigtune's own search and change the model rather than the server; lpm is for workloads with many shared prefixes, a property of the traffic the guide leaves to the operator"
+     },
+     {
+      "engine": "sglang",
+      "page": "docs/docs/advanced_features/quantized_kv_cache.mdx, best practices",
+      "read_at": [
+       "v0.5.19",
+       "v0.5.23"
+      ],
+      "advice": "fp8_e5m2 for larger dynamic range",
+      "why_not": "the page recommends fp8_e4m3, which is the row"
+     },
+     {
+      "engine": "sglang",
+      "page": "docs/docs/advanced_features/server_arguments.mdx, the tips before the argument table",
+      "read_at": [
+       "v0.5.19",
+       "v0.5.23"
+      ],
+      "advice": "smaller --mem-fraction-static or --chunked-prefill-size",
+      "why_not": "only after out-of-memory errors"
+     }
+    ]
+   }
+  },
+  "inputs": {
+   "calibration_prompts": "73654fa3ea2b4c08__Qwen__Qwen3.5-9B__file-dolly-heldout-fc5b6407__balanced.inputs/dolly.jsonl",
+   "measured_prompts": "73654fa3ea2b4c08__Qwen__Qwen3.5-9B__file-dolly-heldout-fc5b6407__balanced.inputs/dolly-heldout.jsonl"
+  },
+  "engine_logs": "Qwen__Qwen3.5-9B/compare-file-dolly-heldout-fc5b6407, under rigtune's logs folder (rigtune.cache.logs_dir())"
+ },
+ "results_sha256": "d0846a6ff0696659d36ed398e3f7ea84c80c28391d79160fa1b33f0b4cbc31d7"
+}
