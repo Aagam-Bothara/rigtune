@@ -96,6 +96,7 @@ class AnswerCheck(BaseModel):
     passed: Optional[bool] = None  # None: not checked
     reason: str = ""
     graded_with: Optional[str] = None  # how its requests differed from plain chat (thinking switched off), and why
+    cut_off: Optional[int] = None  # answers that stopped at max_tokens (graded wrong); None when not reported
 
 
 class ComparisonRow(BaseModel):

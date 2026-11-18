@@ -64,12 +64,15 @@ class RowGrader:
     # graded with thinking off); passed to `answer` only when set.
     extra_body: Optional[dict] = None
     graded_with: Optional[str] = None
+    # key -> how many of its first pass's answers stopped at max_tokens (finish_reason "length"), which grades them
+    # wrong whatever they would have said; known only when `answer` reports how each answer ended (chat_answers).
+    cut_off: Dict[str, int] = field(default_factory=dict)
 
     def _pass(self, base_url: str, model: Optional[str], cfg: Config, key: str, n: int = 1) -> Optional[str]:
         concurrency = min(MAX_CONCURRENCY, max(MIN_CONCURRENCY, cfg.batch or MIN_CONCURRENCY))
         details: List[Optional[dict]] = [None] * len(self.items)
         try:
-            more = {"details": details} if self.answers_file is not None else {}
+            more = {"details": details} if self.answers_file is not None or self.answer is chat_answers else {}
             if self.extra_body:
                 more["extra_body"] = self.extra_body
             responses = self.answer(base_url, model, self.items, concurrency, self.max_tokens,
@@ -82,6 +85,8 @@ class RowGrader:
                            for item, r in zip(self.items, responses))
         if not outcomes.strip("-"):
             return None
+        if n == 1 and any(d is not None for d in details):
+            self.cut_off[key] = sum(1 for d in details if d is not None and d.get("finish_reason") == "length")
         if self.answers_file is not None:
             self._keep(key, n, responses, outcomes, details)
         return outcomes
@@ -139,6 +144,9 @@ def check(label: str, backend: str, key: str, grader: RowGrader, keys: Dict[str,
         base.reason = "not graded: its engine never answered the items"
         return base
     base.correct, base.answered = outcomes.count("1"), len(outcomes) - outcomes.count("-")
+    base.cut_off = grader.cut_off.get(key)
+    cut = (f"; {base.cut_off} of its {base.answered} answers stopped at the {grader.max_tokens}-token limit and are "
+           "graded wrong" if base.cut_off else "")
     ref_label = reference_label(backend)
     ref_key = keys.get(ref_label, "")
     again = grader.again.get(ref_key)
@@ -148,7 +156,7 @@ def check(label: str, backend: str, key: str, grader: RowGrader, keys: Dict[str,
     noise = (f"; {ref_label} itself differed on {base.noise_flips} of {base.noise_paired} items between two "
              "passes" if base.noise_flips is not None else "")
     if label == ref_label:
-        base.passed, base.reason = True, "the reference for its engine" + noise
+        base.passed, base.reason = True, "the reference for its engine" + noise + cut
         return base
     ref = grader.grades.get(ref_key)
     base.reference = ref_label
@@ -162,5 +170,5 @@ def check(label: str, backend: str, key: str, grader: RowGrader, keys: Dict[str,
     verb = "holds" if base.passed else "fails"
     base.reason = (f"{verb}: {lost} lost and {gained} gained of {n} items against {ref_label}; the lower "
                    f"bound of the difference is {lower * 100:+.1f} points, against -{tolerance * 100:g}"
-                   f"{noise}")
+                   f"{noise}{cut}")
     return base
