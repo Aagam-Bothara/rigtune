@@ -24,13 +24,14 @@ the commands need (HF_TOKEN) is exported in the shell that starts the runner, an
   changed since: then it is reported `stale` and kept, and `--redo-stale` runs it again. Any other phase is run
   again, after its earlier directory is moved, whole, to <root>/_attempts/<phase>.<n>, so an interrupted or
   failed attempt's files are kept as evidence rather than overwritten. A phase left `running` by a runner that
-  died has its recorded process group killed (and the plan's `cleanup` run) before it is moved.
+  died has its recorded process group and session killed (and the plan's `cleanup` run) before it is moved.
 - A phase that fails never stops the session. A phase whose `needs` names one that is not `done` is recorded
   as `blocked` and not run; every other phase still runs.
 - `requires`: a command that must exit 0 for the phase to run (an option a parallel series adds, say). When it
   fails the phase is recorded as `skipped`, with the reason, and is checked again on the next rerun.
-- `timeout_s` ends a phase and records `timeout`. On Linux a phase is its own process group, and whatever is
-  left in that group when the phase ends, by timeout or not, is killed; then the plan's `cleanup` command
+- `timeout_s` ends a phase and records `timeout`. On Linux a phase leads its own session and process group, and
+  whatever is left in either when the phase ends, by timeout or not, is killed (the session catches what a
+  command such as `timeout` moved to a group of its own); then the plan's `cleanup` command
   runs (killing GPU processes an engine started in a session of its own), and only then is the phase's state
   written, so nothing is still writing into a phase recorded as finished.
 - With "home" in the plan, $RIGTUNE_HOME is <root>/<home> for every phase, so a comparison reuses the
@@ -248,26 +249,72 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
+def session_members(sid: int, proc: Path = Path("/proc")) -> List[int]:
+    """The live processes in session `sid` (Linux: the session field of /proc/<pid>/stat), this one excluded;
+    empty where there is no /proc. A zombie is left out: it is already dead and only waits for its parent.
+
+    A phase starts a session of its own, and a command inside it can leave the phase's process group while
+    staying in its session: `timeout` (without --foreground) puts itself and its command in a new group, so on the
+    A40 in November 2026 ending the phase's group left llm-optimizer and auto_tune running under it."""
+    members: List[int] = []
+    try:
+        entries = list(proc.iterdir())
+    except OSError:
+        return members
+    for entry in entries:
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            stat = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+            fields = stat[stat.rindex(")") + 2:].split()  # the command name may hold spaces and parentheses
+            if fields[0] != "Z" and int(fields[3]) == sid:  # state, ppid, pgrp, session
+                members.append(int(entry.name))
+        except (OSError, ValueError, IndexError):
+            continue  # it ended while being read, or is not a process directory
+    return sorted(members)
+
+
+def _signal_phase(pid: int, sig: int) -> bool:
+    """Send `sig` to the phase's process group and to every process left in its session; whether any existed."""
+    hit = False
+    try:
+        os.killpg(pid, sig)
+        hit = True
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        hit = True
+    for member in session_members(pid):
+        try:
+            os.kill(member, sig)
+            hit = True
+        except (ProcessLookupError, PermissionError):
+            pass
+    return hit
+
+
+def group_alive(pid: int) -> bool:
+    """Whether anything a phase started is still running: its process group or, on Linux, its session (the
+    group's leader may be gone while its children are not). On Windows, the process itself."""
+    if os.name == "nt":
+        return pid_alive(pid)
+    return _signal_phase(pid, 0)
+
+
 def kill_group(pid: int, grace_s: float = 10.0) -> None:
-    """End a phase's process group (Linux: the phase is its leader) or, on Windows, its process tree."""
+    """End a phase: on Linux its process group and every process left in its session (the phase leads both), on
+    Windows its process tree."""
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
         return
-    try:
-        os.killpg(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
+    if not _signal_phase(pid, signal.SIGTERM):
         return
     deadline = time.monotonic() + grace_s
     while time.monotonic() < deadline:
-        try:
-            os.killpg(pid, 0)
-        except (ProcessLookupError, PermissionError):
+        if not _signal_phase(pid, 0):
             return
         time.sleep(0.2)
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
+    _signal_phase(pid, signal.SIGKILL)
 
 
 @dataclass
@@ -476,7 +523,7 @@ class Session:
             return None
         if m and m.get("status") == RUNNING:
             pid = int(m.get("pgid") or m.get("pid") or 0)
-            if pid and m.get("host") in (None, socket.gethostname()) and pid_alive(pid):
+            if pid and m.get("host") in (None, socket.gethostname()) and group_alive(pid):
                 self._log(f"KILL     {name}: ending process group {pid}, left running by an earlier runner")
                 kill_group(pid)
             self._cleanup(f"before setting {name} aside")

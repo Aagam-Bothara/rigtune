@@ -313,6 +313,35 @@ def test_a_phase_left_running_has_its_process_group_ended_before_it_is_set_aside
             engine.kill()
 
 
+def test_the_processes_of_a_session_are_read_from_proc(tmp_path):
+    """The session field is the sixth of /proc/<pid>/stat, counted after the command name, which may hold spaces
+    and parentheses; a zombie is already dead and is left out."""
+    stats = {"101": "101 (bash) S 1 101 500 0 -1", "102": "102 (python (x) y) S 101 102 500 0 -1",
+             "103": "103 (gone) Z 101 103 500 0 -1", "104": "104 (sshd) S 1 104 104 0 -1"}
+    for pid, stat in stats.items():
+        (tmp_path / pid).mkdir()
+        (tmp_path / pid / "stat").write_text(stat)
+    (tmp_path / "self").mkdir()
+    (tmp_path / "999").mkdir()  # ended while being read: no stat
+    assert gs.session_members(500, proc=tmp_path) == [101, 102]
+    assert gs.session_members(500, proc=tmp_path / "missing") == []
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="sessions are read from Linux's /proc")
+def test_a_child_that_leaves_the_phases_process_group_is_still_ended(tmp_path):
+    """`timeout` puts its command in a process group of its own, so on the A40 ending the phase's group left
+    llm-optimizer running; the phase's session still holds it."""
+    pidfile = tmp_path / "child.pid"
+    escape = py("import os, subprocess, sys\n"
+                "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'], "
+                "preexec_fn=os.setpgrp)\n"  # a group of its own, in the phase's session, as `timeout` makes
+                f"open({str(pidfile)!r}, 'w').write(str(child.pid))\n")
+    s = session(tmp_path, [{"name": "llmopt", "cmd": escape}])
+    assert s.run() == {"llmopt": "done"}
+    pid = int(pidfile.read_text())
+    assert not gs.pid_alive(pid) or Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0] == "Z"
+
+
 def test_cleanup_runs_after_each_phase_before_its_state_is_written(tmp_path):
     seen = tmp_path / "seen.txt"
     cleanup = py("import glob, json, sys\n"
