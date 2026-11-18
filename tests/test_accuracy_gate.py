@@ -506,6 +506,7 @@ def test_the_gate_is_built_before_any_trial_and_checks_items_against_the_context
 
 
 RELEASE = threading.Event()
+TEMPLATE_KWARGS: List[Optional[dict]] = []  # each request's chat_template_kwargs, as the server saw them
 
 
 class _Chat(BaseHTTPRequestHandler):
@@ -518,6 +519,7 @@ class _Chat(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
         assert self.path == "/v1/chat/completions" and body["temperature"] == 0.0 and body["stream"] is False
+        TEMPLATE_KWARGS.append(body.get("chat_template_kwargs"))
         n = int(body["messages"][-1]["content"].split()[-1])
         if n == 2:
             self.send_response(500)
@@ -556,6 +558,62 @@ def test_chat_answers_talks_to_the_chat_endpoint_and_caps_the_wall_time():
     assert details[0] == {"finish_reason": "stop", "completion_tokens": 10, "reasoning_chars": 0}
     assert details[1]["reasoning_chars"] == 3 and details[4]["finish_reason"] == "length"
     assert details[2] is None and details[3] is None
+
+
+def test_chat_answers_sends_the_extra_body_with_every_request():
+    TEMPLATE_KWARGS.clear()
+    RELEASE.set()  # nothing is held here
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _Chat)
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        off = {"chat_template_kwargs": {"enable_thinking": False}}
+        out = chat_answers(url, "m", [_items(2)[1]], concurrency=1, max_tokens=16, wall_s=10.0, extra_body=off)
+        plain = chat_answers(url, "m", [_items(2)[1]], concurrency=1, max_tokens=16, wall_s=10.0)
+    finally:
+        srv.shutdown()
+    assert out == ["The answer is 1"] and plain == ["The answer is 1"]
+    assert TEMPLATE_KWARGS == [{"enable_thinking": False}, None]  # and nothing is sent without one
+
+
+def _facts(switch):
+    from rigtune import introspect
+
+    return lambda spec: introspect.ModelFacts(thinking=switch)
+
+
+@pytest.mark.parametrize("default, why", [
+    ("on", "graded with enable_thinking false (it thinks by default): its non-thinking answers, which fit in the "
+           "answer budget"),
+    ("off", "graded with enable_thinking false: its non-thinking answers, which fit in the answer budget"),
+    ("unknown", "graded with enable_thinking false: its non-thinking answers, which fit in the answer budget"),
+])
+def test_a_template_with_a_thinking_switch_is_graded_with_it_off(default, why):
+    """Qwen3.5-9B graded at 512 tokens with its template's default stopped mid-thought on every item; false turns
+    thinking off whichever way the template writes its default, so any template with the switch gets it."""
+    from rigtune import introspect
+    from rigtune.accuracy_gate import grading_template_kwargs
+    from rigtune.models import ModelSpec
+
+    switch = introspect.ThinkingSwitch("enable_thinking", default)
+    assert grading_template_kwargs(ModelSpec(hf_id="Qwen/Qwen3.5-9B"), inspect=_facts(switch)) == (
+        {"chat_template_kwargs": {"enable_thinking": False}}, why)
+
+
+def test_a_template_without_a_switch_or_unreadable_is_graded_as_it_is(caplog):
+    from rigtune.accuracy_gate import grading_template_kwargs
+    from rigtune.models import ModelSpec
+
+    spec = ModelSpec(hf_id="google/gemma-4-12B-it")
+    assert grading_template_kwargs(spec, inspect=_facts(None)) == (None, None)
+
+    def broken(spec):
+        raise RuntimeError("no hub")
+
+    with caplog.at_level("WARNING"):
+        assert grading_template_kwargs(spec, inspect=broken) == (None, None)
+    assert "could not read google/gemma-4-12B-it's chat template (no hub)" in caplog.text
 
 
 # --------------------------------------------------------------------------- what a refusal cost

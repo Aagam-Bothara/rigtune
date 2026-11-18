@@ -1291,6 +1291,12 @@ def compare(
     # Compare the checked target commit, including stock rows prepared on another backend.
     if profile.prepared is not None and profile.prepared.spec.revision:
         spec = profile.prepared.spec
+    if grader is not None:  # a template that thinks is graded with thinking off, or every answer runs out of tokens
+        from rigtune.accuracy_gate import grading_template_kwargs
+
+        grader.extra_body, grader.graded_with = grading_template_kwargs(spec)
+        if grader.graded_with:
+            err.print(f"[dim]answer check: {grader.graded_with}[/]")
     candidates, reg = select(hw, spec, force=backend, workload=eval_wl, report_reuse=report_reuse)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
                                quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,

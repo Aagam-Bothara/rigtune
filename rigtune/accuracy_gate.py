@@ -76,16 +76,44 @@ def pass_wall_seconds(items: int) -> float:
     return 60.0 + 2.0 * items
 
 
+def grading_template_kwargs(spec, inspect: Optional[Callable] = None) -> Tuple[Optional[dict], Optional[str]]:
+    """The chat-template arguments every graded request sends, and a note saying why; (None, None) for a model
+    whose template has no thinking switch rigtune reads.
+
+    A model whose template thinks (Qwen3, Qwen3.5) spends its tokens reasoning before it answers. Graded at
+    max_tokens 512, Qwen3.5-9B on vLLM 0.33 stopped at the limit on 60 of 60 GSM8K items, mid-thought, and scored
+    about 18% on every configuration, stock included, so no row could be told from another. With
+    `enable_thinking` false the same model and configurations scored 87% on all 1319 items, and rigtune's pick
+    was certified against stock (19 lost, 16 gained, lower bound -1.2 points). So a template that has the switch
+    is graded with it false, whatever its default (introspect.thinking_switch): false turns thinking off under
+    either way a template writes it. This grades the configuration's numerics in non-thinking mode; it does not
+    grade the model's thinking mode, which needs a budget of thousands of tokens per item."""
+    from rigtune import introspect
+
+    look = inspect or (lambda s: introspect.inspect_model(s, features=("thinking",)))
+    try:
+        switch = look(spec).thinking
+    except Exception as exc:  # inspect_model never raises; an injected one might
+        logger.warning("answer grading: could not read %s's chat template (%s); graded as it is", spec.hf_id, exc)
+        return None, None
+    if switch is None:
+        return None, None
+    default = " (it thinks by default)" if switch.default == "on" else ""
+    return ({"chat_template_kwargs": {switch.variable: False}},
+            f"graded with {switch.variable} false{default}: its non-thinking answers, which fit in the answer budget")
+
+
 async def _answer_all(base_url: str, model: Optional[str], items: Sequence[EvalItem], concurrency: int,
                       max_tokens: int, wall_s: float, request_timeout: float,
-                      details: Optional[List[Optional[dict]]] = None) -> List[Optional[str]]:
+                      details: Optional[List[Optional[dict]]] = None,
+                      extra_body: Optional[dict] = None) -> List[Optional[str]]:
     out: List[Optional[str]] = [None] * len(items)
     sem = asyncio.Semaphore(max(1, concurrency))
     async with httpx.AsyncClient(base_url=base_url, timeout=request_timeout) as client:
 
         async def one(i: int, item: EvalItem) -> None:
             body = {"model": model or "model", "messages": item.messages, "temperature": 0.0,
-                    "max_tokens": item.max_tokens or max_tokens, "stream": False}
+                    "max_tokens": item.max_tokens or max_tokens, "stream": False, **(extra_body or {})}
             async with sem:
                 try:
                     resp = await client.post("/v1/chat/completions", json=body)
@@ -117,15 +145,17 @@ async def _answer_all(base_url: str, model: Optional[str], items: Sequence[EvalI
 
 def chat_answers(base_url: str, model: Optional[str], items: Sequence[EvalItem], concurrency: int,
                  max_tokens: int = 512, wall_s: float = 600.0, request_timeout: float = 180.0,
-                 details: Optional[List[Optional[dict]]] = None) -> List[Optional[str]]:
+                 details: Optional[List[Optional[dict]]] = None,
+                 extra_body: Optional[dict] = None) -> List[Optional[str]]:
     """Each item's greedy answer from a running engine's chat endpoint, `concurrency` at a time, stopping
     naturally; None for any request that failed or had not finished when `wall_s` ran out. Given `details`, a list
     as long as `items`, each answered item's entry becomes {finish_reason, completion_tokens, reasoning_chars}.
+    `extra_body` is merged into every request (grading_template_kwargs' chat_template_kwargs).
 
     Through /v1/chat/completions, so each engine applies its model's chat template, as benchmarks/task_quality.py
     does with vLLM's llm.chat."""
     return asyncio.run(_answer_all(base_url, model, items, concurrency, max_tokens, wall_s, request_timeout,
-                                   details))
+                                   details, extra_body))
 
 
 def _counts(ref: str, cand: str) -> Tuple[int, int, int]:

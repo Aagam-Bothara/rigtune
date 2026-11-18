@@ -76,6 +76,32 @@ def test_every_graded_answer_is_kept_with_how_it_ended(tmp_path):
     assert g.grades[cfg.key()] == "10-"  # keeping the answers changes no grade
 
 
+def test_a_thinking_template_is_graded_with_thinking_off_and_says_so():
+    """The extra body reaches every graded request, and each row's check records how it was graded; an `answer`
+    that takes no extra body is still called when none is set."""
+    sent = []
+
+    def answer(base_url, model, items, concurrency, max_tokens, wall_s, extra_body=None):
+        sent.append(extra_body)
+        return [f"The answer is {2 * i}." for i in range(len(items))]
+
+    off, why = {"chat_template_kwargs": {"enable_thinking": False}}, "graded with enable_thinking false"
+    g = RowGrader(items=ITEMS[:3], set_name="sums", sha256="abc", answer=answer, extra_body=off, graded_with=why)
+    cfg = Config(backend="vllm", quant="bf16", batch=8)
+    g.twice = {cfg.key()}
+    g.record("http://a", "m", cfg)
+    assert sent == [off, off]  # both of the stock row's passes
+    keys = {"vllm-default": cfg.key()}
+    assert check("vllm-default", "vllm", cfg.key(), g, keys, 0.03).graded_with == why
+
+    def plain(base_url, model, items, concurrency, max_tokens, wall_s):
+        return [f"The answer is {2 * i}." for i in range(len(items))]
+
+    g2 = RowGrader(items=ITEMS[:3], set_name="sums", sha256="abc", answer=plain)
+    g2.record("http://a", "m", cfg)
+    assert g2.grades[cfg.key()] == "111" and check("x", "vllm", cfg.key(), g2, keys, 0.03).graded_with is None
+
+
 def test_a_row_is_checked_against_its_engines_stock_row_with_the_gates_bound():
     ref, lost4 = "1" * 200, "0000" + "1" * 196
     g = _grader(ref=ref, cand=lost4)
@@ -414,12 +440,26 @@ def test_check_answers_reads_its_set_before_calibrating_and_reaches_the_runner(t
     assert r.exit_code == 0, r.output
     assert len(built[1]["gate"].items) == 1319
     assert built[1]["gate"].answers_file is None  # without --verdict there is no evidence folder to keep them in
+    assert built[1]["gate"].extra_body is None  # no_network's checkpoint has no chat template, so no switch
     r = CliRunner().invoke(app, ["compare", MODEL, "--backend", "vllm", "--check-answers", "gsm8k",
                                  "--check-items", "20", "--verdict", "--out", str(tmp_path / "kept")])
     assert r.exit_code == 0, r.output
     kept = built[2]["gate"].answers_file
     assert kept.name.endswith(".answers.jsonl") and kept.with_name(
         kept.name.removesuffix(".answers.jsonl") + ".json").exists()  # beside the results it grades
+    # A checkpoint whose template thinks is graded with thinking off, and the run says so.
+    import rigtune.introspect as ins
+
+    thinks = ins.ModelFacts(thinking=ins.ThinkingSwitch("enable_thinking", "on"))
+    monkeypatch.setattr(ins, "inspect_model", lambda spec, **kw: thinks)
+    r = CliRunner().invoke(app, ["compare", MODEL, "--backend", "vllm", "--check-answers", "gsm8k",
+                                 "--check-items", "20", "--out", str(tmp_path / "thinks")])
+    assert r.exit_code == 0, r.output
+    assert built[3]["gate"].extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert "graded with enable_thinking false (it thinks by default)" in r.output
+    (path,) = (tmp_path / "thinks").iterdir()
+    res = ComparisonResult.model_validate_json(path.read_text(encoding="utf-8"))
+    assert res.rows[0].answer_check.graded_with.startswith("graded with enable_thinking false")
 
 
 def test_answers_worse_claims_speed_only_where_the_speed_rule_does():

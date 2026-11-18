@@ -21,6 +21,10 @@ that count is the floor below which no loss means anything. A row on an engine w
 graded is not checked; under --check-answers the verdict counts an unchecked row as not applicable, and
 counts nothing rigtune measured when its own answers fail or were not checked. A disaggregated or replicas
 pick answers through its router or balancer (KeyedGate), graded under its own row's key.
+
+A model whose chat template thinks is graded with thinking off (accuracy_gate.grading_template_kwargs, every row
+alike, and each row's check says so): on the A40 in November 2026, Qwen3.5-9B graded with its template's default
+spent all 512 tokens of 60 of 60 GSM8K answers thinking, and every row, stock included, scored about 18%.
 """
 
 from __future__ import annotations
@@ -56,12 +60,18 @@ class RowGrader:
     # completion_tokens, reasoning_chars}), so a check that fails can be read answer by answer. Set only with the
     # default `answer` (chat_answers), which fills in how each answer ended.
     answers_file: Optional[Path] = None
+    # Merged into every graded request, and why (accuracy_gate.grading_template_kwargs: a template that thinks is
+    # graded with thinking off); passed to `answer` only when set.
+    extra_body: Optional[dict] = None
+    graded_with: Optional[str] = None
 
     def _pass(self, base_url: str, model: Optional[str], cfg: Config, key: str, n: int = 1) -> Optional[str]:
         concurrency = min(MAX_CONCURRENCY, max(MIN_CONCURRENCY, cfg.batch or MIN_CONCURRENCY))
         details: List[Optional[dict]] = [None] * len(self.items)
         try:
             more = {"details": details} if self.answers_file is not None else {}
+            if self.extra_body:
+                more["extra_body"] = self.extra_body
             responses = self.answer(base_url, model, self.items, concurrency, self.max_tokens,
                                     pass_wall_seconds(len(self.items)), **more)
         except Exception as exc:  # grading never takes the run down with it; an empty pass grades again later
@@ -124,7 +134,7 @@ def check(label: str, backend: str, key: str, grader: RowGrader, keys: Dict[str,
 
     outcomes = grader.grades.get(key)
     base = AnswerCheck(eval_set=grader.set_name, sha256=grader.sha256, items=len(grader.items),
-                       tolerance=tolerance, outcomes=outcomes or "")
+                       tolerance=tolerance, outcomes=outcomes or "", graded_with=grader.graded_with)
     if outcomes is None:
         base.reason = "not graded: its engine never answered the items"
         return base

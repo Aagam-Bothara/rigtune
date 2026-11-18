@@ -95,6 +95,7 @@ class AnswerCheck(BaseModel):
     noise_paired: Optional[int] = None  # items both of those passes answered
     passed: Optional[bool] = None  # None: not checked
     reason: str = ""
+    graded_with: Optional[str] = None  # how its requests differed from plain chat (thinking switched off), and why
 
 
 class ComparisonRow(BaseModel):
