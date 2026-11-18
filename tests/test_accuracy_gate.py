@@ -489,7 +489,7 @@ def test_a_gated_calibration_puts_the_grades_in_the_profile(hw_a100, spec, tmp_p
     final = p.accuracy[-1]  # the pick's own configuration, graded during confirm
     assert final.config == p.config.key() and final.admitted is True
     assert final.reason == "reference configuration" or (final.lost, final.gained) == (0, 0)
-    assert p.options["gate"] == "full-v1"
+    assert p.options["gate"] == "full-v2"
     assert Profile.model_validate_json(p.model_dump_json()).accuracy == p.accuracy
     off = {"chat_template_kwargs": {"enable_thinking": False}}
     assert script.bodies and set(map(json.dumps, script.bodies)) == {json.dumps(off if thinks else None)}
@@ -506,7 +506,7 @@ def test_the_gate_is_built_before_any_trial_and_checks_items_against_the_context
                    + json.dumps({"prompt": "short", "answer": "2", "grader": "number"}) + "\n").encode())
     opts = SearchOptions(eval_set=str(f))
     small, large = Config(backend="vllm", quant="bf16", ctx=2048), Config(backend="vllm", quant="bf16", ctx=8192)
-    with pytest.raises(EvalSetError, match="item long needs about 3512 tokens"):
+    with pytest.raises(EvalSetError, match="item long needs about 4024 tokens"):
         accuracy_gate_for(opts, [small])
     with caplog.at_level("WARNING"):
         gate = accuracy_gate_for(opts, [small, large])

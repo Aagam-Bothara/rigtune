@@ -61,10 +61,10 @@ def test_cli_accepts_auto_inside_a_list():
 def test_an_eval_set_adds_cache_keys_only_when_given(tmp_path):
     """Existing profiles keep their cache paths: the gate's options say nothing until a set is given."""
     assert SearchOptions(max_accuracy_loss=5.0, eval_items=100).key() == {}
-    assert SearchOptions(eval_set="gsm8k").key() == {"eval": "gsm8k-300", "maxloss": "3", "gate": "full-v1"}
+    assert SearchOptions(eval_set="gsm8k").key() == {"eval": "gsm8k-300", "maxloss": "3", "gate": "full-v2"}
     mine = str(tmp_path / "mine.jsonl")
     assert SearchOptions(eval_set=mine, eval_items=0, max_accuracy_loss=2.5).key() == {"eval": "mine-all",
-                                                                                          "maxloss": "2.5", "gate": "full-v1"}
+                                                                                          "maxloss": "2.5", "gate": "full-v2"}
 
 
 def test_a_gated_profile_is_reused_only_on_the_same_eval_set(tmp_path, hw_a100, spec, prepared_vllm):
@@ -94,7 +94,7 @@ def test_auto_takes_prequantized_checkpoints_only_when_an_eval_set_gates_them():
     assert SearchOptions(eval_set="gsm8k", quants=["auto", "awq"]).search_quants() == ["auto", "awq", "gptq", "w8a8"]
     assert SearchOptions(eval_set="gsm8k", quants=["bf16", "fp8"]).search_quants() == ["bf16", "fp8"]  # their list
     assert not SearchOptions(eval_set="gsm8k", quants=["bf16", "fp8"]).allows("gptq")
-    assert gated.key() == {"eval": "gsm8k-300", "maxloss": "3", "gate": "full-v1"}  # no quant key: auto is still auto
+    assert gated.key() == {"eval": "gsm8k-300", "maxloss": "3", "gate": "full-v2"}  # no quant key: auto is still auto
 
 
 @pytest.mark.usefixtures("no_network")

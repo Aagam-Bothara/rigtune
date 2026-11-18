@@ -35,7 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set
 
-from rigtune.accuracy_gate import MAX_CONCURRENCY, MIN_CONCURRENCY, _counts, chat_answers, pass_wall_seconds
+from rigtune.accuracy_gate import (ANSWER_MAX_TOKENS, MAX_CONCURRENCY, MIN_CONCURRENCY, _counts, chat_answers,
+                                   pass_wall_seconds)
 from rigtune.calibrate.paired import certifies, score_bounds
 from rigtune.evalset import EvalItem
 from rigtune.models import Config
@@ -51,7 +52,7 @@ class RowGrader:
     items: Sequence[EvalItem]
     set_name: str
     sha256: str
-    max_tokens: int = 512
+    max_tokens: int = ANSWER_MAX_TOKENS
     answer: Callable[..., List[Optional[str]]] = chat_answers
     grades: Dict[str, str] = field(default_factory=dict)  # key -> per item '1' right, '0' wrong, '-'
     twice: Set[str] = field(default_factory=set)  # keys graded a second time: the stock rows'

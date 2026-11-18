@@ -190,7 +190,9 @@ class SearchOptions:
             out["maxloss"] = f"{self.max_accuracy_loss:g}"
             # The served configuration itself is certified (search.stage_final_quality), not only its weights:
             # gated profiles from before that were checked to a weaker contract and are not served for this one.
-            out["gate"] = "full-v1"
+            # v2: a thinking template is graded with thinking off, and answers get 1024 tokens, not 512; a v1
+            # profile of a thinking model was graded on answers cut off mid-thought.
+            out["gate"] = "full-v2"
             if self.eval_attempts != 3:
                 out["evaltries"] = str(self.eval_attempts)
         if self.report_reuse:

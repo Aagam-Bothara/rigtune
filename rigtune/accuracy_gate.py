@@ -62,6 +62,11 @@ AnswerFn = Callable[[str, Optional[str], Sequence[EvalItem], int, int, float], L
 
 MIN_CONCURRENCY, MAX_CONCURRENCY = 8, 64
 
+# The answer budget of an item that sets none. 512 cut off 168 of 1319 GSM8K answers of Qwen3.5-9B with thinking
+# off on the A40 (stock and rigtune's pick alike), each graded wrong whatever it would have said; a longer budget
+# costs time only on the answers that need it, since every answer stops when the model does.
+ANSWER_MAX_TOKENS = 1024
+
 # The formats a reference may be: the model's own weights at 16 or 32 bits, and the 8-bit formats each engine makes
 # from them itself (fp8 on vLLM and SGLang, Q8_0 on llama.cpp). Pre-quantized checkpoints (AWQ, GPTQ, W8A8) are
 # separate artifacts somebody else produced, and the lower GGUF quants measurably lose (Q4_K_M +10% perplexity
@@ -147,7 +152,7 @@ async def _answer_all(base_url: str, model: Optional[str], items: Sequence[EvalI
 
 
 def chat_answers(base_url: str, model: Optional[str], items: Sequence[EvalItem], concurrency: int,
-                 max_tokens: int = 512, wall_s: float = 600.0, request_timeout: float = 180.0,
+                 max_tokens: int = ANSWER_MAX_TOKENS, wall_s: float = 600.0, request_timeout: float = 180.0,
                  details: Optional[List[Optional[dict]]] = None,
                  extra_body: Optional[dict] = None) -> List[Optional[str]]:
     """Each item's greedy answer from a running engine's chat endpoint, `concurrency` at a time, stopping
@@ -198,7 +203,7 @@ class AccuracyGate:
     items: List[EvalItem]
     max_loss: float = 3.0  # points: the largest loss in accuracy against the reference a precision may carry
     info: Optional[EvalSetInfo] = None
-    max_tokens: int = 512
+    max_tokens: int = ANSWER_MAX_TOKENS
     wall_s: Optional[float] = None  # per grading pass; None: pass_wall_seconds(items)
     request_timeout: float = 180.0
     answer: AnswerFn = chat_answers

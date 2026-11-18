@@ -78,7 +78,7 @@ def test_every_graded_answer_is_kept_with_how_it_ended(tmp_path):
     assert g.cut_off == {cfg.key(): 1}
     ref = check("vllm-default", "vllm", cfg.key(), g, {"vllm-default": cfg.key()}, 0.03)
     assert ref.cut_off == 1 and ref.reason.endswith(
-        "; 1 of its 2 answers stopped at the 512-token limit and are graded wrong")
+        "; 1 of its 2 answers stopped at the 1024-token limit and are graded wrong")
 
 
 def test_a_thinking_template_is_graded_with_thinking_off_and_says_so():
