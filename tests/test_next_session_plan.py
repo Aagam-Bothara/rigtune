@@ -112,6 +112,8 @@ def test_the_comparison_passes_the_calibrations_search_options(plan):
         assert "--speculative all" in cal and "--budget 60m" in cal and "--ttft-ceiling 500" in cal
         for flag in ("--repeats 3", "--expert", "--bare-stock", "--verdict", "--check-answers gsm8k"):
             assert flag in cmp_
+        # Every item is graded: 300 could not tell a small loss from stock's own drift on the A40.
+        assert "--check-items 0 " in cmp_ and p[f"cmp-{m}"]["timeout_s"] == 9 * 3600
         # A competitor that fails never blocks the comparison.
         assert p[f"cmp-{m}"]["needs"] == ["env", f"cal-{m}"]
 

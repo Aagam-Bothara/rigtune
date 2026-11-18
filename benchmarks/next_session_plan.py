@@ -369,7 +369,7 @@ def build(a: argparse.Namespace) -> dict:
             f"{model}: rigtune's pick against stock (as rigtune takes it, and bare), the expert rows, auto_tune, "
             "llm-optimizer and AIConfigurator, on held-out prompts, scored win/tie/loss with answers graded; a "
             "row file that is missing is named in rows-missing.txt",
-            needs=[f"cal-{m}"], timeout_s=6 * 3600)
+            needs=[f"cal-{m}"], timeout_s=9 * 3600)  # Gemma 4 12B's took 5.4 h at 300 items on the A40
     # Kernel settings and start-up cost (docs/benchmarks.md, "Not yet measured"): what the ledger recorded of every
     # calibration's start-ups, then one named setting at a time on the kernel model's leader. Each check prints
     # confirmed, refuted or undecided and exits 0 only for confirmed, so an undecided check never reads as a pass.
@@ -601,7 +601,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--cal-budget-min", type=int, default=60)
     ap.add_argument("--goal-budget-min", type=int, default=20)
     ap.add_argument("--repeats", type=int, default=3)
-    ap.add_argument("--check-items", type=int, default=300)
+    # 0: every item (1319 for gsm8k). On the A40, 300 could not tell Gemma 4 12B's pick from stock's own drift
+    # (4 lost, 0 gained, bound -3.4 points), while all 1319 certified it (9 lost, 7 gained, bound -0.8); a full
+    # pass took about 6 minutes a row there, about 1-2 hours more for a comparison's 13 graded rows.
+    ap.add_argument("--check-items", type=int, default=0)
     a = ap.parse_args(argv)
     if a.check_drafts is not None:
         if a.expected_method is None:
