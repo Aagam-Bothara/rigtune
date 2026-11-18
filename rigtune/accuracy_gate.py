@@ -30,6 +30,9 @@ and cannot win; the notes list it separately. Refusals go to StagedSearch.refuse
 final pick respect; dropping a precision from stage 1's kept list alone let a refused 4-bit checkpoint win once.
 KV-cache quantization and speculative decoding, which later stages choose, are not gated.
 
+A model whose chat template thinks is graded with thinking off (grading_template_kwargs, every precision alike), so
+its answers fit in max_tokens; the profile's notes say so.
+
 Every graded precision's per-item outcomes ('1' right, '0' wrong, '-' unanswered, in eval-set order) are kept in
 the profile with the set's sha256, so the same evidence can be re-decided at another tolerance without a GPU.
 """
@@ -226,6 +229,9 @@ class AccuracyGate:
     # The configuration being re-measured for its final grade (StagedSearch sets it), graded once on that run.
     final_target: Optional[str] = None
     final_record: Optional[PrecisionAccuracy] = None
+    # Merged into every graded request (grading_template_kwargs: a template that thinks is graded with thinking off);
+    # passed to `answer` only when set.
+    extra_body: Optional[dict] = None
 
     @property
     def tolerance(self) -> float:
@@ -262,7 +268,9 @@ class AccuracyGate:
 
     def _pass(self, base_url: str, model: Optional[str], concurrency: int) -> str:
         try:
-            responses = self.answer(base_url, model, self.items, concurrency, self.max_tokens, self.pass_wall_s)
+            more = {"extra_body": self.extra_body} if self.extra_body else {}
+            responses = self.answer(base_url, model, self.items, concurrency, self.max_tokens, self.pass_wall_s,
+                                    **more)
         except Exception as exc:  # grading must never take the trial down with it
             logger.warning("accuracy gate: grading failed: %s", exc)
             responses = [None] * len(self.items)

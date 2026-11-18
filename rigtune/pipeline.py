@@ -1057,6 +1057,14 @@ def calibrate(
                               "KV-cache tier was tried")
     probe = quality_probe_for(opts, workload)
     gate = accuracy_gate_for(opts, feasible)
+    gate_notes: List[str] = []
+    if gate is not None:  # a template that thinks is graded with thinking off, or every answer runs out of tokens
+        from rigtune.accuracy_gate import grading_template_kwargs
+
+        gate.extra_body, why = grading_template_kwargs(spec)
+        if why:
+            logger.info("accuracy gate: %s", why)
+            gate_notes.append(f"accuracy gate: {why}")
     if runner is not None and gate is not None and getattr(runner, "gate", False) is None:
         runner.gate = gate  # an injected runner that grades (tests) gets the same gate the search decides with
     version_notes = []  # an engine release rigtune was not checked with: said, never refused
@@ -1123,7 +1131,8 @@ def calibrate(
     if winner is None:
         raise RuntimeError("calibration failed: " + "; ".join(notes))
     elapsed = time.monotonic() - t0
-    notes = power_notes + version_notes + list(plan.notes) + tier_notes + client_notes + notes + spec_notes
+    notes = (power_notes + version_notes + list(plan.notes) + tier_notes + client_notes + gate_notes + notes
+             + spec_notes)
     notes += spec_state_notes_for(hw, reg, plan, winner.config, opts)
     if winner.config.text_only:
         notes.append(TEXT_ONLY_NOTE)

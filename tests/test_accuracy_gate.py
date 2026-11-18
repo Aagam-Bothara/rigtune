@@ -39,13 +39,16 @@ class Script:
         self.grades, self.second = grades, second or {}
         self.passes: List[Key] = []
         self.walls: List[float] = []
+        self.bodies: List[Optional[dict]] = []  # each pass's extra_body
         self.clock, self.seconds_per_pass = clock, seconds_per_pass
 
-    def __call__(self, base_url, model, items, concurrency, max_tokens, wall_s) -> List[Optional[str]]:
+    def __call__(self, base_url, model, items, concurrency, max_tokens, wall_s,
+                 extra_body=None) -> List[Optional[str]]:
         key = tuple(base_url.split("//", 1)[1].split("/"))
         again = key in self.passes
         self.passes.append(key)
         self.walls.append(wall_s)
+        self.bodies.append(extra_body)
         if self.clock is not None:
             self.clock.now += self.seconds_per_pass
         grades = self.second.get(key, self.grades[key]) if again else self.grades[key]
@@ -446,9 +449,16 @@ def test_an_old_profile_without_accuracy_still_loads(hw_a100):
 
 
 @pytest.mark.usefixtures("no_network")
-def test_a_gated_calibration_puts_the_grades_in_the_profile(hw_a100, spec, tmp_path):
+@pytest.mark.parametrize("thinks", [False, True])
+def test_a_gated_calibration_puts_the_grades_in_the_profile(hw_a100, spec, tmp_path, monkeypatch, thinks):
+    """With a template that thinks, every pass is graded with thinking off, and the profile says so."""
+    import rigtune.introspect as ins
     from rigtune.pipeline import SearchOptions, calibrate, prepare_and_plan, select
     from tests.test_objectives_and_search import FakeRunner
+
+    if thinks:
+        facts = ins.ModelFacts(thinking=ins.ThinkingSwitch("enable_thinking", "on"))
+        monkeypatch.setattr(ins, "inspect_model", lambda spec, **kw: facts)
 
     f = tmp_path / "mine.jsonl"
     f.write_bytes("".join(json.dumps({"prompt": f"q{i}", "answer": str(i), "grader": "number"}) + "\n"
@@ -481,6 +491,10 @@ def test_a_gated_calibration_puts_the_grades_in_the_profile(hw_a100, spec, tmp_p
     assert final.reason == "reference configuration" or (final.lost, final.gained) == (0, 0)
     assert p.options["gate"] == "full-v1"
     assert Profile.model_validate_json(p.model_dump_json()).accuracy == p.accuracy
+    off = {"chat_template_kwargs": {"enable_thinking": False}}
+    assert script.bodies and set(map(json.dumps, script.bodies)) == {json.dumps(off if thinks else None)}
+    said = [n for n in p.notes if n.startswith("accuracy gate: graded with enable_thinking false")]
+    assert len(said) == (1 if thinks else 0)
 
 
 def test_the_gate_is_built_before_any_trial_and_checks_items_against_the_context(tmp_path, caplog):
