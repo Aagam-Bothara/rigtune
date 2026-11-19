@@ -526,6 +526,9 @@ class StartupCost(BaseModel):
     capture_lines: int = 0  # how many workers reported a capture
     compile_s: Optional[float] = None  # seconds spent compiling, summed over the ranges compiled
     compile_cached: Optional[bool] = None  # every range loaded from the compile cache; None when no line says
+    # The first forward's profiling/warm-up run, summed over the compiled parts: where Triton compiles and autotunes
+    # its kernels when its cache is cold (74 s on Qwen3.5-9B on an A100, 0.3 s warm)
+    warmup_s: Optional[float] = None
     rewrites: List[str] = Field(default_factory=list)  # settings the engine said it changed, "cudagraph_mode=NAME"
     parsed: List[str] = Field(default_factory=list)  # which lines were found: an empty list read nothing
 

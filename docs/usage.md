@@ -385,7 +385,8 @@ The setting is part of the profile's cache key, so serve the profile with the sa
 
 Every launched trial's start-up cost is recorded in the trial ledger beside the trial: seconds from launch to the
 first healthy answer, and for vLLM the CUDA-graph capture time and size, the seconds spent compiling, whether the
-compile cache was hit, and any CUDA-graph mode vLLM said it changed. A value whose log line was not found is left
+compile cache was hit, the seconds of the first forward's profiling and warm-up run (where Triton compiles and
+autotunes its kernels when its cache is cold), and any CUDA-graph mode vLLM said it changed. A value whose log line was not found is left
 empty, never 0. Profiles do not carry it.
 
 ### The kernel cache

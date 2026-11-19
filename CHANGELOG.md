@@ -10,6 +10,9 @@
 - The trial ledger records a vLLM 0.33 start that loaded the whole model from its AOT compile cache as a compile
   cache hit. It recorded no answer before, because 0.33 then prints no compile-range line: the A40 session's three
   Gemma 4 relaunches that compiled in 0.5 s were counted as unknown.
+- The trial ledger's start-up record gains `warmup_s`: vLLM's first-forward profiling and warm-up run, where Triton
+  compiles and autotunes on a cold cache. Read back from the A100 session's logs, it is 81-82 s on every
+  Qwen3.5-9B launch and under 0.3 s on Gemma 4 12B.
 
 ## 0.3.0 (2026-11-18)
 

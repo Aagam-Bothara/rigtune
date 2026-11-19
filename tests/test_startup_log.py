@@ -102,6 +102,27 @@ def test_an_aot_load_beside_a_compiled_range_is_not_a_hit():
     assert got["compile_cached"] is False and got["compile_s"] == 3.29
 
 
+# From the A100 session's Qwen3.5-9B MTP launch (18 Nov 2026), cold, and the Modal run's warm start (19 Nov 2026).
+WARMUP_COLD = ("(EngineCore pid=19238) INFO 11-18 05:57:41 [monitor.py:91] [backbone] Initial profiling/warmup run "
+               "took 81.98 s")
+WARMUP_HEAD = ("(EngineCore pid=19238) INFO 11-18 05:57:45 [monitor.py:91] [eagle_head] Initial profiling/warmup run "
+               "took 0.01 s")
+
+
+def test_warmup_is_summed_over_the_compiled_parts():
+    got = parse_startup("vllm", _log(WARMUP_COLD, WARMUP_HEAD))
+    assert got["warmup_s"] == 81.99 and got["parsed"] == ["warmup"]
+
+
+def test_warmup_printed_by_every_worker_counts_once_per_part():
+    other_worker = WARMUP_COLD.replace("pid=19238", "pid=19239").replace("81.98", "80.10")
+    assert parse_startup("vllm", _log(WARMUP_COLD, other_worker))["warmup_s"] == 81.98
+
+
+def test_a_warm_start_reads_its_small_warmup():
+    assert parse_startup("vllm", _log(WARMUP_COLD.replace("81.98", "0.34")))["warmup_s"] == 0.34
+
+
 def test_no_compile_line_is_unknown_not_cached():
     got = parse_startup("vllm", _log(CAPTURE))
     assert "compile_cached" not in got and "compile_s" not in got
@@ -152,6 +173,6 @@ def test_capture_seconds_and_gib_reach_the_ledger(tmp_path, hw_a100, spec, monke
     (record,) = [r for r in lg.read(ledger.path) if r["type"] == "trial"]
     assert record["startup"] == {
         "seconds": 60.0, "capture_s": 23.0, "cudagraph_gib": 0.71, "capture_lines": 1, "compile_s": 31.42,
-        "compile_cached": False, "rewrites": ["cudagraph_mode=PIECEWISE"],
+        "compile_cached": False, "warmup_s": None, "rewrites": ["cudagraph_mode=PIECEWISE"],
         "parsed": ["capture", "compile", "rewrites"]}
     assert "startup" not in res.model_dump(mode="json")

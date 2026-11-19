@@ -279,6 +279,11 @@ _CAPTURE = re.compile(r"(?<!Encoder )Graph capturing finished in (\d+) secs, too
 _COMPILED = re.compile(r"Compiling a graph for compile range (.+?) takes (\d+\.\d+) s")
 _CACHED = re.compile(r"Directly load the compiled graph\(s\) for compile range .+? from the cache, took \d+\.\d+ s"
                      r"|Directly load AOT compilation from path \S")
+#   "[prefix] Initial profiling/warmup run took %.2f s"      compilation/monitor.py:91 (0.33): the first forward of
+#                                                            each compiled part, where Triton compiles and autotunes
+#                                                            on a cold cache (Qwen3.5's GDN kernels: 74-82 s cold,
+#                                                            0.3 s warm, benchmarks/sessions/2026-11/modal-triton-cache)
+_WARMUP = re.compile(r"(\[[\w.-]+\] )?Initial profiling/warmup run took (\d+\.\d+) s")
 _REWRITE = re.compile(r"; setting (cudagraph_mode=[A-Z_]+)")
 # The other wording, for piecewise compilation with nothing to split (config/compilation.py:1204 / 1226); the
 # source breaks the phrase across two string literals, the log does not.
@@ -313,6 +318,13 @@ def parse_startup(backend: str, text: str) -> Dict[str, object]:
         parsed.append("compile_cache")
     if compiled or cached:
         out["compile_cached"] = not compiled
+    # One figure per compiled part (the backbone, an MTP head), the slowest worker's, summed over the parts.
+    warmups: Dict[str, float] = {}
+    for prefix, seconds in _WARMUP.findall(text):
+        warmups[prefix] = max(warmups.get(prefix, 0.0), float(seconds))
+    if warmups:
+        out["warmup_s"] = round(sum(warmups.values()), 2)
+        parsed.append("warmup")
     found = [(m.start(), m.group(1)) for m in _REWRITE.finditer(text)]
     found += [(m.start(), f"cudagraph_mode={m.group(1)}") for m in _REWRITE_TO.finditer(text)]
     rewrites = list(dict.fromkeys(name for _, name in sorted(found)))  # each once, in the order the engine said them
