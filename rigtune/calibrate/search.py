@@ -815,6 +815,9 @@ class StagedSearch:
     # (SUFFIX_FAILED); kind -> the configurations that were not launched for it.
     _spec_blocked: Dict[str, List[str]] = field(default_factory=dict)
     _pair_blocked: set = field(default_factory=set)
+    # (engine, kind, second model) that started in this calibration: a later start-up failure of the pair is put
+    # down to that trial's other settings, not the second model, and blocks nothing.
+    _pair_started: set = field(default_factory=set)
     block_failed_pairs: bool = False  # verified mode only: table mode launches what it always launched
 
     # ---- predictor helpers
@@ -953,6 +956,8 @@ class StagedSearch:
         # Grading runs inside a trial but only once per precision, so --budget's typical trial leaves it out.
         self._trial_seconds.append(self.clock() - t0 - (self._grading_seconds() - graded))
         self._done[key] = res
+        if pair_key is not None and res.launched:
+            self._pair_started.add(pair_key)
         if not res.launched and spec_kind and startup_cause(res.error)[0] == SUFFIX_FAILED:
             self._spec_blocked.setdefault(spec_kind, [])
         retry = self._headroom_retry(cfg, res)
@@ -970,13 +975,22 @@ class StagedSearch:
                 self.progress(stage, cfg, res)
             return self._run(retry, stage)
         # A trial with kernel settings says nothing about its second model: the engine refused the setting, or
-        # ran out of memory with it, on a pair its leader had already started.
+        # ran out of memory with it, on a pair its leader had already started. Nor does any failure of a pair that
+        # has started in this calibration: on Gemma 4 12B (A40, 16 Nov 2026) its assistant served at 237 tok/s,
+        # then failed with a 2,048-token prefill budget (smaller than one image item, 2,496 tokens, exactly as the
+        # suffix trial at that budget failed), and the block skipped the four trials at larger budgets.
         if (self.block_failed_pairs and pair_key is not None and not res.launched and cfg.kernels is None and
                 (failure_kind(res) in ("draft_refused", "draft_unavailable") or
                  "failed to start" in (res.error or ""))):
-            self._pair_blocked.add(pair_key)
-            self.notes.append(f"{cfg.backend}: {pair_key[2]} failed to start ({failure_kind(res)}); "
-                              "only this candidate is blocked on this engine for this calibration")
+            if pair_key in self._pair_started:
+                note = (f"{cfg.backend}: {pair_key[2]} failed to start with {key}, but it started earlier in this "
+                        "calibration; the failure is put down to that trial's other settings and nothing is blocked")
+                if note not in self.notes:
+                    self.notes.append(note)
+            else:
+                self._pair_blocked.add(pair_key)
+                self.notes.append(f"{cfg.backend}: {pair_key[2]} failed to start ({failure_kind(res)}); "
+                                  "only this candidate is blocked on this engine for this calibration")
         self.results.append(res)
         if self.progress:
             self.progress(stage, cfg, res)

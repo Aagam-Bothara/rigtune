@@ -127,6 +127,47 @@ def test_failed_candidate_blocks_only_itself():
     assert search._run(cfg.model_copy(update={"backend": "sglang"}), "spec").ok
 
 
+MM_BUDGET = ("ValueError: Chunked MM input disabled but max_tokens_per_mm_item (2496) is larger than "
+             "max_num_batched_tokens (2048). Please increase max_num_batched_tokens.")
+
+
+class _SmallBudgetFails:
+    """Gemma 4 12B's assistant on the A40 (16 Nov 2026): it serves, except with a prefill budget below one image
+    item, where vLLM refuses to start, as it did for the suffix trial at the same budget."""
+
+    def __init__(self):
+        self.launches = []
+
+    def run(self, cfg, stage):
+        self.launches.append(cfg.prefill_budget)
+        if cfg.prefill_budget == 2048:
+            return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
+                               error=f"failed to start (rc=1)\n{MM_BUDGET}", failure_kind="startup_other")
+        return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(tok_s=237, requests=20, output_tokens=100))
+
+
+def test_a_pair_that_started_is_not_blocked_by_a_later_failure():
+    runner = _SmallBudgetFails()
+    search = StagedSearch(objective="throughput", runner=runner, block_failed_pairs=True)
+    cfg = Config(backend="vllm", quant="bf16", spec_decode="assist:google/gemma-4-12B-it-assistant:1")
+    assert search._run(cfg, "spec").ok
+    assert search._run(cfg.model_copy(update={"prefill_budget": 2048}), "prefill").failure_kind == "startup_other"
+    for budget in (8192, 16384):
+        assert search._run(cfg.model_copy(update={"prefill_budget": budget}), "prefill").ok
+    assert runner.launches == [None, 2048, 8192, 16384] and not search._pair_blocked
+    assert any("started earlier in this calibration" in note for note in search.notes)
+
+
+def test_a_pair_that_never_started_is_still_blocked_after_its_first_failure():
+    runner = _SmallBudgetFails()
+    search = StagedSearch(objective="throughput", runner=runner, block_failed_pairs=True)
+    cfg = Config(backend="vllm", quant="bf16", spec_decode="assist:google/gemma-4-12B-it-assistant:1",
+                 prefill_budget=2048)
+    search._run(cfg, "prefill")
+    assert search._run(cfg.model_copy(update={"prefill_budget": 8192}), "prefill").failure_kind == "skipped_blocked"
+    assert runner.launches == [2048]
+
+
 def test_old_result_without_kind_classifies_as_before():
     cfg = Config(backend="vllm", quant="bf16")
     res = TrialResult(config=cfg, stage="quant", launched=False, error="failed to start", metrics=TrialMetrics())
