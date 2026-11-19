@@ -1,0 +1,67 @@
+[
+  {
+    "run": "1-A-pinned-cold",
+    "max_num_seqs": 64,
+    "triton_cache_pinned": true,
+    "ready_s": 314.2,
+    "autotune_lines": 6,
+    "bundler_cubin_missing": 0,
+    "aot_loaded": false,
+    "gdn_warmup_s": 73.37,
+    "torch_compile_s": 26.93,
+    "init_engine_s": 135.11,
+    "kv_cache_tokens": 248685
+  },
+  {
+    "run": "2-B-pinned-newhash",
+    "max_num_seqs": 128,
+    "triton_cache_pinned": true,
+    "ready_s": 122.1,
+    "autotune_lines": 0,
+    "bundler_cubin_missing": 0,
+    "aot_loaded": false,
+    "gdn_warmup_s": 0.34,
+    "torch_compile_s": 22.84,
+    "init_engine_s": 57.13,
+    "kv_cache_tokens": 284964
+  },
+  {
+    "run": "3-A-pinned-again",
+    "max_num_seqs": 64,
+    "triton_cache_pinned": true,
+    "ready_s": 88.1,
+    "autotune_lines": 0,
+    "bundler_cubin_missing": 0,
+    "aot_loaded": false,
+    "gdn_warmup_s": 0.36,
+    "torch_compile_s": 0.59,
+    "init_engine_s": 25.94,
+    "kv_cache_tokens": 288768
+  },
+  {
+    "run": "4-B-default-cold",
+    "max_num_seqs": 128,
+    "triton_cache_pinned": false,
+    "ready_s": 224.1,
+    "autotune_lines": 6,
+    "bundler_cubin_missing": 0,
+    "aot_loaded": false,
+    "gdn_warmup_s": 73.98,
+    "torch_compile_s": 25.98,
+    "init_engine_s": 141.62,
+    "kv_cache_tokens": 244882
+  },
+  {
+    "run": "5-C-default-newhash",
+    "max_num_seqs": 96,
+    "triton_cache_pinned": false,
+    "ready_s": 200.1,
+    "autotune_lines": 6,
+    "bundler_cubin_missing": 0,
+    "aot_loaded": false,
+    "gdn_warmup_s": 74.22,
+    "torch_compile_s": 26.39,
+    "init_engine_s": 136.89,
+    "kv_cache_tokens": 246345
+  }
+]
