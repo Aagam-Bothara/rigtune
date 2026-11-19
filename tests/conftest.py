@@ -5,7 +5,16 @@ from typing import Dict
 
 import pytest
 
-from rigtune.models import (
+# GitHub Actions sets GITHUB_ACTIONS, and Typer then forces colour into every error box it draws: the escape codes
+# split "--history" into "-" and "-history", so tests that look for a flag in the output passed on every machine
+# but CI. Typer reads its switch once, when imported, so it is set before anything imports Typer, and the setting
+# it derived is overridden in case something did.
+os.environ["_TYPER_FORCE_DISABLE_TERMINAL"] = "1"
+import typer.rich_utils  # noqa: E402
+
+typer.rich_utils.FORCE_TERMINAL = False
+
+from rigtune.models import (  # noqa: E402
     ArchInfo,
     BackendAvailability,
     CPUInfo,
