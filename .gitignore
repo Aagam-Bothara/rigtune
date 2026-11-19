@@ -7,3 +7,6 @@ dist/
 .ruff_cache/
 .venv/
 *.gguf
+# Local research notes and reports: working material, not part of the project
+/research_notes/
+/reports/
