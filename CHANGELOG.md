@@ -20,6 +20,9 @@
   session's logs, Qwen3.5-9B's MTP head kept 67% of 3 drafted tokens (3.0 tokens per step) and n-gram 5-10%. Gemma
   4 12B's assistant kept 50% with 1 drafted token, which is why it gained little. Trials without speculation are
   written exactly as before.
+- A verdict's answer table gains a "Cut off" column: the answers that stopped at the token limit, graded wrong
+  whatever they would have said. It was in verdict.json only; on the A100 comparison it is 19 to 27 per row. A
+  verdict of a result from before the count shows "-", not 0.
 
 ## 0.3.0 (2026-11-18)
 

@@ -290,10 +290,26 @@ def test_a_stock_row_answers_twice_and_every_check_reports_its_floor():
     assert (mine.noise_flips, mine.gained) == (3, 3) and mine.reason.endswith(
         "against -3; vllm-default itself differed on 3 of 200 items between two passes")
     md = to_markdown(score(_result(_checked("rigtune", [130.0, 131.0, 132.0], True, "holds"), _stock())))
-    assert "| Row | Right | Against | Lost | Gained | Lower bound | Floor | Check |" in md
+    assert "| Row | Right | Cut off | Against | Lost | Gained | Lower bound | Floor | Check |" in md
     keyed = KeyedGate(g, "pd[...]")
     keyed.record("http://router", "m", rig)
     assert "pd[...]" in g.grades and asked[-1] == "http://router"
+
+
+def test_the_answer_table_shows_how_many_answers_were_cut_off():
+    """The A100 session counted 19-27 cut-off answers per row, but only verdict.json showed them."""
+    rig = _checked("rigtune", [130.0, 131.0, 132.0], True, "holds")
+    rig.answer_check.cut_off = 23
+    stock = _stock()
+    stock.answer_check.cut_off = 0
+    md = to_markdown(score(_result(rig, stock)))
+    assert "| rigtune | 150 of 200 | 23 | vllm-default |" in md
+    assert "| vllm-default | 150 of 200 | 0 | vllm-default |" in md
+
+
+def test_a_result_from_before_the_count_shows_a_dash_not_zero():
+    md = to_markdown(score(_result(_checked("rigtune", [130.0, 131.0, 132.0], True, "holds"), _stock())))
+    assert "| rigtune | 150 of 200 | - | vllm-default |" in md
 
 
 @pytest.mark.usefixtures("no_network")

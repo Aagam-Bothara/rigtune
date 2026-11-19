@@ -689,17 +689,20 @@ def to_markdown(v: Verdict) -> str:
         lines += ["", f"Answers graded on `{first['eval_set']}` ({first['items']} items, greedy), each "
                       "against its engine's stock row, allowed to lose at most "
                       f"{first['tolerance'] * 100:g} points. The stock rows answer twice; the floor is how "
-                      "many items their two passes disagreed on:", "",
-                  "| Row | Right | Against | Lost | Gained | Lower bound | Floor | Check |",
-                  "|---|---|---|---|---|---|---|---|"]
+                      "many items their two passes disagreed on. Cut off counts the answers that stopped at the "
+                      "token limit, graded wrong whatever they would have said (- where the engine did not say how "
+                      "each answer ended):", "",
+                  "| Row | Right | Cut off | Against | Lost | Gained | Lower bound | Floor | Check |",
+                  "|---|---|---|---|---|---|---|---|---|"]
         for label, g in graded:
             if not g:
-                lines.append(f"| {label} | not graded | | | | | | |")
+                lines.append(f"| {label} | not graded | | | | | | | |")
                 continue
             bound = "-" if g["lower_bound"] is None else f"{g['lower_bound'] * 100:+.1f} pts"
             floor = "-" if g.get("noise_flips") is None else f"{g['noise_flips']} of {g['noise_paired']}"
             state = {True: "holds", False: "**fails**", None: "not checked"}[g["passed"]]
-            lines.append(f"| {label} | {g['correct']} of {g['answered']} | {g['reference'] or '-'} | "
+            cut = "-" if g.get("cut_off") is None else str(g["cut_off"])  # a verdict of an older result has none
+            lines.append(f"| {label} | {g['correct']} of {g['answered']} | {cut} | {g['reference'] or '-'} | "
                          f"{_f0(g['lost'])} | {_f0(g['gained'])} | {bound} | {floor} | {state} |")
     lines += ["", f"**Overall: {v.overall['text']}**"] + [f"_{n}_" for n in v.notes]
     return "\n".join(lines) + "\n"
