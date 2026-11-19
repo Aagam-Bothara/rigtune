@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from rigtune import kernels, speculative
+from rigtune import kernels, paths, speculative
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from rigtune.hfconfig import dtype_bytes, kv_element_bytes, load_arch
 from rigtune.memory import HybridKV, MemoryModel, estimate
@@ -223,6 +223,20 @@ def _vllm_version() -> Tuple[int, int]:
         return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
     except Exception:
         return (0, 0)
+
+
+def triton_cache_env() -> Dict[str, str]:
+    """TRITON_CACHE_DIR in rigtune's kernel cache, or nothing when RIGTUNE_KERNEL_CACHE turns it off.
+
+    Unless TRITON_CACHE_DIR is set, vLLM 0.33 puts Triton's cache inside the torch.compile directory of each
+    configuration (compilation/compiler_interface.py, initialize_inductor_cache), whose hash includes max_num_seqs,
+    max_model_len and max_num_batched_tokens. Every configuration a calibration tries then compiles and autotunes
+    Triton's kernels again. Measured on Qwen3.5-9B on an A100 40 GB (benchmarks/sessions/2026-11/modal-triton-cache):
+    at a new max_num_seqs, the GDN warm-up took 74 s with vLLM's default and 0.3 s with the directory fixed. Engine
+    init fell from 137 s to 57 s, and the warm engine had about 15% more KV cache. Triton keys each entry by its own
+    version, the GPU's architecture and the kernel's source, so one directory serves every engine release and card."""
+    base = paths.kernel_cache_dir()
+    return {"TRITON_CACHE_DIR": str(base / "triton")} if base is not None else {}
 
 
 @functools.lru_cache(maxsize=1)
@@ -961,7 +975,7 @@ class VllmBackend(BaseBackend):
             args += ["--kv-transfer-config", json.dumps(vllm_tier_config(cfg, port))]
         if cfg.text_only:  # set only by the retry after multimodal profiling failed at start-up
             args += ["--language-model-only"]
-        return LaunchSpec(args=args, env=env)
+        return LaunchSpec(args=args, env=env, runtime_env=triton_cache_env())
 
     def launch_note(self) -> Optional[str]:
         return arctic_plugin_note()

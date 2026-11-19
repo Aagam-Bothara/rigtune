@@ -170,6 +170,12 @@ def _isolated_pair_records(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_kernel_cache(tmp_path, monkeypatch):
+    """A vLLM launch sets TRITON_CACHE_DIR under rigtune's kernel cache: never the developer's own, in a test."""
+    monkeypatch.setenv("RIGTUNE_KERNEL_CACHE", str(tmp_path / "kernel-cache"))
+
+
+@pytest.fixture(autouse=True)
 def _no_hf_token(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     os.environ.setdefault("HF_HUB_OFFLINE", "1")

@@ -52,6 +52,10 @@ class LaunchSpec:
     args: List[str]
     env: Dict[str, str] = field(default_factory=dict)
     cwd: Optional[str] = None
+    # Machine-local settings for this launch, such as a cache directory: set only where neither the caller's
+    # environment nor `env` already sets the variable, and never recorded. Profiles, verdicts and the golden launch
+    # commands carry `env` alone, so no local path reaches them and a setting here changes no configuration.
+    runtime_env: Dict[str, str] = field(default_factory=dict)
 
 
 class Process:
@@ -74,6 +78,17 @@ class Process:
     def start(self) -> "Process":
         env = dict(os.environ)
         env.update(self.spec.env)
+        for name, value in self.spec.runtime_env.items():
+            if name in env:  # the caller's own setting, or the configuration's, wins
+                continue
+            if name.endswith("_DIR"):
+                try:
+                    Path(value).mkdir(parents=True, exist_ok=True)
+                except OSError as exc:  # a read-only home: the engine keeps its own default rather than fail
+                    logger.warning("%s not set: %s could not be created (%s); the engine uses its default",
+                                   name, value, exc)
+                    continue
+            env[name] = value
         if self.log_path:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
             self._log_fh = open(self.log_path, "ab")

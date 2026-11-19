@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Every vLLM launch keeps Triton's kernels and autotune results in `~/.rigtune/kernel-cache/triton`
+  (`TRITON_CACHE_DIR`), so a calibration no longer compiles and autotunes them again for each configuration. On
+  Qwen3.5-9B on an A100, a new `max_num_seqs` started its engine in 57 s instead of 137 s, and with about 15% more KV
+  cache ([the kernel cache](docs/usage.md#the-kernel-cache)). A `TRITON_CACHE_DIR` you set wins;
+  `RIGTUNE_KERNEL_CACHE` moves the cache or turns this off. Profiles, the ledger and verdicts do not record it.
+
 ## 0.3.0 (2026-11-18)
 
 The release behind the November 2026 results: on Qwen3.5-9B and Gemma 4 12B, with vLLM 0.33.0 and SGLang 0.5.23,

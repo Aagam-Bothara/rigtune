@@ -31,3 +31,15 @@ def home() -> Path:
 def pairs_dir() -> Path:
     """Checked second-model evidence; independently relocatable for offline sites."""
     return Path(env("PAIRS")) if env("PAIRS") else home() / "pairs"
+
+
+_OFF = ("off", "0", "false", "no", "none", "disabled")  # as RIGTUNE_LEDGER reads them, in any case
+
+
+def kernel_cache_dir() -> Optional[Path]:
+    """Where engines keep compiled kernels and their autotune results from one launch to the next, or None when
+    RIGTUNE_KERNEL_CACHE turns it off. A value that turns it off is never read as a directory of that name."""
+    given = (env("KERNEL_CACHE") or "").strip()
+    if given.lower() in _OFF:
+        return None
+    return Path(given) if given else home() / "kernel-cache"
