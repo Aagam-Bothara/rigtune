@@ -75,6 +75,33 @@ def test_cache_hit_and_miss_lines():
     assert mixed["compile_cached"] is False and mixed["compile_s"] == 31.42
 
 
+# From the A40 session's Gemma 4 12B relaunch (16 Nov 2026), the only cache hit read from a real log so far: vLLM 0.33
+# loaded the whole model from its AOT cache and printed no compile-range line at all.
+AOT_HIT_033 = ("(EngineCore pid=289984) INFO 11-17 16:15:55 [decorators.py:326] [backbone] Directly load AOT "
+               "compilation from path /root/.cache/vllm/torch_compile_cache/torch_aot_compile/4fc34eff6932ab7a/"
+               "rank_0_0/model")
+AOT_SAVED_033 = ("(EngineCore pid=276944) INFO 11-17 15:35:58 [decorators.py:752] [backbone] saved AOT compiled "
+                 "function to /root/.cache/vllm/torch_compile_cache/torch_aot_compile/4fc34eff6932ab7a/rank_0_0/model")
+
+
+def test_an_aot_cache_load_is_a_hit():
+    got = parse_startup("vllm", _log(AOT_HIT_033, CAPTURE))
+    assert got["compile_cached"] is True and "compile_s" not in got
+    assert got["parsed"] == ["capture", "compile_cache"]
+
+
+def test_an_aot_save_after_compiling_is_a_miss():
+    got = parse_startup("vllm", _log(MISS_033, AOT_SAVED_033))
+    assert got["compile_cached"] is False and got["compile_s"] == 31.42
+
+
+def test_an_aot_load_beside_a_compiled_range_is_not_a_hit():
+    """MTP: the backbone loads from the cache while the draft head compiles."""
+    head = MISS_033.replace("[decoder]", "[eagle_head]").replace("31.42", "3.29")
+    got = parse_startup("vllm", _log(AOT_HIT_033, head))
+    assert got["compile_cached"] is False and got["compile_s"] == 3.29
+
+
 def test_no_compile_line_is_unknown_not_cached():
     got = parse_startup("vllm", _log(CAPTURE))
     assert "compile_cached" not in got and "compile_s" not in got

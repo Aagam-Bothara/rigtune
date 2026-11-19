@@ -7,6 +7,9 @@
   Qwen3.5-9B on an A100, a new `max_num_seqs` started its engine in 57 s instead of 137 s, and with about 15% more KV
   cache ([the kernel cache](docs/usage.md#the-kernel-cache)). A `TRITON_CACHE_DIR` you set wins;
   `RIGTUNE_KERNEL_CACHE` moves the cache or turns this off. Profiles, the ledger and verdicts do not record it.
+- The trial ledger records a vLLM 0.33 start that loaded the whole model from its AOT compile cache as a compile
+  cache hit. It recorded no answer before, because 0.33 then prints no compile-range line: the A40 session's three
+  Gemma 4 relaunches that compiled in 0.5 s were counted as unknown.
 
 ## 0.3.0 (2026-11-18)
 

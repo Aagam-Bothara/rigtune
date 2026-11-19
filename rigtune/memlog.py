@@ -271,9 +271,14 @@ PARSERS = {
 #   "[prefix]Compiling a graph for compile range %s takes %.2f s"       compilation/backends.py:394 / 418
 #   "[prefix]Directly load the compiled graph(s) for compile range %s from the cache, took %.3f s"   :293 / 311
 #   "...; setting cudagraph_mode=<NAME>"                     config/compilation.py, the resolver's warnings
+#   "[prefix]Directly load AOT compilation from path %s"     compilation/decorators.py:326 (0.33): the whole model
+#                                                            from the AOT cache, where no compile-range line follows.
+#                                                            Read from a real log: Gemma 4 12B's relaunch on an A40,
+#                                                            16 Nov 2026, "torch.compile took 0.54 s in total"
 _CAPTURE = re.compile(r"(?<!Encoder )Graph capturing finished in (\d+) secs, took (-?\d+\.\d+) GiB")
 _COMPILED = re.compile(r"Compiling a graph for compile range (.+?) takes (\d+\.\d+) s")
-_CACHED = re.compile(r"Directly load the compiled graph\(s\) for compile range .+? from the cache, took \d+\.\d+ s")
+_CACHED = re.compile(r"Directly load the compiled graph\(s\) for compile range .+? from the cache, took \d+\.\d+ s"
+                     r"|Directly load AOT compilation from path \S")
 _REWRITE = re.compile(r"; setting (cudagraph_mode=[A-Z_]+)")
 # The other wording, for piecewise compilation with nothing to split (config/compilation.py:1204 / 1226); the
 # source breaks the phrase across two string literals, the log does not.
