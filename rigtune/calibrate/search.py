@@ -35,17 +35,25 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Set,
 
 from rigtune import kvtier
 from rigtune.backends.base import BaseBackend, free_port
-from rigtune.calibrate.measure import MIN_OPEN_LOOP_RATE, run_trial
+from rigtune.calibrate.measure import MIN_OPEN_LOOP_RATE, run_trial, spec_counters
 from rigtune.calibrate.objectives import Constraints, pick, rank, resolve_goal, strict_refusal
 from rigtune.calibrate.rate import compose
 from rigtune.calibrate.workload import Workload
-from rigtune.memlog import device_used_mb, merge, parse_log, parse_startup
+from rigtune.memlog import (
+    acceptance_from_counters,
+    device_used_mb,
+    merge,
+    parse_acceptance,
+    parse_log,
+    parse_startup,
+)
 from rigtune.memory import estimate as memory_estimate
 from rigtune.models import (
     Config,
     HardwareDescriptor,
     MemoryObservation,
     PreparedModel,
+    SpecAcceptance,
     StartupCost,
     TrialMetrics,
     TrialResult,
@@ -245,6 +253,26 @@ def log_error(log: str) -> Optional[str]:
         if reason:
             return _short(f"{line} {reason}", 240)
     return _short(line)
+
+
+def _acceptance(backend: str, window: Tuple[Optional[Tuple[float, float, float]], int], port: int, hooks,
+                proc) -> Optional[SpecAcceptance]:
+    """Speculation's acceptance over one trial's workload: from the change in vLLM's counters where both readings
+    exist, else from the engine's log lines written since the workload began; None when neither says. Never fails the
+    trial: a reading that goes wrong costs the figure."""
+    try:
+        before, offset = window
+        found = None
+        if before is not None:
+            after = spec_counters(f"http://127.0.0.1:{port}", hooks)
+            if after is not None:
+                found = acceptance_from_counters(*(a - b for a, b in zip(after, before)))
+        if found is None and hasattr(proc, "log_since"):
+            found = parse_acceptance(backend, proc.log_since(offset))
+        return SpecAcceptance(**found) if found else None
+    except Exception as exc:
+        logger.warning("speculative acceptance not read: %s", type(exc).__name__)
+        return None
 
 
 def startup_cause(error: Optional[str]) -> Tuple[Optional[str], str]:
@@ -525,12 +553,21 @@ class SubprocessTrialRunner:
             if perr:
                 return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=perr, memory=observation,
                                    failure_kind="power_unavailable")
+            # Speculation's acceptance over the workload alone: counters and log read either side of it, before the
+            # gate and the quality probe send their own prompts to the same engine.
+            spec_window = None
+            if cfg.spec_decode:
+                size = getattr(proc, "log_size", None)  # a stand-in process may keep no log
+                spec_window = (spec_counters(f"http://127.0.0.1:{port}", hooks) if cfg.backend == "vllm" else None,
+                               size() if size else 0)
             metrics = run_trial(
                 f"http://127.0.0.1:{port}", hooks, self.workload, pid=proc.pid,
                 request_timeout=self.request_timeout, enough=self.enough, close_call=self.close_call,
                 idle_tail_s=self.idle_tail_s, arrival_rate=arrival_rate, answers=self.answers,
                 **({"on_level": self.on_level} if self.on_level is not None else {}),
             )
+            if spec_window is not None and metrics.ok:
+                metrics.spec_acceptance = _acceptance(cfg.backend, spec_window, port, hooks, proc)
             if self.quality is not None and metrics.ok and arrival_rate is None:
                 # The engine is up and warm: answer the quality prompts here rather than launch it again later.
                 self.quality.record(f"http://127.0.0.1:{port}", cfg.backend, cfg.quant)

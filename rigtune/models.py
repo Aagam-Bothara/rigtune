@@ -370,6 +370,21 @@ class AnswerStats(BaseModel):
     judged_for_repetition: int = 0
 
 
+class SpecAcceptance(BaseModel):
+    """How much of what speculative decoding drafted the model kept, over a trial's measured requests, as the
+    engine logged it (memlog.parse_acceptance). Read only from the log lines written while the trial's workload
+    ran, so the answers a gate or quality probe graded afterwards on the same engine are not in it."""
+
+    rate: float  # accepted / drafted tokens; from SGLang's log, its "accept rate" averaged over its lines
+    mean_length: float  # tokens per verification step, 1 + accepted / drafts; from a log, the engine's own figure
+    accepted_tokens: Optional[int] = None  # vLLM only: SGLang logs rates, not counts
+    drafted_tokens: Optional[int] = None
+    lines: Optional[int] = None  # from a log: how many of its lines; None from the counters
+    # "vllm_metrics" (the change in vLLM's /metrics counters over the workload), "vllm_log" (its SpecDecoding lines,
+    # where the counters could not be read) or "sglang_log" (its decode-batch lines)
+    source: str
+
+
 class TrialMetrics(BaseModel):
     tok_s: float = 0.0  # aggregate output tokens per second
     ttft_ms: Optional[float] = None  # p50 time to first token (None = not measured / failed)
@@ -468,12 +483,16 @@ class TrialMetrics(BaseModel):
     # What the answers looked like (AnswerStats), for a comparison under --verdict only. Left out of the file
     # when unset, so every trial measured without it is written exactly as before.
     answers: Optional[AnswerStats] = None
+    # Speculative decoding's acceptance over the trial, for a trial that drafted and whose engine logged it. Left out
+    # of the file when unset, like answers, so every other trial is written exactly as before.
+    spec_acceptance: Optional[SpecAcceptance] = None
 
     @model_serializer(mode="wrap")
     def _omit_unset_answers(self, handler) -> Dict[str, Any]:
         data = handler(self)
-        if data.get("answers") is None:
-            data.pop("answers", None)
+        for name in ("answers", "spec_acceptance"):
+            if data.get(name) is None:
+                data.pop(name, None)
         return data
 
     # A trial is not invalidated by a couple of degenerate requests. Small models sometimes emit

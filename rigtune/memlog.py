@@ -335,6 +335,46 @@ def parse_startup(backend: str, text: str) -> Dict[str, object]:
     return out
 
 
+# Speculative decoding's acceptance as each engine logs it:
+#   vLLM, v1/spec_decode/metrics.py SpecDecodingLogging.log (v0.33.0), every logging interval:
+#     "SpecDecoding metrics: Mean acceptance length: %.2f, ... Accepted: %d tokens, Drafted: %d tokens, ..."
+#   SGLang, each decode-batch line under speculation (0.5.23, read from the A100 session's MTP trial):
+#     "Decode batch, #running-req: 8, ..., accept len: 2.71, accept rate: 0.57, cuda graph: True, ..."
+_VLLM_SPEC = re.compile(r"SpecDecoding metrics: Mean acceptance length: (\d+(?:\.\d+)?), .*?"
+                        r"Accepted: (\d+) tokens, Drafted: (\d+) tokens")
+_SGLANG_SPEC = re.compile(r"accept len: (\d+(?:\.\d+)?), accept rate: (\d+(?:\.\d+)?)")
+# vLLM's Prometheus counters (v1/spec_decode/metrics.py, v0.33.0), without their _total suffix
+SPEC_DRAFTS, SPEC_DRAFT_TOKENS, SPEC_ACCEPTED = (
+    "vllm:spec_decode_num_drafts", "vllm:spec_decode_num_draft_tokens", "vllm:spec_decode_num_accepted_tokens")
+
+
+def acceptance_from_counters(drafts: float, drafted: float, accepted: float) -> Optional[Dict[str, object]]:
+    """Acceptance from the change in vLLM's counters over the workload; None when nothing was drafted."""
+    if drafts <= 0 or drafted <= 0 or accepted < 0:
+        return None
+    return {"rate": round(accepted / drafted, 4), "mean_length": round(1 + accepted / drafts, 3),
+            "accepted_tokens": int(accepted), "drafted_tokens": int(drafted), "source": "vllm_metrics"}
+
+
+def parse_acceptance(backend: str, text: str) -> Optional[Dict[str, object]]:
+    """Acceptance from the engine's log lines in `text`, or None when none were logged (or nothing was drafted)."""
+    if backend == "vllm":
+        rows = [(float(m), int(a), int(d)) for m, a, d in _VLLM_SPEC.findall(text or "")]
+        accepted, drafted = sum(r[1] for r in rows), sum(r[2] for r in rows)
+        if not rows or drafted <= 0:
+            return None
+        return {"rate": round(accepted / drafted, 4), "mean_length": round(sum(r[0] for r in rows) / len(rows), 3),
+                "accepted_tokens": accepted, "drafted_tokens": drafted, "lines": len(rows), "source": "vllm_log"}
+    if backend == "sglang":
+        rows = [(float(length), float(rate)) for length, rate in _SGLANG_SPEC.findall(text or "")]
+        if not rows:
+            return None
+        return {"rate": round(sum(r[1] for r in rows) / len(rows), 4),
+                "mean_length": round(sum(r[0] for r in rows) / len(rows), 3), "lines": len(rows),
+                "source": "sglang_log"}
+    return None
+
+
 def parse_log(backend: str, text: str) -> MeasuredMemory:
     fn = PARSERS.get(backend)
     return fn(text) if fn else MeasuredMemory()

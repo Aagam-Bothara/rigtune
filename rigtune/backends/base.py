@@ -169,6 +169,24 @@ class Process:
             self._log_fh.close()
             self._log_fh = None
 
+    def log_size(self) -> int:
+        """Bytes in the log so far: where log_since starts reading the lines written after this point."""
+        try:
+            return self.log_path.stat().st_size if self.log_path else 0
+        except OSError:
+            return 0
+
+    def log_since(self, offset: int) -> str:
+        """The log written from byte `offset` on; "" without a log."""
+        if not self.log_path:
+            return ""
+        try:
+            with open(self.log_path, "rb") as fh:
+                fh.seek(offset)
+                return fh.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+
     def tail_log(self, n: int = 40) -> str:
         if not self.log_path or not self.log_path.exists():
             return ""

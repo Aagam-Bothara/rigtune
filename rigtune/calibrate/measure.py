@@ -1239,6 +1239,18 @@ def _counter_sum(counters: Counters, name: str) -> Optional[float]:
     return sum(values) if values else None
 
 
+def spec_counters(base_url: str, hooks: LlmtraceHooks) -> Optional[Tuple[float, float, float]]:
+    """vLLM's speculative-decoding counters now: (drafts, drafted tokens, accepted tokens), summed over engines, or
+    None when the endpoint or any of the three cannot be read (memlog.SPEC_* names their source)."""
+    from rigtune.memlog import SPEC_ACCEPTED, SPEC_DRAFT_TOKENS, SPEC_DRAFTS
+
+    counters = _prefix_counters(base_url, hooks)
+    if counters is None:
+        return None
+    sums = [_counter_sum(counters, name) for name in (SPEC_DRAFTS, SPEC_DRAFT_TOKENS, SPEC_ACCEPTED)]
+    return None if any(s is None for s in sums) else (sums[0], sums[1], sums[2])
+
+
 def _engine_reuse(m: TrialMetrics, before: Optional[Counters], after: Optional[Counters]) -> None:
     """Fall back to vLLM's prefix-cache counters for a level whose replies reported no cached tokens."""
     if m.reuse_source != "none" or before is None or after is None:

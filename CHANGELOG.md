@@ -13,6 +13,13 @@
 - The trial ledger's start-up record gains `warmup_s`: vLLM's first-forward profiling and warm-up run, where Triton
   compiles and autotunes on a cold cache. Read back from the A100 session's logs, it is 81-82 s on every
   Qwen3.5-9B launch and under 0.3 s on Gemma 4 12B.
+- A trial with speculative decoding records its acceptance (`metrics.spec_acceptance`): the share of drafted
+  tokens the model kept and the tokens per verification step. On vLLM it comes from the change in its `/metrics`
+  counters over the workload; on SGLang, and on vLLM when those cannot be read, from the log lines written while the
+  workload ran. The answers a gate or quality probe grades afterwards are never counted. Read from the A100
+  session's logs, Qwen3.5-9B's MTP head kept 67% of 3 drafted tokens (3.0 tokens per step) and n-gram 5-10%. Gemma
+  4 12B's assistant kept 50% with 1 drafted token, which is why it gained little. Trials without speculation are
+  written exactly as before.
 
 ## 0.3.0 (2026-11-18)
 
