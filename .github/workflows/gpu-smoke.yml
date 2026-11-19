@@ -30,8 +30,11 @@ jobs:
       SMOKE_BACKEND: ${{ inputs.backend }}
       SMOKE_MODEL: ${{ inputs.model }}
       SMOKE_FEATURES: ${{ inputs.features }}
-      RIGTUNE_HOME: ${{ runner.temp }}/rigtune-gpu-smoke
     steps:
+      # The runner context exists only inside steps: as a job-level env, ${{ runner.temp }} made GitHub reject this
+      # file, and every push showed it as a failed run with no jobs.
+      - run: echo "RIGTUNE_HOME=$RUNNER_TEMP/rigtune-gpu-smoke" >> "$GITHUB_ENV"
+        shell: bash
       - uses: actions/checkout@v5
       # The runner owns its CUDA/torch/engine combination; do not silently upgrade it in this workflow.
       - run: nvidia-smi
