@@ -1835,8 +1835,13 @@ class StagedSearch:
                 if mine is not None:
                     self._outpaced(mine.config)
         # Engines offering more strategies go first (a stable sort, so the leader first among equals), and one
-        # that an engine tuned before it has left clearly behind, with nothing more to offer, is skipped.
-        for base in sorted(contenders, key=lambda c: -self._offer_count(c)):
+        # that an engine tuned before it has left clearly behind, with nothing more to offer, is skipped. Once every
+        # engine has speculated, the strategy that ordering was for (speculation on one engine only) is measured,
+        # and what is left to offer is a minor stage, so the leader goes first: on an A100, SGLang (937 tok/s
+        # with MTP) offered an fp8 KV cache vLLM refuses with MTP, was tuned first, and the hour ran out before
+        # vLLM's leader (1023) was tuned or confirmed.
+        order = contenders if speculated else sorted(contenders, key=lambda c: -self._offer_count(c))
+        for base in order:
             if not self._outpaced(base):
                 self._tune(base)
         self.stage_explore()

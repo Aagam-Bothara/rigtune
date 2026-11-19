@@ -23,6 +23,12 @@
 - A verdict's answer table gains a "Cut off" column: the answers that stopped at the token limit, graded wrong
   whatever they would have said. It was in verdict.json only; on the A100 comparison it is 19 to 27 per row. A
   verdict of a result from before the count shows "-", not 0.
+- Under `--speculative all`, the leading engine is tuned first. Engines offering more strategies went first, which
+  was meant for speculation on one engine only, but by then every engine has speculated. On the A100 calibration
+  of Qwen3.5-9B, SGLang (937 tok/s with MTP) still offered an fp8 KV cache that vLLM refuses with MTP. So it was
+  tuned first, and the hour ran out before vLLM's leader (1023) got a single tuning trial or its confirm round. A
+  calibration with time for everything can now run fewer trials: an engine the tuned leader leaves more than 10%
+  behind is skipped by the rule that already skipped an engine tuned second.
 
 ## 0.3.0 (2026-11-18)
 
