@@ -1873,6 +1873,65 @@ def power_reset(gpu: Optional[int] = typer.Option(None, "--gpu", help="GPU index
         console.print("no recorded change; unlocked clocks anyway")
 
 
+# --------------------------------------------------------------------------- bundles
+
+bundle_app = typer.Typer(help="Carry a calibrated pick, and the caches that start it warm, to another machine with "
+                              "the same GPU.", no_args_is_help=True)
+app.add_typer(bundle_app, name="bundle")
+
+
+@bundle_app.command("export")
+def bundle_export(
+    which: str = typer.Argument(..., help="A profile JSON, or part of a cached profile's model id"),
+    out: Path = typer.Option(..., "--out", help="The bundle to write: .tar, or .tar.gz to compress it"),
+) -> None:
+    """Write a profile and rigtune's kernel cache (Triton's kernels, vLLM's compile caches, FlashInfer's kernels)
+    to one file, with a manifest of what it is for and every file's sha256. Compiled caches can hold this machine's
+    paths: a bundle is meant for machines you control."""
+    from rigtune import bundle as bd
+
+    profile = _find_profile(which)
+    try:
+        manifest = bd.export(profile, out)
+    except (bd.BundleError, OSError) as exc:
+        err.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+    console.print(f"wrote {out}: {profile.model_id}, {profile.backend} {profile.backend_version}, "
+                  f"{len(manifest['files'])} cache files ({manifest['cache_bytes'] / 2**20:.0f} MiB)")
+    if profile.backend != "vllm":
+        err.print(f"[yellow]{profile.backend} launches do not use the kernel cache: the bundle starts it no "
+                  f"warmer[/]")
+
+
+@bundle_app.command("import")
+def bundle_import(
+    bundle: Path = typer.Argument(..., exists=True, dir_okay=False, help="A bundle from `rigtune bundle export`"),
+    profile_out: Optional[Path] = typer.Option(None, "--profile-out",
+                                               help="Where to write its profile (default: beside the bundle, "
+                                                    "<name>.profile.json)"),
+) -> None:
+    """Check a bundle against this machine, as `serve --profile` checks a profile, then add its caches to rigtune's
+    kernel cache (never over a file already there) and write its profile out to serve."""
+    from rigtune import bundle as bd
+    from rigtune.hardware import probe
+
+    try:
+        res = bd.import_(bundle, probe())
+    except (bd.BundleError, OSError) as exc:
+        err.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+    for w in res.warnings:
+        err.print(f"[yellow]{w}[/]")
+    if res.refusals:
+        for r in res.refusals:
+            err.print(f"[red]not imported: {r}[/]")
+        raise typer.Exit(2)
+    dest = profile_out or bundle.with_name(bundle.name.split(".")[0] + ".profile.json")
+    dest.write_text(res.profile.model_dump_json(indent=1), encoding="utf-8")
+    console.print(f"kernel cache: {res.written} files added, {res.kept} already there; profile written to {dest}")
+    console.print(f"serve it with: rigtune serve {res.profile.model_id} --profile {dest}", markup=False)
+
+
 # --------------------------------------------------------------------------- trial ledger
 
 ledger_app = typer.Typer(help="The trial ledger: every calibration trial, kept under rigtune's home.",

@@ -399,6 +399,8 @@ Every vLLM launch, for calibration and for serving alike, keeps Triton's compile
 
 vLLM's own caches live beside it: `~/.rigtune/kernel-cache/vllm` as `VLLM_CACHE_ROOT` (its torch.compile and AOT caches, Inductor's among them, and its startup plans) and `~/.rigtune/kernel-cache/flashinfer` as `FLASHINFER_WORKSPACE_BASE` (FlashInfer's JIT-compiled kernels and downloaded cubins). With every cache in one directory, the caches a calibration warmed can be carried to another machine: on a fresh A100, a copy of them started Qwen3.5-9B's pick in 140 s against 280 s cold ([the measurement](../benchmarks/sessions/2026-11/modal-warm-serve/README.md)). vLLM's compile hash leaves `VLLM_CACHE_ROOT` out, and its downloaded assets stay in `~/.cache/vllm/assets`. The first launch of each configuration after upgrading compiles once, since what vLLM cached in `~/.cache/vllm` is not read from there any more.
 
+**Bundles.** `rigtune bundle export <profile> --out winner.tar.gz` writes a profile and the whole kernel cache to one file, with a manifest of what it is for (the model and revision, the engine and its libraries, the GPUs, the configuration) and every file's sha256. On another machine with the same GPU, `rigtune bundle import winner.tar.gz` checks the profile against that machine as `serve --profile` does, and refuses, saying why, when it would not start warm there. Otherwise it adds the caches to that machine's kernel cache, never over a file already there, writes the profile beside the bundle (`winner.profile.json`, or `--profile-out`), and prints the `rigtune serve <model> --profile ...` command that serves it. It writes only regular files inside the kernel cache that the manifest lists, with a matching sha256, and checks every entry before writing any. A bundle holds every configuration a calibration compiled, not only the pick's. Compiled caches can hold the exporting machine's paths, your user name among them, so a bundle is meant for machines you control. Unmeasured end to end; the caches it carries were measured on their own (above).
+
 A variable you set yourself is left alone, each on its own. `RIGTUNE_KERNEL_CACHE=<dir>` keeps the caches elsewhere, and `off`, `0`, `false`, `no`, `none` or `disabled` leaves all of them to vLLM. If a directory cannot be created, the launch goes ahead with vLLM's default for it and the log says so. The directories are set at launch only: profiles, the ledger and verdicts do not record them. They are never pruned; delete them at any time, and the next launch compiles again. SGLang launches are unchanged.
 
 ### The trial ledger
@@ -426,6 +428,8 @@ rigtune recalibrate <model>   # force a rerun and overwrite the cached profile
 rigtune profiles              # list cached profiles
 rigtune profiles --trace X    # redraw the search behind a profile (part of its model id, or a profile JSON path)
 rigtune tradeoffs X           # what a profile's limits cost, from its recorded trials (--optimise/--limit re-score it)
+rigtune bundle export X --out F.tar.gz  # a profile and the kernel cache that starts it warm, in one file
+rigtune bundle import F.tar.gz  # on another machine with the same GPU: check it, add the caches, write the profile
 rigtune ledger show           # calibrations in the trial ledger (--model X); --calibration ID lists one's trials
 rigtune ledger verify X       # check a profile against the ledger (part of its model id, or a profile JSON path)
 rigtune ledger rebuild ID --out F  # write the profile a calibration recorded, rebuilt from the ledger

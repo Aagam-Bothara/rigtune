@@ -29,6 +29,11 @@
   tuned first, and the hour ran out before vLLM's leader (1023) got a single tuning trial or its confirm round. A
   calibration with time for everything can now run fewer trials: an engine the tuned leader leaves more than 10%
   behind is skipped by the rule that already skipped an engine tuned second.
+- `rigtune bundle export` and `rigtune bundle import` carry a profile and the kernel cache that starts it warm to
+  another machine with the same GPU, in one file with a manifest and every file's sha256. Import checks the
+  profile as `serve --profile` does, writes only listed, matching, regular files inside the kernel cache, never
+  over one already there, and prints the command that serves it. A bundle holds every configuration the
+  calibration compiled, and compiled caches can hold the exporting machine's paths. Unmeasured end to end.
 - `rigtune serve <model> --profile FILE` serves a profile's pick calibrated on another machine with the same GPU,
   without calibrating. It refuses, saying why, when the GPUs, the engine or its libraries differ, when the model was
   a local folder this machine lacks, or when the pick is disaggregated; a different CPU, RAM, driver or CUDA is a
