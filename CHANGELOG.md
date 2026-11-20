@@ -55,6 +55,10 @@
   of the KV cache. The confirm stage re-measures the rest of its shortlist while the budget lasts. Holding back
   the whole shortlist's time instead cost a 20-minute calibration of the same model its MTP trials (worth 1.7x).
   Without `--budget`, or with `--confirm off`, nothing changes.
+- rigtune finds vLLM's source where Debian's Python installs it, in `dist-packages`, as vLLM's own Docker image
+  does (`/usr/local/bin/vllm` run by `/usr/bin/python3`). It looked only in `site-packages`, so with that image
+  every feature read from vLLM's source was off without a note: the checkpoint's MTP head was never offered, and two
+  20-minute calibrations of Qwen3.5-9B on Modal picked plain bf16.
 
 ## 0.3.0 (2026-11-18)
 

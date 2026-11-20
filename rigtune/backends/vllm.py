@@ -296,7 +296,9 @@ def _vllm_package() -> Optional[Path]:
         locs = list(spec.submodule_search_locations or []) if spec else []
         return Path(locs[0]) if locs else None
     env = Path(cli).resolve().parent.parent
-    found = sorted(env.glob("lib/python3*/site-packages/vllm")) + sorted(env.glob("Lib/site-packages/vllm"))
+    # Debian's Python installs into dist-packages: vLLM's own image has /usr/local/bin/vllm run by /usr/bin/python3.
+    found = [p for pattern in ("lib/python3*/site-packages/vllm", "lib/python3*/dist-packages/vllm",
+                               "Lib/site-packages/vllm") for p in sorted(env.glob(pattern))]
     return found[0] if found else None
 
 

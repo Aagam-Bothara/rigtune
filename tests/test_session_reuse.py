@@ -193,6 +193,22 @@ def test_the_flag_is_read_from_the_vllm_that_will_run(tmp_path, monkeypatch):
             fn.cache_clear()
 
 
+def test_the_vllm_package_is_found_in_debians_dist_packages(tmp_path, monkeypatch):
+    """vLLM's own image: /usr/local/bin/vllm, run by /usr/bin/python3, with the package under dist-packages. Not
+    finding it turned off every feature read from vLLM's source, MTP among them, without a note (Modal, 20 Nov)."""
+    pkg = tmp_path / "usr" / "local" / "lib" / "python3.12" / "dist-packages" / "vllm"
+    pkg.mkdir(parents=True)
+    (tmp_path / "usr" / "local" / "bin").mkdir()
+    cli = tmp_path / "usr" / "local" / "bin" / "vllm"
+    cli.write_text("#!/usr/bin/python3\n", encoding="utf-8")
+    monkeypatch.setattr(vl, "_serve_cli", lambda: str(cli))
+    vl._vllm_package.cache_clear()
+    try:
+        assert vl._vllm_package() == pkg.resolve()
+    finally:
+        vl._vllm_package.cache_clear()
+
+
 def test_old_trial_metrics_still_load():
     old = TrialMetrics.model_validate({"tok_s": 10.0, "requests": 4, "output_tokens": 40})
     assert old.reuse_source == "none" and old.prefix_reuse is None and old.sessions == 0
