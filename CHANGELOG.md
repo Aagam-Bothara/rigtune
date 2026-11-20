@@ -29,6 +29,10 @@
   tuned first, and the hour ran out before vLLM's leader (1023) got a single tuning trial or its confirm round. A
   calibration with time for everything can now run fewer trials: an engine the tuned leader leaves more than 10%
   behind is skipped by the rule that already skipped an engine tuned second.
+- `rigtune serve` logs how each engine start went, restarts included, from the engine's log as calibration
+  records each trial: for vLLM, `vllm ready in 88 s: compile cache hit, kernel warm-up 0.3 s, CUDA graphs 23 s`,
+  or what it compiled when its caches did not hold. The record is under `startup` in `/health`'s `backend` too
+  (not in the minimal `/health` an API key leaves). A warm start was silent before, and so was a cold one.
 - A `--budget` now holds back the time the confirm stage needs: a typical trial for each configuration it would
   re-measure (at most 3), for each `--confirm-rounds`. On the A100 calibration of Qwen3.5-9B the hour ran out
   in the tuning stages, so the pick was chosen on search runs alone and never re-measured, and the first of those

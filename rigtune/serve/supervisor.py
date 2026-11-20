@@ -10,9 +10,24 @@ from typing import Optional
 import httpx
 
 from rigtune.backends.base import BaseBackend, Process, free_port
-from rigtune.models import Config, PreparedModel
+from rigtune.models import Config, PreparedModel, StartupCost
 
 logger = logging.getLogger(__name__)
+
+
+def startup_summary(backend: str, s: StartupCost) -> str:
+    """One line on how a start went: seconds to ready and, for vLLM, whether its caches held."""
+    parts = []
+    if s.compile_cached is True:
+        parts.append("compile cache hit")
+    elif s.compile_cached is False:
+        parts.append(f"compiled ({s.compile_s:.0f} s)" if s.compile_s is not None else "compiled")
+    if s.warmup_s is not None:
+        parts.append(f"kernel warm-up {s.warmup_s:.1f} s")
+    if s.capture_s is not None:
+        parts.append(f"CUDA graphs {s.capture_s:.0f} s")
+    head = f"{backend} ready in {s.seconds:.0f} s" if s.seconds is not None else f"{backend} ready"
+    return head + (": " + ", ".join(parts) if parts else "")
 
 # Failed health polls in a row before a live backend is restarted, and before /health reports it not ready: one
 # slow poll under load is not an outage, and readiness should not flap where the restart logic would wait.
@@ -53,6 +68,7 @@ class Supervisor:
         self.power = power  # rigtune.power.PowerController when the profile carries a power setting
         self.power_error: Optional[str] = None
         self.tier_warning: Optional[str] = None  # set when a KV-cache tier pick no longer fits this host
+        self.startup: Optional[StartupCost] = None  # how the latest start went, as calibration records each trial's
 
     @property
     def base_url(self) -> str:
@@ -150,7 +166,23 @@ class Supervisor:
             self._ready = True
             self.last_error = None
             logger.info("%s ready on %s (pid %s)", self.backend.name, self.base_url, process.pid)
-            return True
+        self.startup = self._startup_record(process)
+        logger.info(startup_summary(self.backend.name, self.startup))
+        return True
+
+    def _startup_record(self, process: Process) -> StartupCost:
+        """The start-up record calibration keeps for a trial, read from this start's log."""
+        from rigtune.memlog import parse_startup
+
+        started, ready = getattr(process, "started_at", None), getattr(process, "ready_at", None)
+        fields = {}
+        if self.cfg.backend == "vllm":  # the only engine whose start-up lines are known (memlog.parse_startup)
+            try:  # a log that cannot be read costs the report, never the server
+                fields = parse_startup("vllm", process.tail_log(1_000_000))
+            except Exception as exc:
+                logger.warning("start-up log not read: %s", type(exc).__name__)
+        seconds = round(ready - started, 3) if started is not None and ready is not None else None
+        return StartupCost(seconds=seconds, **fields)
 
     def healthy(self) -> bool:
         """One health poll: the process is alive and its health endpoint answers 2xx."""
@@ -223,6 +255,7 @@ class Supervisor:
             "ready": bool(self._ready and not self._stop.is_set() and self.process and self.process.alive()),
             "restarts": self.restarts,
             "last_error": self.last_error,
+            "startup": self.startup.model_dump(mode="json", exclude_defaults=True) if self.startup else None,
             **({"kv_tier": {"tier": self.cfg.kv_tier, "warning": self.tier_warning}}
                if self._tiered or self.tier_warning else {}),
             "power": {
