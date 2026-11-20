@@ -1,0 +1,159 @@
+diff --git a/python/sglang/kernels/ops/attention/triton_gdn_fused_proj.py b/python/sglang/kernels/ops/attention/triton_gdn_fused_proj.py
+index 2ca0e1f..757c30f 100644
+--- a/python/sglang/kernels/ops/attention/triton_gdn_fused_proj.py
++++ b/python/sglang/kernels/ops/attention/triton_gdn_fused_proj.py
+@@ -6,6 +6,7 @@ import triton.language as tl
+ 
+ from sglang.srt.environ import envs
+ from sglang.srt.utils import is_hip
++from sglang.srt.utils.custom_op import register_custom_op
+ 
+ _is_hip = is_hip()
+ _use_aiter = envs.SGLANG_USE_AITER.get() and _is_hip
+@@ -539,6 +540,36 @@ def can_use_fused_qkvzba_causal_conv1d_update_contiguous(
+     return True, "eligible"
+ 
+ 
++def _fused_qkvzba_causal_conv1d_update_contiguous_fake(
++    mixed_qkvz: torch.Tensor,
++    mixed_ba: torch.Tensor,
++    conv_state: torch.Tensor,
++    conv_weight: torch.Tensor,
++    conv_bias: torch.Tensor | None,
++    conv_state_indices: torch.Tensor,
++    *,
++    qkv_dim: int,
++    v_dim: int,
++    num_v_heads: int,
++    head_v_dim: int,
++    activation: str | None,
++    pad_slot_id: int = -1,
++) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
++    batch = mixed_qkvz.shape[0]
++    b = mixed_ba.new_empty((batch, num_v_heads))
++    return (
++        mixed_qkvz.new_empty((batch, qkv_dim)),
++        mixed_qkvz.new_empty((batch, num_v_heads, head_v_dim)),
++        b,
++        torch.empty_like(b),
++    )
++
++
++# Custom op: torch.compile then mutates conv_state in place, no pool clone.
++@register_custom_op(
++    mutates_args=["conv_state"],
++    fake_impl=_fused_qkvzba_causal_conv1d_update_contiguous_fake,
++)
+ def fused_qkvzba_causal_conv1d_update_contiguous(
+     mixed_qkvz: torch.Tensor,
+     mixed_ba: torch.Tensor,
+diff --git a/python/sglang/srt/layers/attention/linear/kernels/gdn_triton.py b/python/sglang/srt/layers/attention/linear/kernels/gdn_triton.py
+index 1908031..47a93e9 100644
+--- a/python/sglang/srt/layers/attention/linear/kernels/gdn_triton.py
++++ b/python/sglang/srt/layers/attention/linear/kernels/gdn_triton.py
+@@ -4,6 +4,7 @@ from sglang.srt.layers.attention.linear.kernels.kernel_backend import (
+     LinearAttnKernelBase,
+ )
+ from sglang.srt.utils import is_cpu, is_npu, is_xpu
++from sglang.srt.utils.custom_op import register_custom_op
+ 
+ if not is_cpu():
+     from sglang.kernels.ops.attention.fla.chunk import chunk_gated_delta_rule
+@@ -37,6 +38,33 @@ elif is_xpu():
+     )
+ 
+ 
++@register_custom_op(op_name="gdn_packed_decode", mutates_args=["initial_state", "out"])
++def _gdn_packed_decode(
++    mixed_qkv: torch.Tensor,
++    a: torch.Tensor,
++    b: torch.Tensor,
++    A_log: torch.Tensor,
++    dt_bias: torch.Tensor,
++    scale: float,
++    initial_state: torch.Tensor,
++    out: torch.Tensor,
++    ssm_state_indices: torch.Tensor,
++) -> None:
++    # Custom op: torch.compile then mutates the state in place, no pool clone.
++    fused_recurrent_gated_delta_rule_packed_decode(
++        mixed_qkv=mixed_qkv,
++        a=a,
++        b=b,
++        A_log=A_log,
++        dt_bias=dt_bias,
++        scale=scale,
++        initial_state=initial_state,
++        out=out,
++        ssm_state_indices=ssm_state_indices,
++        use_qk_l2norm_in_kernel=True,
++    )
++
++
+ class TritonGDNKernel(LinearAttnKernelBase):
+     """Triton-based kernel for GDN (Gated Delta Network) linear attention."""
+ 
+@@ -118,7 +146,7 @@ class TritonGDNKernel(LinearAttnKernelBase):
+             )
+             return out.transpose(0, 1)
+ 
+-        fused_recurrent_gated_delta_rule_packed_decode(
++        _gdn_packed_decode(
+             mixed_qkv=mixed_qkv,
+             a=a,
+             b=b,
+@@ -128,7 +156,6 @@ class TritonGDNKernel(LinearAttnKernelBase):
+             initial_state=ssm_states,
+             out=out,
+             ssm_state_indices=cache_indices,
+-            use_qk_l2norm_in_kernel=True,
+         )
+ 
+         # Convert [B, 1, HV, V] → [1, B, HV, V] to match existing output
+diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
+index f6d0b71..7a5a600 100644
+--- a/python/sglang/srt/mem_cache/memory_pool.py
++++ b/python/sglang/srt/mem_cache/memory_pool.py
+@@ -2183,6 +2183,7 @@ class KVCache(abc.ABC):
+ 
+ class MHATokenToKVPool(KVCache):
+     hicache_write_back_staging: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
++    _kv_fused: Optional[List[torch.Tensor]] = None  # per-layer [2, rows, ...] K/V
+ 
+     def __init__(
+         self,
+@@ -2643,6 +2644,7 @@ class MHATokenToKVPool(KVCache):
+                         ]
+                         self.k_buffer = [buf[0, :rows] for buf in fused]
+                         self.v_buffer = [buf[1, :rows] for buf in fused]
++                        self._kv_fused, self._kv_rows = fused, rows
+                     else:
+                         self.k_buffer = [_zeros(k_shape) for _ in range(self.layer_num)]
+                         self.v_buffer = [_zeros(v_shape) for _ in range(self.layer_num)]
+@@ -2696,6 +2698,7 @@ class MHATokenToKVPool(KVCache):
+         """Map owner tensors (in ``_build_kv_buffer_descs`` order) to k/v_buffer."""
+         self.k_buffer = tensors[: self.layer_num]
+         self.v_buffer = tensors[self.layer_num :]
++        self._kv_fused = None
+ 
+     def _alloc_post_capture_buffers(self):
+         dev = torch.device(self.device)
+@@ -3017,11 +3020,16 @@ class MHATokenToKVPool(KVCache):
+             )
+             return
+ 
++        k_cache, v_cache = self.k_buffer[layer_idx], self.v_buffer[layer_idx]
++        if self._kv_fused is not None and torch.compiler.is_compiling():
++            # Slice here: two pre-made views of one tensor make Inductor clone it.
++            fused = self._kv_fused[layer_idx]
++            k_cache, v_cache = fused[0, : self._kv_rows], fused[1, : self._kv_rows]
+         _set_kv_buffer_impl(
+             cache_k,
+             cache_v,
+-            self.k_buffer[layer_idx],
+-            self.v_buffer[layer_idx],
++            k_cache,
++            v_cache,
+             loc,
+             row_dim=self.row_dim,
+             store_dtype=self.store_dtype,

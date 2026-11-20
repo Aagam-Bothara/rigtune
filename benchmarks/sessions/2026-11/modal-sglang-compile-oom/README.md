@@ -44,3 +44,35 @@ clone, and that slice is copied back. Each layer gets its own graph, so the clon
 
 These clones run on every decode step in the compiled region, not only at start-up. That they make decoding slow
 when they fit (SGLang issue #35777 saw torch.compile with a decode graph about 6x slower) is not measured here.
+
+## The cause, reduced
+
+[modal_triton_view_clone.py](../../../modal_triton_view_clone.py) (a T4, torch 2.14.1, Triton 3.8.0, no SGLang)
+writes one slice of a `(24, 509, 64)` tensor in a compiled function:
+
+| Case | Largest buffer in the generated code |
+|---|---|
+| a user Triton kernel writes a slice taken inside the compiled function | 6 slices: the tensor from its start through slice 5 |
+| the same, the slice made outside and passed in | none |
+| the kernel given the whole tensor and the slice's index | none |
+| the same launch wrapped in a custom op (`mutates_args`), slice taken inside | none |
+| a custom op writing two slices of one tensor made outside (SGLang's K and V) | 2 slices: the whole tensor |
+| the same op, both slices taken inside | none |
+
+## The fix
+
+[sglang-0.5.23-fix.diff](sglang-0.5.23-fix.diff), 3 files, 70 lines added: the GDN conv update and packed decode
+run as custom ops through SGLang's `register_custom_op` (eager calls still go straight to the function), and the
+KV store slices K and V from their shared allocation while compiling. Tested with
+[modal_sglang_compile_fix.py](../../../modal_sglang_compile_fix.py) on one A100 80GB, same settings as run 1;
+raw output in [results-fix.json](results-fix.json). One measurement per run: the speeds are indicative.
+
+| Run | Started | Buffers >= 1 GiB | tok/s, 1 user | tok/s, 8 users | Answers equal A's |
+|---|---|---|---|---|---|
+| A unpatched, no torch.compile | 163 s | 0 | 89.1 | 593.7 | (reference) |
+| B patched, no torch.compile | 73 s | 0 | 88.9 | 668.9 | 4 of 4 |
+| C patched, `--enable-torch-compile` | 412 s | 0 | 96.7 | 691.9 | 4 of 4 |
+| D unpatched, `--enable-torch-compile` | no: out of memory, 6.96 GiB | 7 | | | |
+
+A ran first in a fresh container, so its start and its 8-user speed include one-time warm-ups. Answers are four
+prompts, 64 tokens each, greedy.
