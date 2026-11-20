@@ -6,19 +6,31 @@ through a custom op given two slices of one tensor. On a CPU with a custom op, o
 This repeats the patterns with a user Triton kernel on a GPU, compiled the way SGLang compiles
 (mode="max-autotune-no-cudagraphs"), and reports the largest buffer in each generated graph. No model, a T4.
 
-Run:  modal run benchmarks/modal_triton_view_clone.py
+Run:  modal run benchmarks/modal_triton_view_clone.py                   torch 2.14.1
+      modal run benchmarks/modal_triton_view_clone.py --torch nightly   today's PyTorch nightly (CUDA 13.0)
 """
 
 # No `from __future__ import annotations`: torch.library.custom_op reads its function's type hints, and with
-# that import they are strings naming `torch`, which is imported inside probe(), not at module scope.
+# that import they are strings naming `torch`, which is imported inside _probe(), not at module scope.
 import modal
 
 app = modal.App("rigtune-triton-view-clone")
 image = modal.Image.debian_slim(python_version="3.12").pip_install("torch==2.14.1")
+nightly_image = modal.Image.debian_slim(python_version="3.12").pip_install(
+    "torch", pre=True, index_url="https://download.pytorch.org/whl/nightly/cu130")
 
 
 @app.function(gpu="T4", image=image, timeout=1200)
 def probe() -> list:
+    return _probe()
+
+
+@app.function(gpu="T4", image=nightly_image, timeout=1200)
+def probe_nightly() -> list:
+    return _probe()
+
+
+def _probe() -> list:
     import re
 
     import torch
@@ -156,6 +168,8 @@ def probe() -> list:
 
 
 @app.local_entrypoint()
-def main() -> None:
-    for row in probe.remote():
+def main(torch: str = "2.14.1") -> None:
+    if torch not in ("2.14.1", "nightly"):
+        raise SystemExit("--torch is 2.14.1 or nightly")
+    for row in (probe_nightly if torch == "nightly" else probe).remote():
         print(row)
