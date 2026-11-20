@@ -1,0 +1,145 @@
+{
+  "machine_one": {
+    "pip_added": [
+      "rigtune @ file:///src/rigtune"
+    ],
+    "bench": {
+      "step": "1-bench",
+      "exit": 0,
+      "seconds": 1157.8,
+      "tail": [
+        "                    0.95 --dtype bfloat16                                                                                                                                                               ",
+        "  batch vllm/bf16/ctx8192/b256/gmu0.95  613.0 tok/s at 8 users  TTFT 156 ms (p95 178)  0.536 J/tok",
+        "   spec vllm/bf16/ctx8192/b256/gmu0.95/sd=ngram_gpu:4 ...",
+        "[22:14:04] INFO     launch: /usr/local/bin/vllm serve Qwen/Qwen3.5-9B --served-model-name Qwen/Qwen3.5-9B --host 127.0.0.1 --port 46853 --max-model-len 8192 --max-num-seqs 256 --gpu-memory-utilization",
+        "                    0.95 --dtype bfloat16 --speculative-config {\"method\": \"ngram_gpu\", \"num_speculative_tokens\": 4, \"prompt_lookup_max\": 4, \"prompt_lookup_min\": 2}                                     ",
+        "   spec vllm/bf16/ctx8192/b256/gmu0.95/sd=ngram_gpu:4  534.8 tok/s at 8 users  TTFT 140 ms (p95 189)  0.650 J/tok",
+        "confirm vllm/bf16/ctx8192/b256/gmu0.95 ...",
+        "[22:15:54] INFO     launch: /usr/local/bin/vllm serve Qwen/Qwen3.5-9B --served-model-name Qwen/Qwen3.5-9B --host 127.0.0.1 --port 18371 --max-model-len 8192 --max-num-seqs 256 --gpu-memory-utilization",
+        "                    0.95 --dtype bfloat16                                                                                                                                                               ",
+        "confirm vllm/bf16/ctx8192/b256/gmu0.95  615.6 tok/s at 8 users  TTFT 156 ms (p95 168)  0.556 J/tok",
+        "confirm vllm/bf16/ctx8192/b64/gmu0.95 ...",
+        "[22:17:38] INFO     launch: /usr/local/bin/vllm serve Qwen/Qwen3.5-9B --served-model-name Qwen/Qwen3.5-9B --host 127.0.0.1 --port 49150 --max-model-len 8192 --max-num-seqs 64 --gpu-memory-utilization ",
+        "                    0.95 --dtype bfloat16                                                                                                                                                               ",
+        "confirm vllm/bf16/ctx8192/b64/gmu0.95  613.6 tok/s at 8 users  TTFT 163 ms (p95 172)  0.537 J/tok",
+        "[22:19:04] INFO     saved profile /tmp/rt1/profiles/60e02f6d8e919683/Qwen__Qwen3.5-9B/balanced-budget-1200s-spec-all-ttft-p95.json"
+      ]
+    },
+    "pick": {
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 8192,
+        "batch": 256,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "kv_tier": null,
+        "extra": {},
+        "text_only": false,
+        "gmu_before_spec": null,
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "backend_version": "0.33.0"
+    },
+    "export": {
+      "step": "2-export",
+      "exit": 0,
+      "seconds": 26.6,
+      "tail": [
+        "wrote /vol/bundle-e2e/winner.tar.gz: Qwen/Qwen3.5-9B, vllm 0.33.0, 2724 cache files (367 MiB)",
+        "",
+        "--- stderr ---"
+      ]
+    },
+    "bundle_mb": 55.5,
+    "serve_same_machine": {
+      "step": "3-serve-same-machine",
+      "ready_s": 111.1,
+      "startup": {
+        "seconds": 107.219,
+        "capture_s": 17.0,
+        "cudagraph_gib": 0.43,
+        "capture_lines": 2,
+        "compile_cached": true,
+        "warmup_s": 1.01,
+        "parsed": [
+          "capture",
+          "compile_cache",
+          "warmup"
+        ]
+      },
+      "answer": " Paris.\nThe capital of France is Paris.\nThe capital of France is",
+      "log_lines": [
+        "           INFO     vllm ready in 107 s: compile cache hit, kernel warm-up 1.0 s, CUDA graphs 17 s                                                                                                      "
+      ]
+    }
+  },
+  "machine_two": {
+    "import": {
+      "step": "4-import",
+      "exit": 0,
+      "seconds": 9.3,
+      "tail": [
+        "kernel cache: 2724 files added, 0 already there; profile written to /tmp/p.json",
+        "serve it with: rigtune serve Qwen/Qwen3.5-9B --profile /tmp/p.json",
+        "",
+        "--- stderr ---",
+        "GPU driver or CUDA differs (driver 610.57.04 CUDA 13.3 -> driver 620.70.06 CUDA 13.5)"
+      ]
+    },
+    "serve_fresh_with_bundle": {
+      "step": "5-serve-fresh-with-bundle",
+      "ready_s": 135.1,
+      "startup": {
+        "seconds": 129.276,
+        "capture_s": 16.0,
+        "cudagraph_gib": 0.27,
+        "capture_lines": 2,
+        "compile_cached": true,
+        "warmup_s": 3.56,
+        "parsed": [
+          "capture",
+          "compile_cache",
+          "warmup"
+        ]
+      },
+      "answer": " Paris.\nThe capital of France is Paris.\nThe capital of France is",
+      "log_lines": [
+        "--profile: GPU driver or CUDA differs (driver 610.57.04 CUDA 13.3 -> driver 620.70.06 CUDA 13.5)",
+        "           INFO     vllm ready in 129 s: compile cache hit, kernel warm-up 3.6 s, CUDA graphs 16 s                                                                                                      "
+      ]
+    }
+  },
+  "machine_three": {
+    "serve_fresh_cold": {
+      "step": "6-serve-fresh-cold",
+      "ready_s": 297.2,
+      "startup": {
+        "seconds": 290.5,
+        "capture_s": 17.0,
+        "cudagraph_gib": 0.27,
+        "capture_lines": 2,
+        "compile_s": 20.31,
+        "compile_cached": false,
+        "warmup_s": 91.39,
+        "parsed": [
+          "capture",
+          "compile",
+          "warmup"
+        ]
+      },
+      "answer": " Paris.\nThe capital of France is Paris.\nThe capital of France is",
+      "log_lines": [
+        "--profile: calibrated with 847 GiB of RAM, served with 1024 GiB",
+        "           INFO     vllm ready in 290 s: compiled (20 s), kernel warm-up 91.4 s, CUDA graphs 17 s                                                                                                       "
+      ]
+    }
+  }
+}
