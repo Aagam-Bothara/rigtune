@@ -31,9 +31,29 @@ class ClockRunner:
         return TrialResult(config=cfg, stage=stage, metrics=m.model_copy(update={"by_concurrency": {"8": m}}))
 
 
-def _search(budget):
+def _search(budget, **kw):
     runner = ClockRunner()
-    return runner, StagedSearch(objective="throughput", runner=runner, budget_s=budget, clock=runner.clock)
+    return runner, StagedSearch(objective="throughput", runner=runner, budget_s=budget, clock=runner.clock, **kw)
+
+
+def test_the_budget_holds_back_the_confirm_stages_time():
+    # On an A100 the hour ran out in the tuning stages and the pick was never re-measured. Here 300 s fits five
+    # 60 s trials; the search stops after two, so that both can be re-measured and the pick made on fresh runs.
+    runner, search = _search(300, confirm_top=3)
+    winner, notes = search.run(FEASIBLE)
+    stages = [r.stage for r in search.results]
+    assert stages.count("confirm") == 2 and len(stages) == 4
+    assert winner is not None and winner.stage == "confirm"
+    assert any("re-measured the best 2 configurations and chose on the fresh runs" in n for n in notes)
+    assert runner.now <= 300
+
+
+def test_the_confirm_rounds_are_held_back_too():
+    runner, search = _search(300, confirm_top=3, confirm_rounds=2)
+    winner, _ = search.run(FEASIBLE)
+    stages = [r.stage for r in search.results]
+    assert stages.count("confirm") == 2 and len(stages) == 3  # one config, re-measured in each round
+    assert winner is not None and winner.stage == "confirm" and runner.now <= 300
 
 
 def test_the_budget_stops_new_trials_and_the_best_so_far_wins():

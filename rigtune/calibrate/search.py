@@ -837,6 +837,7 @@ class StagedSearch:
     notes: List[str] = field(default_factory=list)
     _done: Dict[str, TrialResult] = field(default_factory=dict)
     _started: Optional[float] = None
+    _confirming: bool = False  # the confirm stage has begun: the budget it held back is its own
     _trial_seconds: List[float] = field(default_factory=list)
     _skipped: List[str] = field(default_factory=list)
     _noted_contenders: set = field(default_factory=set)
@@ -939,13 +940,26 @@ class StagedSearch:
         return cfg
 
     def _over_budget(self) -> bool:
-        """Whether a typical trial started now would end past the budget. The first always runs."""
+        """Whether a typical trial started now would end past the budget. The first always runs.
+
+        Until the confirm stage begins, the time its re-measurements would take is held back: on an A100 the hour
+        ran out in the tuning stages, so the pick was never re-measured and was chosen on search runs alone, the
+        first of which had started with a cold kernel cache (about 15% less KV cache)."""
         if self.budget_s is None or not self._trial_seconds:
             return False
         if self._started is None:
             self._started = self.clock()
         typical = sum(self._trial_seconds) / len(self._trial_seconds)
-        return self.clock() + typical > self._started + self.budget_s
+        held = 0.0 if self._confirming else typical * self._confirm_runs()
+        return self.clock() + typical + held > self._started + self.budget_s
+
+    def _confirm_runs(self) -> int:
+        """Re-measurements the confirm stage would make if it began after the next trial, which may join its
+        shortlist."""
+        if self.confirm_top <= 0:
+            return 0
+        measured = len({r.config.key() for r in self._eligible(self.results)})
+        return min(self.confirm_top, measured + 1) * max(1, self.confirm_rounds)
 
     def _skip(self, res: TrialResult) -> TrialResult:
         """A trial the search did not launch, passed to on_skip."""
@@ -1581,6 +1595,7 @@ class StagedSearch:
         config is represented by its median run, the worse of the middle two for an even count. Returns
         those runs, or None when nothing could be re-measured.
         """
+        self._confirming = True
         ranked = rank(self._eligible(self.results), self.objective, self.constraints)
         feasible = [x for x in ranked if x.feasible]
         if feasible:

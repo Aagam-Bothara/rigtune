@@ -121,8 +121,10 @@ def test_a_spent_budget_falls_back_to_a_certified_configuration_and_says_its_spe
     clock = Clock()
     script = Script({("vllm", "bf16"): REF}, clock=clock, seconds_per_pass=10)
     gate = _gate(300, script, clock=clock)
+    # Without a confirm stage nothing is held back for it, so the fp8 variant runs and leaves no time to grade it;
+    # with one, the budget keeps the confirm stage's time and it grades the pick (test_budget).
     search = StagedSearch(objective="throughput", runner=GradingRunner(gate, clock=clock), gate=gate,
-                          variant_stages=[KV], confirm_top=3, budget_s=200, clock=clock)
+                          variant_stages=[KV], confirm_top=0, budget_s=200, clock=clock)
     winner, notes = search.run(_feasible(("vllm", "bf16")))
     assert winner is not None and winner.config.kv_dtype == "auto" and gate.final_record.admitted
     assert any("could not be re-measured, so the profile reports its speed from the search" in n for n in notes)

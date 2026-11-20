@@ -29,6 +29,12 @@
   tuned first, and the hour ran out before vLLM's leader (1023) got a single tuning trial or its confirm round. A
   calibration with time for everything can now run fewer trials: an engine the tuned leader leaves more than 10%
   behind is skipped by the rule that already skipped an engine tuned second.
+- A `--budget` now holds back the time the confirm stage needs: a typical trial for each configuration it would
+  re-measure (at most 3), for each `--confirm-rounds`. On the A100 calibration of Qwen3.5-9B the hour ran out
+  in the tuning stages, so the pick was chosen on search runs alone and never re-measured, and the first of those
+  had started with a cold kernel cache, which costs about 15% of the KV cache. A budgeted calibration now runs
+  fewer tuning trials and always re-measures its pick. Without `--budget`, or with `--confirm off`, nothing
+  changes.
 
 ## 0.3.0 (2026-11-18)
 
