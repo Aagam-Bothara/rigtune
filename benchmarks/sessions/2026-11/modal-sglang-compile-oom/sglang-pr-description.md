@@ -37,9 +37,9 @@ Reproduction scripts and logs: https://github.com/Aagam-Bothara/rigtune/tree/mai
   existing path.
 
 - `test_gdn_torch_compile_pool_writes.py` (new): each of the three writes, on layer 2 of a 4-layer pool under
-  torch.compile, must allocate less than one layer and match eager exactly. On main at 03fde9cc (nightly dev
-  image, one L4) all three fail without the fix (clones of 3 layers, 3 layers and the whole K/V allocation) and
-  pass with it.
+  torch.compile, must add less than one layer of GPU memory at peak (measured on the second compiled call) and
+  match eager exactly. On main at 03fde9cc (nightly dev image, one L4) all three fail without the fix (3 layers,
+  3 layers, and K plus V added) and pass with it.
 
 No kernel changes. Without torch.compile, `register_custom_op` calls the functions directly, and the KV change is
 skipped (`torch.compiler.is_compiling()`), so eager behaviour is unchanged. Not covered: the non-fused conv

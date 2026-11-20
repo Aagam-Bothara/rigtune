@@ -97,14 +97,19 @@ cannot be compared, since it does not start.
 ## The regression test
 
 `test_gdn_torch_compile_pool_writes.py` on the fix branch writes layer 2 of a 4-layer pool under torch.compile
-through each patched path and requires less than one layer allocated and an exact match with eager.
+through each patched path. The second compiled call (the first compiles) must add less than one layer of GPU
+memory at peak, and every result must equal eager's exactly. Measuring memory rather than reading the generated
+code keeps the test from passing vacuously if Inductor's output changes.
 [modal_sglang_unit_test.py](../../../modal_sglang_unit_test.py) ran it on SGLang's nightly dev image (main at
 03fde9cc, whose patched files equal 08f10090c7's) on one L4:
 
 | | conv update | packed decode | KV store |
 |---|---|---|---|
-| unpatched | fails: 5,760 allocated (3 layers of 1,920) | fails: 61,440 (3 layers of 20,480) | fails: 16,640 (K and V of 8,320 each) |
+| one layer | 197,376 B | 4,210,688 B | 1,048,832 B (K) |
+| unpatched | fails: 594,944 B added (3 layers) | fails: 12,633,088 B (3 layers) | fails: 2,097,664 B (K and V) |
 | patched | passes | passes | passes |
+
+The file took 23.5 s with the fix (66.7 s without), so it is registered with `est_time=25`.
 
 The KV test writes once eagerly first. [modal_sglang_kv_debug.py](../../../modal_sglang_kv_debug.py) showed why:
 the first `store_cache` call builds its JIT kernel and logs (`kvcache.py:39`), which Dynamo cannot trace, so a
