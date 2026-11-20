@@ -29,6 +29,12 @@
   tuned first, and the hour ran out before vLLM's leader (1023) got a single tuning trial or its confirm round. A
   calibration with time for everything can now run fewer trials: an engine the tuned leader leaves more than 10%
   behind is skipped by the rule that already skipped an engine tuned second.
+- vLLM's own caches join Triton's in rigtune's kernel cache: `VLLM_CACHE_ROOT` in `~/.rigtune/kernel-cache/vllm`
+  (torch.compile and AOT caches, Inductor's among them, and startup plans) and `FLASHINFER_WORKSPACE_BASE` in
+  `~/.rigtune/kernel-cache/flashinfer`. One directory then holds every cache a vLLM launch writes, which is what
+  lets them be carried to another machine: on a fresh A100, a copy started Qwen3.5-9B's pick in 140 s against
+  280 s cold. Each configuration compiles once after upgrading, since `~/.cache/vllm` is not read any more. A
+  variable you set wins, and `RIGTUNE_KERNEL_CACHE=off` leaves all of them to vLLM.
 - `rigtune serve` logs how each engine start went, restarts included, from the engine's log as calibration
   records each trial: for vLLM, `vllm ready in 88 s: compile cache hit, kernel warm-up 0.3 s, CUDA graphs 23 s`,
   or what it compiled when its caches did not hold. The record is under `startup` in `/health`'s `backend` too

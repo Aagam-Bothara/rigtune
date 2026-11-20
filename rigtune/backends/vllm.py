@@ -225,8 +225,20 @@ def _vllm_version() -> Tuple[int, int]:
         return (0, 0)
 
 
-def triton_cache_env() -> Dict[str, str]:
-    """TRITON_CACHE_DIR in rigtune's kernel cache, or nothing when RIGTUNE_KERNEL_CACHE turns it off.
+def kernel_cache_env() -> Dict[str, str]:
+    """Every cache a vLLM launch writes, in rigtune's kernel cache, or nothing when RIGTUNE_KERNEL_CACHE turns it off.
+
+    One directory holds them all, so that the caches a calibration warmed can be carried to another machine: on a
+    fresh A100, a copy of them started Qwen3.5-9B's pick in 140 s against 280 s cold, with its compiled model loaded
+    from the copied AOT cache (benchmarks/sessions/2026-11/modal-warm-serve).
+
+    VLLM_CACHE_ROOT holds vLLM's torch.compile and AOT caches, Inductor's among them (vLLM points
+    TORCHINDUCTOR_CACHE_DIR inside each configuration's compile directory itself, compiler_interface.py,
+    initialize_inductor_cache), and its startup plans. vLLM's compile hash leaves the variable out (envs.py), so
+    moving it changes no key, and downloaded assets stay where they were (VLLM_ASSETS_CACHE derives from the
+    default cache root, not from VLLM_CACHE_ROOT). FLASHINFER_WORKSPACE_BASE holds FlashInfer's JIT-compiled
+    kernels and downloaded cubins, under <base>/.cache/flashinfer/<version>/<arch> (flashinfer/jit/env.py, 0.7.2
+    to 0.7.4).
 
     Unless TRITON_CACHE_DIR is set, vLLM 0.33 puts Triton's cache inside the torch.compile directory of each
     configuration (compilation/compiler_interface.py, initialize_inductor_cache), whose hash includes max_num_seqs,
@@ -236,7 +248,10 @@ def triton_cache_env() -> Dict[str, str]:
     init fell from 137 s to 57 s, and the warm engine had about 15% more KV cache. Triton keys each entry by its own
     version, the GPU's architecture and the kernel's source, so one directory serves every engine release and card."""
     base = paths.kernel_cache_dir()
-    return {"TRITON_CACHE_DIR": str(base / "triton")} if base is not None else {}
+    if base is None:
+        return {}
+    return {"TRITON_CACHE_DIR": str(base / "triton"), "VLLM_CACHE_ROOT": str(base / "vllm"),
+            "FLASHINFER_WORKSPACE_BASE": str(base / "flashinfer")}
 
 
 @functools.lru_cache(maxsize=1)
@@ -975,7 +990,7 @@ class VllmBackend(BaseBackend):
             args += ["--kv-transfer-config", json.dumps(vllm_tier_config(cfg, port))]
         if cfg.text_only:  # set only by the retry after multimodal profiling failed at start-up
             args += ["--language-model-only"]
-        return LaunchSpec(args=args, env=env, runtime_env=triton_cache_env())
+        return LaunchSpec(args=args, env=env, runtime_env=kernel_cache_env())
 
     def launch_note(self) -> Optional[str]:
         return arctic_plugin_note()

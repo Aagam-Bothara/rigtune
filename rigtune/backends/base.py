@@ -81,7 +81,7 @@ class Process:
         for name, value in self.spec.runtime_env.items():
             if name in env:  # the caller's own setting, or the configuration's, wins
                 continue
-            if name.endswith("_DIR"):
+            if name.endswith(("_DIR", "_ROOT", "_BASE")):  # a directory: created now, or left to the engine
                 try:
                     Path(value).mkdir(parents=True, exist_ok=True)
                 except OSError as exc:  # a read-only home: the engine keeps its own default rather than fail
