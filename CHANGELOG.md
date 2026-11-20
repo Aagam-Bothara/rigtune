@@ -52,8 +52,8 @@
 - A `--budget` now holds back the time to re-measure the pick: a typical trial for each `--confirm-rounds`. On
   the A100 calibration of Qwen3.5-9B the hour ran out in the tuning stages, so the pick was chosen on search runs
   alone and never re-measured, and the first of those had started with a cold kernel cache, which costs about 15%
-  of the KV cache. The confirm stage re-measures the rest of its shortlist while the budget lasts. Holding back
-  the whole shortlist's time instead cost a 20-minute calibration of the same model its MTP trials (worth 1.7x).
+  of the KV cache. The confirm stage re-measures the rest of its shortlist while the budget lasts; holding back
+  the whole shortlist's time instead, after a slow cold first start, could take a short budget's last stages away.
   Without `--budget`, or with `--confirm off`, nothing changes.
 - rigtune finds vLLM's source where Debian's Python installs it, in `dist-packages`, as vLLM's own Docker image
   does (`/usr/local/bin/vllm` run by `/usr/bin/python3`). It looked only in `site-packages`, so with that image

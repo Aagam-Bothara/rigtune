@@ -56,9 +56,9 @@ def test_each_confirm_round_is_held_back():
 
 
 def test_a_short_budget_still_reaches_the_speculation_trials():
-    """The Modal run of 20 Nov: 20 minutes for Qwen3.5-9B on an A100, a cold first start of about 5 minutes,
-    then about 2 minutes a trial. Holding back three re-measurements skipped the MTP trials, worth 1.7x; holding
-    back the pick's one runs them, and MTP at 3 tokens wins."""
+    """The timings of a 20-minute calibration of Qwen3.5-9B on an A100: a cold first start of about 5 minutes, then
+    about 2 minutes a trial. Holding back three re-measurements would skip the speculation trials; holding back the
+    pick's one runs them, and MTP at 3 tokens wins."""
     base = Config(backend="vllm", quant="bf16", ctx=4096, batch=64, gpu_memory_utilization=0.95)
     speed = {None: 607.0, "ngram_gpu:4": 535.0, "mtp:1": 880.0, "mtp:3": 1030.0}
 

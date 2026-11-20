@@ -945,9 +945,9 @@ class StagedSearch:
         Until the confirm stage begins, the time to re-measure the pick is held back, a typical trial for each confirm
         round: on an A100 the hour ran out in the tuning stages, so the pick was never re-measured and was chosen on
         search runs alone, the first of which had started with a cold kernel cache (about 15% less KV cache). Only
-        the pick's re-measurement is held, not the whole shortlist's: holding three cost a 20-minute calibration of
-        Qwen3.5-9B its MTP trials, worth 1.7x, after a cold first start made the typical trial long. The confirm
-        stage re-measures the rest of its shortlist while the budget lasts."""
+        the pick's re-measurement is held, not the whole shortlist's: a cold first start makes the typical trial long,
+        and holding three of them can take a short budget's last stages away. The confirm stage re-measures the rest
+        of its shortlist while the budget lasts."""
         if self.budget_s is None or not self._trial_seconds:
             return False
         if self._started is None:
