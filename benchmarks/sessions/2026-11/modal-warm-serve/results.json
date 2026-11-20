@@ -1,0 +1,68 @@
+[
+  {
+    "run": "1-cold",
+    "env": {},
+    "tok_s_8_users": 1040.1,
+    "ready_s": 280.2,
+    "warmup_s": 74.55,
+    "torch_compile_s": 21.58,
+    "capture_s": 12.0,
+    "init_engine_s": 165.0,
+    "kv_cache_tokens": 207971,
+    "aot_loaded": false,
+    "startup_plan_applied": false,
+    "autotune_lines": 0
+  },
+  {
+    "run": "2-warm",
+    "env": {
+      "VLLM_ENABLE_STARTUP_PLAN": "1"
+    },
+    "tok_s_8_users": 1038.1,
+    "ready_s": 106.1,
+    "warmup_s": 0.38,
+    "torch_compile_s": 0.62,
+    "capture_s": 10.0,
+    "init_engine_s": 40.93,
+    "kv_cache_tokens": 239153,
+    "aot_loaded": true,
+    "startup_plan_applied": false,
+    "autotune_lines": 0
+  },
+  {
+    "run": "3-warm-plan",
+    "env": {
+      "VLLM_ENABLE_STARTUP_PLAN": "1"
+    },
+    "tok_s_8_users": 1040.6,
+    "ready_s": 96.1,
+    "warmup_s": 0.26,
+    "torch_compile_s": 0.52,
+    "capture_s": 12.0,
+    "init_engine_s": 28.23,
+    "kv_cache_tokens": 231490,
+    "aot_loaded": true,
+    "startup_plan_applied": true,
+    "autotune_lines": 0
+  },
+  {
+    "bundle_size": "140M"
+  },
+  {
+    "run": "4-bundle-fresh-machine",
+    "env": {
+      "VLLM_ENABLE_STARTUP_PLAN": "1",
+      "VLLM_FORCE_AOT_LOAD": "1"
+    },
+    "tok_s_8_users": 1035.3,
+    "ready_s": 140.1,
+    "warmup_s": 3.28,
+    "torch_compile_s": 1.79,
+    "capture_s": 14.0,
+    "init_engine_s": 62.14,
+    "kv_cache_tokens": 231490,
+    "aot_loaded": true,
+    "startup_plan_applied": true,
+    "autotune_lines": 0
+  }
+]
