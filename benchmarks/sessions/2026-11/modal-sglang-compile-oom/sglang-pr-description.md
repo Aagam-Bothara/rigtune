@@ -54,29 +54,35 @@ shared allocation into `_set_kv_buffer_impl` would remove the dependency, at the
 ## Accuracy Tests
 
 Qwen3.5-9B (revision c202236), one A100 80GB, `--context-length 262144 --max-running-requests 256
---mem-fraction-static 0.88`. Four prompts, greedy, 64 tokens each:
+--mem-fraction-static 0.88`, four runs in one container, on v0.5.23 and on main (nightly dev image at 03fde9cc,
+whose touched files equal this branch's base). Four prompts, greedy, 64 tokens each:
 
-| Run | Answers equal A |
-|---|---|
-| A: unpatched, no torch.compile | (reference) |
-| B: patched, no torch.compile | 4 of 4 |
-| C: patched, `--enable-torch-compile` | 4 of 4 |
-| D: unpatched, `--enable-torch-compile` | did not start (OOM, 6.96 GiB) |
+| Run | Answers equal A, v0.5.23 | Answers equal A, main |
+|---|---|---|
+| A: unpatched, no torch.compile | (reference) | (reference) |
+| B: patched, no torch.compile | 4 of 4 | 4 of 4 |
+| C: patched, `--enable-torch-compile` | 4 of 4 | 2 of 4 |
+| D: unpatched, `--enable-torch-compile` | did not start (OOM, 6.96 GiB) | did not start (OOM, 6.96 GiB) |
+
+On main, C's other two answers match A's for their first 16 and 173 characters, the answer included, then
+continue differently but fluently: greedy decoding diverging once torch.compile reorders the arithmetic.
+Unpatched torch.compile cannot be compared, since it does not start.
 
 ## Speed Tests and Profiling
 
-Same runs, one measurement each, so these are indicative. A ran first in a fresh container, so its start-up and
-8-user number include one-time warm-ups.
+Same runs, one measurement each, so these are indicative. A ran first in each fresh container, so its start-up
+and 8-user number include one-time warm-ups.
 
 | Run | Ready | Buffers >= 1 GiB in generated code | tok/s, 1 user | tok/s, 8 users |
 |---|---|---|---|---|
-| A: unpatched, eager | 163 s | 0 | 89.1 | 593.7 |
-| B: patched, eager | 73 s | 0 | 88.9 | 668.9 |
-| C: patched, torch.compile | 412 s | 0 | 96.7 | 691.9 |
-| D: unpatched, torch.compile | OOM | 7 | - | - |
-
-Tested on v0.5.23 with the same change. This branch is on main at 08f10090c7, where the touched code is
-unchanged; it has not been run on main itself.
+| v0.5.23 A: unpatched, eager | 163 s | 0 | 89.1 | 593.7 |
+| v0.5.23 B: patched, eager | 73 s | 0 | 88.9 | 668.9 |
+| v0.5.23 C: patched, torch.compile | 412 s | 0 | 96.7 | 691.9 |
+| v0.5.23 D: unpatched, torch.compile | OOM | 7 | - | - |
+| main A: unpatched, eager | 136 s | 0 | 85.5 | 577.2 |
+| main B: patched, eager | 65 s | 0 | 85.6 | 644.6 |
+| main C: patched, torch.compile | 352 s | 0 | 93.4 | 657.0 |
+| main D: unpatched, torch.compile | OOM | 6 | - | - |
 
 ## Checklist
 

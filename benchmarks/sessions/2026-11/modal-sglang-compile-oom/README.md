@@ -78,7 +78,21 @@ A ran first in a fresh container, so its start and its 8-user speed include one-
 prompts, 64 tokens each, greedy.
 
 [sglang-main-fix.diff](sglang-main-fix.diff) is the same change re-based onto SGLang main at 08f10090c7 (20 Nov
-2026): the same added and removed lines, placed where main has moved the code.
+2026): the same added and removed lines, placed where main has moved the code. The same four runs on SGLang's
+nightly dev image (main at 03fde9cc, whose patched files equal 08f10090c7's;
+`modal_sglang_compile_fix.py --sglang main`, raw output in [results-fix-main.json](results-fix-main.json)):
+
+| Run | Started | Buffers >= 1 GiB | tok/s, 1 user | tok/s, 8 users | Answers equal A's |
+|---|---|---|---|---|---|
+| A unpatched, no torch.compile | 136 s | 0 | 85.5 | 577.2 | (reference) |
+| B patched, no torch.compile | 65 s | 0 | 85.6 | 644.6 | 4 of 4 |
+| C patched, `--enable-torch-compile` | 352 s | 0 | 93.4 | 657.0 | 2 of 4 |
+| D unpatched, `--enable-torch-compile` | no: out of memory, 6.96 GiB | 6 | | | |
+
+C's two other answers match A's for their first 16 and 173 characters, the answer itself included ("60 km/h"),
+then continue differently but fluently, as greedy decoding does once torch.compile changes the order of the
+arithmetic. B matches A exactly, so the patch changes nothing without torch.compile; unpatched torch.compile
+cannot be compared, since it does not start.
 
 ## The regression test
 

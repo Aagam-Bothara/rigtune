@@ -1,0 +1,110 @@
+{
+  "versions": {
+    "sglang": "0.0.0.dev1+g03fde9cc3",
+    "torch": "2.14.1+cu130"
+  },
+  "runs": [
+    {
+      "run": "main-A-unpatched-eager",
+      "torch_compile": false,
+      "ready_s": 136.1,
+      "answers": [
+        " Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is",
+        "    if n == 0:\n        return 0\n    elif n == 1:\n        return 1\n    else:\n        return fibonacci(n - 1) + fibonacci(n - 2)\n\n# Example usage:\nprint(fibonacci(10))  # Output: ",
+        " 60 km/h.\n\nQ: A car travels 150 km in 3 hours. What is its average speed?\nA: 50 km/h.\n\nQ: A train travels 180 km in 3 hours. What is its average speed?\nA: 6",
+        " Eliminate distractions\n2. Use the Pomodoro technique\n3. Take regular breaks\n\nHere are three short tips for staying focused while studying:\n\n1.  **Eliminate Distractions**: Put your phone on silent or in another room, close unnecessary browser tabs, and create a clean, quiet workspace to minimize"
+      ],
+      "tok_s_1_user": 85.5,
+      "tok_s_8_users": 577.2,
+      "failed_allocation": null,
+      "big_buffers": []
+    },
+    {
+      "run": "main-B-patched-eager",
+      "torch_compile": false,
+      "ready_s": 64.5,
+      "answers": [
+        " Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is",
+        "    if n == 0:\n        return 0\n    elif n == 1:\n        return 1\n    else:\n        return fibonacci(n - 1) + fibonacci(n - 2)\n\n# Example usage:\nprint(fibonacci(10))  # Output: ",
+        " 60 km/h.\n\nQ: A car travels 150 km in 3 hours. What is its average speed?\nA: 50 km/h.\n\nQ: A train travels 180 km in 3 hours. What is its average speed?\nA: 6",
+        " Eliminate distractions\n2. Use the Pomodoro technique\n3. Take regular breaks\n\nHere are three short tips for staying focused while studying:\n\n1.  **Eliminate Distractions**: Put your phone on silent or in another room, close unnecessary browser tabs, and create a clean, quiet workspace to minimize"
+      ],
+      "tok_s_1_user": 85.6,
+      "tok_s_8_users": 644.6,
+      "failed_allocation": null,
+      "big_buffers": [],
+      "answers_equal_A": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "run": "main-C-patched-compile",
+      "torch_compile": true,
+      "ready_s": 352.1,
+      "answers": [
+        " Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is Paris.\nThe capital of France is",
+        "    if n == 0:\n        return 0\n    elif n == 1:\n        return 1\n    else:\n        return fibonacci(n - 1) + fibonacci(n - 2)\n\n# Example usage:\nprint(fibonacci(10))  # Output: ",
+        " 60 km/h.\n\nQ: A train travels 120 km in 2 hours. What is its average speed?\nA: 60 km/h.\n\nQ: A train travels 120 km in 2 hours. What is its average speed?\nA: 6",
+        " Eliminate distractions\n2. Use the Pomodoro technique\n3. Take regular breaks\n\nHere are three short tips for staying focused while studying:\n\n1.  **Eliminate Distractions**: Turn off your phone notifications, close unnecessary browser tabs, and find a quiet space to create a dedicated environment for deep work"
+      ],
+      "tok_s_1_user": 93.4,
+      "tok_s_8_users": 657.0,
+      "failed_allocation": null,
+      "big_buffers": [],
+      "answers_equal_A": [
+        true,
+        true,
+        false,
+        false
+      ]
+    },
+    {
+      "run": "main-D-unpatched-compile",
+      "torch_compile": true,
+      "ready_s": null,
+      "failed_allocation": "6.96 GiB",
+      "big_buffers": [
+        {
+          "file": "czzjd5fyuodspidgkypo4dcq4h7452flexuyxpnc3z4poe4hf2lq.py",
+          "line": 503,
+          "gib": 1.988,
+          "code": "buf12 = empty_strided_cuda((533725184, ), (1, ), torch.float32)"
+        },
+        {
+          "file": "crrhxedfflsfkfsdshjjes5hlcdtdxlmmket6vmugnhbyjec2ka4.py",
+          "line": 503,
+          "gib": 2.982,
+          "code": "buf12 = empty_strided_cuda((800587776, ), (1, ), torch.float32)"
+        },
+        {
+          "file": "cu2ky5qmy22gscqx7de66wcoq2x2puh4k5zoai55p4sfegojvl2n.py",
+          "line": 503,
+          "gib": 3.977,
+          "code": "buf12 = empty_strided_cuda((1067450368, ), (1, ), torch.float32)"
+        },
+        {
+          "file": "c3fmmkxidocykfoyupeahmlmblabsmopogfzlbfuqj7uzrxi44gx.py",
+          "line": 503,
+          "gib": 4.971,
+          "code": "buf12 = empty_strided_cuda((1334312960, ), (1, ), torch.float32)"
+        },
+        {
+          "file": "cwj4b2mx7qdk5is3dvbnyqo4rj3ho6jmb4xsrf54rjtvvvhnliti.py",
+          "line": 503,
+          "gib": 5.965,
+          "code": "buf12 = empty_strided_cuda((1601175552, ), (1, ), torch.float32)"
+        },
+        {
+          "file": "cvdr7zystjbkmje64qxl5fnxfvgobfpykz22on5hjro6v4qst6rb.py",
+          "line": 503,
+          "gib": 6.959,
+          "code": "buf12 = empty_strided_cuda((1868038144, ), (1, ), torch.float32)"
+        }
+      ],
+      "tail": "\n\n[2026-11-20 04:02:45] Received sigquit from a child process. It usually means the child failed.\n[2026-11-20 04:02:45] kill_process_tree called: parent_pid=2323, include_parent=True, pid=2323"
+    }
+  ]
+}
