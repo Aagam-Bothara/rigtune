@@ -45,6 +45,9 @@ def test_the_budget_holds_back_the_picks_re_measurement():
     assert stages.count("confirm") == 1 and len(stages) == 5
     assert winner is not None and winner.stage == "confirm"
     assert runner.now <= 300
+    # The note counts the re-measurement that ran, not the shortlist (the Modal rerun said "the best 3").
+    assert any(n.startswith("re-measured the best configuration of 3 shortlisted (the budget ran out) and chose")
+               for n in search.notes)
 
 
 def test_each_confirm_round_is_held_back():

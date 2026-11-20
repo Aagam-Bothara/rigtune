@@ -1623,8 +1623,11 @@ class StagedSearch:
         if not reps:
             return None
         winner, _ = pick(reps, self.objective, self.constraints)
-        note = (f"re-measured the best {len(shortlist)} configuration{'s' if len(shortlist) > 1 else ''} and "
-                f"chose on the fresh runs")
+        measured = sum(1 for c in shortlist if runs[c.key()])
+        note = "re-measured the best " + (f"{measured} configurations" if measured > 1 else "configuration")
+        if measured < len(shortlist):
+            note += f" of {len(shortlist)} shortlisted (the budget ran out)"
+        note += " and chose on the fresh runs"
         orig = self._done.get(winner.config.key()) if winner is not None else None
         if winner is not None and orig is not None and orig.ok:
             then = rank([orig], self.objective, self.constraints)[0].metrics.tok_s

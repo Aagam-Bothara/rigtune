@@ -59,6 +59,8 @@
   does (`/usr/local/bin/vllm` run by `/usr/bin/python3`). It looked only in `site-packages`, so with that image
   every feature read from vLLM's source was off without a note: the checkpoint's MTP head was never offered, and two
   20-minute calibrations of Qwen3.5-9B on Modal picked plain bf16.
+- The confirm note counts the configurations re-measured, not the shortlist, and says when the budget ran out
+  first: a 20-minute calibration that re-measured only its pick said "re-measured the best 3 configurations".
 
 ## 0.3.0 (2026-11-18)
 

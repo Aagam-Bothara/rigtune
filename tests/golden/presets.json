@@ -318,7 +318,7 @@
  "balanced/strict": {
   "idle_tail_s": 0.0,
   "notes": [
-   "re-measured the best 1 configuration and chose on the fresh runs: the pick measured 62 tok/s in the search and 63 re-measured",
+   "re-measured the best configuration and chose on the fresh runs: the pick measured 62 tok/s in the search and 63 re-measured",
    "strict constraints: no measured configuration met the balanced constraints (the closest missed by 89.4); refusing to serve the least-violating one"
   ],
   "trials": [
