@@ -36,24 +36,54 @@ def _search(budget, **kw):
     return runner, StagedSearch(objective="throughput", runner=runner, budget_s=budget, clock=runner.clock, **kw)
 
 
-def test_the_budget_holds_back_the_confirm_stages_time():
+def test_the_budget_holds_back_the_picks_re_measurement():
     # On an A100 the hour ran out in the tuning stages and the pick was never re-measured. Here 300 s fits five
-    # 60 s trials; the search stops after two, so that both can be re-measured and the pick made on fresh runs.
+    # 60 s trials; the search stops after four, so that the pick is re-measured and chosen on a fresh run.
     runner, search = _search(300, confirm_top=3)
-    winner, notes = search.run(FEASIBLE)
+    winner, _ = search.run(FEASIBLE)
     stages = [r.stage for r in search.results]
-    assert stages.count("confirm") == 2 and len(stages) == 4
+    assert stages.count("confirm") == 1 and len(stages) == 5
     assert winner is not None and winner.stage == "confirm"
-    assert any("re-measured the best 2 configurations and chose on the fresh runs" in n for n in notes)
     assert runner.now <= 300
 
 
-def test_the_confirm_rounds_are_held_back_too():
+def test_each_confirm_round_is_held_back():
     runner, search = _search(300, confirm_top=3, confirm_rounds=2)
     winner, _ = search.run(FEASIBLE)
     stages = [r.stage for r in search.results]
-    assert stages.count("confirm") == 2 and len(stages) == 3  # one config, re-measured in each round
+    assert stages.count("confirm") == 2 and len(stages) == 5  # two rounds' time, spent on the shortlist in order
     assert winner is not None and winner.stage == "confirm" and runner.now <= 300
+
+
+def test_a_short_budget_still_reaches_the_speculation_trials():
+    """The Modal run of 20 Nov: 20 minutes for Qwen3.5-9B on an A100, a cold first start of about 5 minutes,
+    then about 2 minutes a trial. Holding back three re-measurements skipped the MTP trials, worth 1.7x; holding
+    back the pick's one runs them, and MTP at 3 tokens wins."""
+    base = Config(backend="vllm", quant="bf16", ctx=4096, batch=64, gpu_memory_utilization=0.95)
+    speed = {None: 607.0, "ngram_gpu:4": 535.0, "mtp:1": 880.0, "mtp:3": 1030.0}
+
+    class Runner(ClockRunner):
+        def run(self, cfg, stage):
+            self.now += 300.0 if not self.ran else 130.0
+            self.ran.append(cfg)
+            m = TrialMetrics(tok_s=speed[cfg.spec_decode] * (0.995 if cfg.kv_dtype != "auto" else 1.0),
+                             ttft_ms=150, tpot_ms=7, requests=16, output_tokens=2048, concurrency=8)
+            return TrialResult(config=cfg, stage=stage, metrics=m.model_copy(update={"by_concurrency": {"8": m}}))
+
+    def kv(c):
+        return [] if c.kv_dtype != "auto" else [c.model_copy(update={"kv_dtype": "fp8_e5m2"})]
+
+    def spec(c):
+        return [] if c.spec_decode else [c.model_copy(update={"spec_decode": s}) for s in ("ngram_gpu:4", "mtp:1",
+                                                                                         "mtp:3")]
+
+    runner = Runner()
+    search = StagedSearch(objective="throughput", runner=runner, budget_s=1200, clock=runner.clock, confirm_top=3,
+                          variant_stages=[("kv", kv), ("spec", spec)])
+    winner, _ = search.run([base])
+    assert [c.spec_decode for c in runner.ran].count("mtp:3") >= 1
+    assert winner is not None and winner.config.spec_decode == "mtp:3" and winner.stage == "confirm"
+    assert runner.now <= 1200
 
 
 def test_the_budget_stops_new_trials_and_the_best_so_far_wins():

@@ -942,24 +942,19 @@ class StagedSearch:
     def _over_budget(self) -> bool:
         """Whether a typical trial started now would end past the budget. The first always runs.
 
-        Until the confirm stage begins, the time its re-measurements would take is held back: on an A100 the hour
-        ran out in the tuning stages, so the pick was never re-measured and was chosen on search runs alone, the
-        first of which had started with a cold kernel cache (about 15% less KV cache)."""
+        Until the confirm stage begins, the time to re-measure the pick is held back, a typical trial for each confirm
+        round: on an A100 the hour ran out in the tuning stages, so the pick was never re-measured and was chosen on
+        search runs alone, the first of which had started with a cold kernel cache (about 15% less KV cache). Only
+        the pick's re-measurement is held, not the whole shortlist's: holding three cost a 20-minute calibration of
+        Qwen3.5-9B its MTP trials, worth 1.7x, after a cold first start made the typical trial long. The confirm
+        stage re-measures the rest of its shortlist while the budget lasts."""
         if self.budget_s is None or not self._trial_seconds:
             return False
         if self._started is None:
             self._started = self.clock()
         typical = sum(self._trial_seconds) / len(self._trial_seconds)
-        held = 0.0 if self._confirming else typical * self._confirm_runs()
+        held = 0.0 if self._confirming or self.confirm_top <= 0 else typical * max(1, self.confirm_rounds)
         return self.clock() + typical + held > self._started + self.budget_s
-
-    def _confirm_runs(self) -> int:
-        """Re-measurements the confirm stage would make if it began after the next trial, which may join its
-        shortlist."""
-        if self.confirm_top <= 0:
-            return 0
-        measured = len({r.config.key() for r in self._eligible(self.results)})
-        return min(self.confirm_top, measured + 1) * max(1, self.confirm_rounds)
 
     def _skip(self, res: TrialResult) -> TrialResult:
         """A trial the search did not launch, passed to on_skip."""

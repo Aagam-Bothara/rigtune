@@ -49,12 +49,12 @@
   records each trial: for vLLM, `vllm ready in 88 s: compile cache hit, kernel warm-up 0.3 s, CUDA graphs 23 s`,
   or what it compiled when its caches did not hold. The record is under `startup` in `/health`'s `backend` too
   (not in the minimal `/health` an API key leaves). A warm start was silent before, and so was a cold one.
-- A `--budget` now holds back the time the confirm stage needs: a typical trial for each configuration it would
-  re-measure (at most 3), for each `--confirm-rounds`. On the A100 calibration of Qwen3.5-9B the hour ran out
-  in the tuning stages, so the pick was chosen on search runs alone and never re-measured, and the first of those
-  had started with a cold kernel cache, which costs about 15% of the KV cache. A budgeted calibration now runs
-  fewer tuning trials and always re-measures its pick. Without `--budget`, or with `--confirm off`, nothing
-  changes.
+- A `--budget` now holds back the time to re-measure the pick: a typical trial for each `--confirm-rounds`. On
+  the A100 calibration of Qwen3.5-9B the hour ran out in the tuning stages, so the pick was chosen on search runs
+  alone and never re-measured, and the first of those had started with a cold kernel cache, which costs about 15%
+  of the KV cache. The confirm stage re-measures the rest of its shortlist while the budget lasts. Holding back
+  the whole shortlist's time instead cost a 20-minute calibration of the same model its MTP trials (worth 1.7x).
+  Without `--budget`, or with `--confirm off`, nothing changes.
 
 ## 0.3.0 (2026-11-18)
 
