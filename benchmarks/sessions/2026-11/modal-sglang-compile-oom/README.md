@@ -78,4 +78,21 @@ A ran first in a fresh container, so its start and its 8-user speed include one-
 prompts, 64 tokens each, greedy.
 
 [sglang-main-fix.diff](sglang-main-fix.diff) is the same change re-based onto SGLang main at 08f10090c7 (20 Nov
-2026): the same added and removed lines, placed where main has moved the code. It has not been run.
+2026): the same added and removed lines, placed where main has moved the code.
+
+## The regression test
+
+`test_gdn_torch_compile_pool_writes.py` on the fix branch writes layer 2 of a 4-layer pool under torch.compile
+through each patched path and requires less than one layer allocated and an exact match with eager.
+[modal_sglang_unit_test.py](../../../modal_sglang_unit_test.py) ran it on SGLang's nightly dev image (main at
+03fde9cc, whose patched files equal 08f10090c7's) on one L4:
+
+| | conv update | packed decode | KV store |
+|---|---|---|---|
+| unpatched | fails: 5,760 allocated (3 layers of 1,920) | fails: 61,440 (3 layers of 20,480) | fails: 16,640 (K and V of 8,320 each) |
+| patched | passes | passes | passes |
+
+The KV test writes once eagerly first. [modal_sglang_kv_debug.py](../../../modal_sglang_kv_debug.py) showed why:
+the first `store_cache` call builds its JIT kernel and logs (`kvcache.py:39`), which Dynamo cannot trace, so a
+first call under torch.compile splits the graph between the slicing and the write, and the clone comes back.
+Serving builds the kernel eagerly before capture, as the test now does.
