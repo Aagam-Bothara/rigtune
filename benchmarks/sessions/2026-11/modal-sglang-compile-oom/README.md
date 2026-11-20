@@ -76,3 +76,6 @@ raw output in [results-fix.json](results-fix.json). One measurement per run: the
 
 A ran first in a fresh container, so its start and its 8-user speed include one-time warm-ups. Answers are four
 prompts, 64 tokens each, greedy.
+
+[sglang-main-fix.diff](sglang-main-fix.diff) is the same change re-based onto SGLang main at 08f10090c7 (20 Nov
+2026): the same added and removed lines, placed where main has moved the code. It has not been run.
