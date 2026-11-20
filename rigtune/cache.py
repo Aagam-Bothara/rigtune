@@ -117,6 +117,77 @@ def invalid_reason(profile: Profile, hw: HardwareDescriptor) -> Optional[str]:
     return None
 
 
+def _gpu_shape(g) -> Tuple[str, str, Optional[Tuple[int, int]], int]:
+    """What hardware_hash keys a GPU by: vendor, name, compute capability, and VRAM in 256 MiB steps."""
+    return g.vendor, g.name, g.compute_capability, g.vram_total_bytes // (256 * 1024 * 1024)
+
+
+def _gpu_text(g) -> str:
+    return f"{g.name} ({g.vram_total_bytes / 2**30:.0f} GiB)"
+
+
+def portable_problems(profile: Profile, hw: HardwareDescriptor) -> Tuple[List[str], List[str]]:
+    """Whether a profile calibrated on another machine can be served on this one (`rigtune serve --profile`):
+    (reasons to refuse, warnings).
+
+    A machine's own cache refuses a profile after any hardware change, its CPU and RAM included, and after any
+    driver change (invalid_reason). That is right for a cache, which can recalibrate, and too strict for a pick
+    carried to another machine with the same GPU, where what the GPU work depends on must match: the GPUs, the engine
+    and its libraries, and a model it can load. A pick that leans on the host (a KV-cache tier sized for its RAM,
+    llama.cpp layers on its CPU, a CPU-only engine) is refused when the host differs; otherwise a different CPU, RAM,
+    driver or CUDA is a warning."""
+    refuse: List[str] = []
+    warn: List[str] = []
+    old_cpu, new_cpu = profile.hardware.cpu, hw.cpu
+    cpu_differs = (old_cpu.model_name, old_cpu.physical_cores) != (new_cpu.model_name, new_cpu.physical_cores)
+    ram_differs = old_cpu.ram_total_bytes // 2**30 != new_cpu.ram_total_bytes // 2**30
+    if profile.disagg is not None:
+        refuse.append("it serves disaggregated prefill and decode on fixed GPUs; calibrate it on this machine")
+    need = max(profile.config.tp or 1, profile.replicas, 1)
+    old_gpus, new_gpus = profile.hardware.gpus[:need], hw.gpus[:need]
+    if old_gpus and len(new_gpus) < len(old_gpus):
+        refuse.append(f"it needs {len(old_gpus)} GPU(s) and this machine has {len(hw.gpus)}")
+    for old, new in zip(old_gpus, new_gpus):
+        if _gpu_shape(old) != _gpu_shape(new):
+            refuse.append(f"it was calibrated on {_gpu_text(old)} and this machine has {_gpu_text(new)}")
+    if not hw.backend_available(profile.backend):
+        refuse.append(f"{profile.backend} is not installed here")
+    elif profile.backend_version != hw.backend_version(profile.backend):
+        refuse.append(f"it was calibrated on {profile.backend} {profile.backend_version} and this machine has "
+                      f"{hw.backend_version(profile.backend)}")
+    changed, _ = library_changes(profile, hw)
+    if changed:
+        refuse.append(f"{profile.backend}'s libraries differ ({', '.join(changed)})")
+    cfg, prepared = profile.config, profile.prepared
+    host = []
+    if cfg.kv_tier is not None:
+        host.append(f"its {cfg.kv_tier} KV-cache tier was sized for that machine's host memory")
+    if not old_gpus or profile.backend.endswith("-cpu"):
+        host.append("it runs on the CPU")
+    if (cfg.n_gpu_layers is not None and prepared is not None and prepared.arch is not None
+            and cfg.n_gpu_layers < prepared.arch.num_layers):
+        host.append(f"it keeps {prepared.arch.num_layers - cfg.n_gpu_layers} layers on the CPU")
+    if host and (cpu_differs or ram_differs):
+        refuse.extend(f"{why}, and this machine's CPU or RAM differs" for why in host)
+    if prepared is not None:
+        local = [p for p in (prepared.hf_path, *prepared.gguf_paths.values(), *prepared.hf_paths.values(),
+                             *prepared.draft_paths.values())
+                 if p and (os.path.isabs(p) or p.startswith(".")) and not Path(p).exists()]
+        refuse.extend(f"its model files are at {p}, which this machine does not have" for p in local)
+    if not host:
+        if cpu_differs:
+            warn.append(f"calibrated with a {old_cpu.model_name} ({old_cpu.physical_cores} cores), served on a "
+                        f"{new_cpu.model_name} ({new_cpu.physical_cores} cores)")
+        if ram_differs:
+            warn.append(f"calibrated with {old_cpu.ram_total_bytes / 2**30:.0f} GiB of RAM, served with "
+                        f"{new_cpu.ram_total_bytes / 2**30:.0f} GiB")
+    old_drv = [(g.driver_version, g.cuda_version) for g in old_gpus]
+    new_drv = [(g.driver_version, g.cuda_version) for g in new_gpus]
+    if old_drv != new_drv:
+        warn.append(f"GPU driver or CUDA differs ({_drivers(old_drv)} -> {_drivers(new_drv)})")
+    return refuse, warn
+
+
 def _drivers(pairs: List[Tuple[Optional[str], Optional[str]]]) -> str:
     return ", ".join(f"driver {d or '?'} CUDA {c or '?'}" for d, c in dict.fromkeys(pairs)) or "no GPU"
 

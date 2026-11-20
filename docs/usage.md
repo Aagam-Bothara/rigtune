@@ -414,7 +414,7 @@ rigtune serve <model> [--objective X | --optimise METRIC] [--limit "METRIC<=N"].
                 [--quant auto|LIST] [--kv-quant on|off] [--prefix-cache on|off] [--speculative on|off|all] [--layout MODE] [--combine on|off] [--confirm on|off] [--all-levels] [--budget 10m]
                 [--confirm-rounds N] [--min-requests N] [--strict-constraints]
                 [--max-in-flight N|measured] [--queue N] [--queue-timeout S] [--idle-timeout S] [--max-body-mb M]
-                [--body-timeout S] [--api-key-env VAR] [--require-api-key]
+                [--body-timeout S] [--api-key-env VAR] [--require-api-key] [--profile FILE]
                 [--eval-set gsm8k|FILE] [--max-accuracy-loss POINTS] [--eval-items N] [--eval-attempts N] [--report-reuse] [--kv-tier off|auto]
                 [--sessions] [--session-pool N] [--session-turns N] [--history generated|recorded] [--session-system FILE]
 rigtune probe                 # print HardwareDescriptor
@@ -453,6 +453,8 @@ rigtune conformance vllm      # does this engine release do what rigtune plans f
 ```
 
 To start serving without waiting for benchmarks, use `--skip-calibration`.
+
+**Serving a pick calibrated on another machine.** `rigtune serve <model> --profile FILE` serves the pick in a profile JSON (one from `~/.rigtune/profiles/`, copied over) instead of looking up this machine's cache, and calibrates nothing; the calibration options are not used. A machine's own cache refuses a profile after any hardware change, its CPU and RAM included, or a driver change, because it can recalibrate. `--profile` checks only what the GPU work depends on, and refuses, saying why, when the GPUs differ (model, compute capability or memory) or are too few for the pick, when the engine or its libraries differ, when the model was a local folder this machine lacks, or when the pick is disaggregated. A different CPU, RAM, driver or CUDA is a warning, unless the pick leans on the host (a KV-cache tier, llama.cpp layers on the CPU, a CPU-only engine), which is then refused. The profile must be of the `<model>` named.
 
 **Comparing with an expert and with other tools.** `rigtune compare` measures rigtune's pick against the stock rows. Two options add rows, each a named engine configuration measured like every other row (same runner, prompts, limits and `--repeats`, interleaved), and neither filtered by `--include`:
 

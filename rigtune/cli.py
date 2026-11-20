@@ -162,6 +162,27 @@ def _search_view(objective: str, cons):
     return SearchView(err, objective=objective, constraints=cons, fallback=_progress_for(objective, cons))
 
 
+def _portable_profile(path: Path, model: str) -> Profile:
+    """`serve --profile`: the profile at `path`, checked against this machine (cache.portable_problems)."""
+    from rigtune import cache as profile_cache
+    from rigtune.hardware import probe
+
+    try:
+        profile = Profile.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(f"{path} is not a rigtune profile: {exc}", param_hint="--profile") from None
+    if profile.model_id.lower() != model.lower():
+        raise typer.BadParameter(f"{path} is a profile of {profile.model_id}, not {model}", param_hint="--profile")
+    refuse, warn = profile_cache.portable_problems(profile, probe())
+    for w in warn:
+        err.print(f"[yellow]--profile: {w}[/]")
+    if refuse:
+        for r in refuse:
+            err.print(f"[red]--profile: not served here: {r}[/]")
+        raise typer.Exit(2)
+    return profile
+
+
 def _find_profile(which: str) -> Profile:
     """A path to a profile JSON, or part of a cached profile's model id."""
     from rigtune import cache as profile_cache
@@ -1680,6 +1701,10 @@ def serve(
                                          "route but /health requires it"),
     require_api_key: bool = typer.Option(False, "--require-api-key",
                                          help="Refuse to start unless the API key variable is set"),
+    profile_file: Optional[Path] = typer.Option(
+        None, "--profile", exists=True, dir_okay=False,
+        help="Serve this profile's pick, calibrated on this or another machine with the same GPU, instead of the "
+             "cached one; nothing is calibrated, and the calibration options are not used"),
 ) -> None:
     """Discover hardware, calibrate once (cached), then serve an OpenAI-compatible API."""
     import dataclasses
@@ -1715,19 +1740,24 @@ def serve(
     _check_kv_tier(kv_tier, wl)
     _check_min_requests(min_requests, wl)
     spec = ModelSpec(hf_id=model)
-    view = _search_view(objective, cons)
-    profile = _calibrating(view, resolve_profile, spec, objective, force_backend=backend,
-                           skip_calibration=skip_calibration,
-                              workload=wl, constraints=cons,
-                              progress=view.progress, on_stage=view.on_stage,
-                              power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
-                 eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
-                 eval_attempts=eval_attempts,
-                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
-                 confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub,
-                 kernel=kernel), layout=layout)
-    view.stop()
+    if profile_file is not None:
+        profile = _portable_profile(profile_file, model)
+    else:
+        view = _search_view(objective, cons)
+        profile = _calibrating(view, resolve_profile, spec, objective, force_backend=backend,
+                               skip_calibration=skip_calibration,
+                               workload=wl, constraints=cons,
+                               progress=view.progress, on_stage=view.on_stage,
+                               power_mode=power, phases=phases, kv_connector=kv_connector,
+                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget,
+                                             ttft_percentile, confirm, all_levels, explore, quality_probe,
+                                             eval_set=eval_set, max_accuracy_loss=max_accuracy_loss,
+                                             eval_items=eval_items, eval_attempts=eval_attempts,
+                                             report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate,
+                                             rate_check=rate_check, confirm_rounds=confirm_rounds,
+                                             min_requests=min_requests, drafts=drafts, draft=draft, hub=hub,
+                                             kernel=kernel), layout=layout)
+        view.stop()
     _print_profile(profile)
     if profile.prepared is None:
         err.print("[red]profile has no prepared model; run `rigtune recalibrate`[/]")

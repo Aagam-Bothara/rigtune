@@ -29,6 +29,11 @@
   tuned first, and the hour ran out before vLLM's leader (1023) got a single tuning trial or its confirm round. A
   calibration with time for everything can now run fewer trials: an engine the tuned leader leaves more than 10%
   behind is skipped by the rule that already skipped an engine tuned second.
+- `rigtune serve <model> --profile FILE` serves a profile's pick calibrated on another machine with the same GPU,
+  without calibrating. It refuses, saying why, when the GPUs, the engine or its libraries differ, when the model was
+  a local folder this machine lacks, or when the pick is disaggregated; a different CPU, RAM, driver or CUDA is a
+  warning unless the pick leans on the host (a KV-cache tier, llama.cpp layers on the CPU, a CPU-only engine).
+  Before, a copied profile matched only a machine identical down to its CPU, RAM and driver.
 - vLLM's own caches join Triton's in rigtune's kernel cache: `VLLM_CACHE_ROOT` in `~/.rigtune/kernel-cache/vllm`
   (torch.compile and AOT caches, Inductor's among them, and startup plans) and `FLASHINFER_WORKSPACE_BASE` in
   `~/.rigtune/kernel-cache/flashinfer`. One directory then holds every cache a vLLM launch writes, which is what
