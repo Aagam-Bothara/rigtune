@@ -23,6 +23,7 @@ from typing import Dict, List, Optional
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, Process
 from rigtune.memory import MemoryModel
 from rigtune.models import Config, HardwareDescriptor, ModelSpec, PreparedModel
+from rigtune.quantized import stored_quant
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +34,13 @@ def reference_configs(hw: HardwareDescriptor, prepared: Dict[str, PreparedModel]
     for name, model in prepared.items():
         backend = reg[name]
         max_pos = model.arch.max_position_embeddings
+        # The model's own weights: a checkpoint its author quantized is served as stored, as `vllm serve` does.
+        stored = stored_quant(model.weights_bytes)
         if name == "vllm":
             # `vllm serve <model>`: max-model-len = model max, max-num-seqs 256, gpu-memory-utilization 0.9, dtype auto
             out[f"{name}-default"] = Config(
-                backend=name, quant=backend.precisions(hw)[0], ctx=max_pos, batch=256, gpu_memory_utilization=0.90
+                backend=name, quant=stored or backend.precisions(hw)[0], ctx=max_pos, batch=256,
+                gpu_memory_utilization=0.90,
             )
             # `vllm serve <model> --quantization fp8` and nothing else: isolates what the search adds
             # beyond simply picking 8-bit weights, which is otherwise the bulk of the measured gain.
@@ -47,7 +51,8 @@ def reference_configs(hw: HardwareDescriptor, prepared: Dict[str, PreparedModel]
         elif name == "sglang":
             # `python -m sglang.launch_server --model-path <model>`: context = model max, mem-fraction ~0.88
             out[f"{name}-default"] = Config(
-                backend=name, quant=backend.precisions(hw)[0], ctx=max_pos, batch=256, gpu_memory_utilization=0.88
+                backend=name, quant=stored or backend.precisions(hw)[0], ctx=max_pos, batch=256,
+                gpu_memory_utilization=0.88,
             )
         elif name.startswith("llamacpp"):
             # `llama-server -m model-Q4_K_M.gguf`: -c 4096, -np 1, -b 2048, all layers on GPU when built with CUDA
@@ -61,7 +66,7 @@ def reference_configs(hw: HardwareDescriptor, prepared: Dict[str, PreparedModel]
                 cfg.extra["threads"] = hw.cpu.physical_cores
             out[f"{name}-default"] = cfg
         elif name == "vllm-cpu":
-            out[f"{name}-default"] = Config(backend=name, quant="bf16", ctx=min(4096, max_pos), batch=256)
+            out[f"{name}-default"] = Config(backend=name, quant=stored or "bf16", ctx=min(4096, max_pos), batch=256)
     return out
 
 

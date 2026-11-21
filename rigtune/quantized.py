@@ -22,7 +22,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from rigtune.gguf import list_hub_models
-from rigtune.models import ModelSpec
+from rigtune.introspect import STORED_PREFIX
+from rigtune.models import ArchInfo, ModelSpec
 
 logger = logging.getLogger(__name__)
 
@@ -147,23 +148,33 @@ def find_prequantized_repos(
     return found
 
 
-STORED: Tuple[str, ...] = ("bf16", "fp16")  # the precisions that load a checkpoint as it is stored (--dtype only)
+STORED: Tuple[str, ...] = ("bf16", "fp16")  # the precisions that serve a model's own weights unchanged
 
 
-def as_stored(wanted: Sequence[str], checkpoint_quant: Optional[str], model: str) -> List[str]:
-    """The precisions a checkpoint may be served at: all of `wanted` for an unquantized one, and for one its author
-    quantized only those that load it as stored. Both engines take the method from its quantization_config and refuse
-    another --quantization (vLLM 0.33 config/model.py ModelConfig._verify_quantization; SGLang 0.5.23
-    configs/model_config.py, whose only requantization is quark_mxfp4), so online fp8 on top fails to start, or on an
-    fp8 checkpoint repeats the stored launch; and Hub copies quantized from it are not looked for. Raises when
-    `wanted` holds none of them (a --quant that leaves no way to serve it)."""
-    if not checkpoint_quant:
+def is_stored(quant: str) -> bool:
+    """A checkpoint its author quantized, served as stored (introspect.STORED_PREFIX: "ckpt-fp8")."""
+    return quant.startswith(STORED_PREFIX)
+
+
+def stored_quant(weights_bytes: Dict[str, int]) -> Optional[str]:
+    """The stored precision a prepared model has, or None for a model rigtune may serve at its own precisions."""
+    return next((q for q in weights_bytes if is_stored(q)), None)
+
+
+def as_stored(wanted: Sequence[str], arch: ArchInfo, model: str) -> List[str]:
+    """The precisions a checkpoint may be served at: `wanted` for an unquantized one, and for one its author
+    quantized just its stored label (arch.stored_as), in place of the 16-bit precision that serves a model's own
+    weights. Both engines take the method from its quantization_config and refuse another --quantization (vLLM 0.33
+    config/model.py ModelConfig._verify_quantization; SGLang 0.5.23 configs/model_config.py, whose only
+    requantization is quark_mxfp4), so online fp8 on top fails to start, or on an fp8 checkpoint repeats the stored
+    launch; and Hub copies quantized from it are not looked for. Raises when `wanted` holds no 16-bit precision (a
+    --quant that leaves no way to serve it)."""
+    if not arch.stored_as:
         return list(wanted)
-    kept = [q for q in wanted if q in STORED]
-    if not kept:
-        raise RuntimeError(f"{model} is already quantized ({checkpoint_quant}) and can only be served as stored, "
-                           f"which --quant {','.join(wanted)} leaves out: add auto or {STORED[0]}")
-    return kept
+    if not any(q in STORED for q in wanted):
+        raise RuntimeError(f"{model} is already quantized ({arch.checkpoint_quant}) and can only be served as "
+                           f"stored, which --quant {','.join(wanted)} leaves out: add auto or {STORED[0]}")
+    return [arch.stored_as]
 
 
 def hf_weight_options(spec: ModelSpec, params: int, wanted: Sequence[str],
@@ -172,13 +183,16 @@ def hf_weight_options(spec: ModelSpec, params: int, wanted: Sequence[str],
     """(weights_bytes, repo per quant) for a Hugging Face backend: full/fp8 from the base repo,
     4-bit and W8A8 from whatever pre-quantized repository the Hub has.
 
-    A 16-bit precision loads the checkpoint as it is stored, so given the size of its files (`stored_bytes`,
-    ArchInfo.checkpoint_bytes) it takes that size: an FP8, NVFP4, MXFP4 or AWQ checkpoint holds far less than two
-    bytes a parameter. Capped at two bytes a parameter, which a float32 checkpoint is cast down to."""
+    A stored precision (is_stored) and a 16-bit one load the checkpoint as it is stored, so given the size of its
+    files (`stored_bytes`, ArchInfo.checkpoint_bytes) they take that size: an FP8, NVFP4, MXFP4 or AWQ checkpoint
+    holds far less than two bytes a parameter. A 16-bit precision is capped at two bytes a parameter, which a
+    float32 checkpoint is cast down to."""
     weights: Dict[str, int] = {}
     paths: Dict[str, str] = {}
     for p in wanted:
-        if p not in PREQUANTIZED:
+        if is_stored(p):
+            weights[p] = stored_bytes or int(params * 2)
+        elif p not in PREQUANTIZED:
             weights[p] = int(params * bytes_per_param(p))
             if stored_bytes and bytes_per_param(p) == 2:
                 weights[p] = min(weights[p], stored_bytes) if weights[p] else stored_bytes

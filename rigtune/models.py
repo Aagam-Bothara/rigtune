@@ -141,8 +141,10 @@ class ArchInfo(BaseModel):
     # keeps the weights_bytes worked out from it.
     checkpoint_bytes: Optional[int] = Field(default=None, exclude=True)
     # How the checkpoint is quantized as its config or hf_quant_config.json declares it (introspect.QuantFacts,
-    # described), None for an unquantized one. Not saved, like checkpoint_bytes.
+    # described), and the precision label it is served as stored under ("ckpt-fp8"); None for an unquantized one.
+    # Not saved, like checkpoint_bytes: a profile's configs carry the label.
     checkpoint_quant: Optional[str] = Field(default=None, exclude=True)
+    stored_as: Optional[str] = Field(default=None, exclude=True)
 
     @property
     def multimodal_arch(self) -> bool:

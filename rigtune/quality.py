@@ -27,6 +27,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import httpx
 
+from rigtune.quantized import is_stored
+
 logger = logging.getLogger(__name__)
 
 _WHITESPACE = re.compile(r"\s+")
@@ -39,8 +41,9 @@ PRECISION_RANK: Dict[str, int] = {
 
 
 def precision_rank(quant: str) -> int:
-    """Where a weight format sits from most to least faithful; unknown formats rank below every known one."""
-    return PRECISION_RANK.get(quant, 0)
+    """Where a weight format sits from most to least faithful; unknown formats rank below every known one. A
+    checkpoint its author quantized, served as stored, is the model's own weights and ranks with them."""
+    return PRECISION_RANK["bf16"] if is_stored(quant) else PRECISION_RANK.get(quant, 0)
 
 
 def normalise(text: str) -> str:

@@ -19,7 +19,7 @@ from rigtune.hfconfig import dtype_bytes, load_arch
 from rigtune.memory import HOST_TIER_RESERVE, MIN_SAFETY_MARGIN, HybridKV, MemoryModel, estimate
 from rigtune.models import ArchInfo, Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
 from rigtune.hardware import nvlink_between, sglang_python
-from rigtune.quantized import INT4_METHODS, as_stored, hf_weight_options
+from rigtune.quantized import INT4_METHODS, as_stored, hf_weight_options, stored_quant
 
 logger = logging.getLogger(__name__)
 
@@ -574,7 +574,7 @@ class SglangBackend(BaseBackend):
 
     def prepare(self, model: ModelSpec, hw: HardwareDescriptor, quants: Optional[List[str]] = None) -> PreparedModel:
         arch = load_arch(model)
-        wanted = as_stored(quants or self.precisions(hw), arch.checkpoint_quant, model.hf_id)
+        wanted = as_stored(quants or self.precisions(hw), arch, model.hf_id)
         weights, paths = hf_weight_options(model, arch.num_params or 0, wanted,
                                            lambda p: 1 if p == "fp8" else dtype_bytes(p), arch.checkpoint_bytes)
         return PreparedModel(spec=model, backend=self.name, arch=arch, hf_path=model.hf_id, hf_paths=paths,
@@ -691,7 +691,8 @@ class SglangBackend(BaseBackend):
     def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> List[Config]:
         ctxs = ctx_grid(model.arch.max_position_embeddings, min_ctx)
         out: List[Config] = []
-        for quant in [q for q in self.precisions(hw) if q in model.weights_bytes]:
+        stored = stored_quant(model.weights_bytes)
+        for quant in [stored] if stored else [q for q in self.precisions(hw) if q in model.weights_bytes]:
             for frac in (0.80, 0.88, 0.93):
                 for ctx in ctxs:
                     for batch in (16, 64, 256):
@@ -703,7 +704,7 @@ class SglangBackend(BaseBackend):
     def default_config(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> Config:
         return Config(
             backend=self.name,
-            quant=self.precisions(hw)[0],
+            quant=stored_quant(model.weights_bytes) or self.precisions(hw)[0],
             ctx=min(max(4096, min_ctx), model.arch.max_position_embeddings),
             batch=256,
             gpu_memory_utilization=0.88,
@@ -743,6 +744,7 @@ class SglangBackend(BaseBackend):
             args += ["--quantization", "fp8"]
         elif cfg.quant in ("bf16", "fp16"):
             args += ["--dtype", "bfloat16" if cfg.quant == "bf16" else "float16"]
+        # awq / gptq, and a checkpoint served as stored (ckpt-*): its quantization_config selects the kernel.
         if cfg.kv_dtype != "auto":
             args += ["--kv-cache-dtype", cfg.kv_dtype]
         if cfg.prefix_cache is False:

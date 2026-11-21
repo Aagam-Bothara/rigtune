@@ -11,6 +11,7 @@ from rigtune.backends.vllm import PAGED_KV_FRACTION, VllmBackend
 from rigtune.hfconfig import load_arch
 from rigtune.memory import MemoryModel, kv_cache_bytes
 from rigtune.models import Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
+from rigtune.quantized import stored_quant
 
 
 class VllmCpuBackend(VllmBackend):
@@ -53,14 +54,15 @@ class VllmCpuBackend(VllmBackend):
             model.arch.max_position_embeddings, min_ctx
         )[:1]
         return [
-            Config(backend=self.name, quant="bf16", ctx=ctx, batch=batch)
+            Config(backend=self.name, quant=stored_quant(model.weights_bytes) or "bf16", ctx=ctx, batch=batch)
             for ctx in ctxs
             for batch in (4, 16, 64)
         ]
 
     def default_config(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> Config:
         return Config(
-            backend=self.name, quant="bf16", ctx=min(max(4096, min_ctx), model.arch.max_position_embeddings), batch=16
+            backend=self.name, quant=stored_quant(model.weights_bytes) or "bf16",
+            ctx=min(max(4096, min_ctx), model.arch.max_position_embeddings), batch=16,
         )
 
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:

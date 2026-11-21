@@ -53,6 +53,7 @@ from rigtune.calibrate.paired import certifies, items_needed, mcnemar_p, score_b
 from rigtune.evalset import EvalItem
 from rigtune.models import Config, EvalSetInfo, PrecisionAccuracy
 from rigtune.quality import precision_rank
+from rigtune.quantized import is_stored
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,9 @@ FAITHFUL = frozenset({"fp32", "bf16", "fp16", "fp8", "Q8_0"})
 
 
 def faithful(quant: str) -> bool:
-    return quant in FAITHFUL
+    """A FAITHFUL format, or a checkpoint its author quantized served as stored: the model asked for is that
+    checkpoint, so it is its own weights, not a copy somebody else made of them."""
+    return quant in FAITHFUL or is_stored(quant)
 
 
 def pass_wall_seconds(items: int) -> float:

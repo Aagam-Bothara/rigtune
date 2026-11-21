@@ -39,7 +39,7 @@ from rigtune.models import (
     Profile,
     TrialResult,
 )
-from rigtune.quantized import PREQUANTIZED
+from rigtune.quantized import PREQUANTIZED, STORED, is_stored
 from rigtune.selector import select_backends
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,8 @@ def allowed_quants(supported: List[str], quants: Optional[List[str]]) -> Optiona
     if not supported:
         return None
     wanted = quants if quants is not None else [AUTO_QUANT]
-    return [q for q in supported if q in wanted or (AUTO_QUANT in wanted and q not in PREQUANTIZED)]
+    return [q for q in supported if q in wanted or (AUTO_QUANT in wanted and q not in PREQUANTIZED)
+            or (is_stored(q) and any(s in wanted for s in STORED))]  # served as stored: in place of 16-bit
 
 
 @dataclass
@@ -766,7 +767,7 @@ def _warn_if_only_quantized_fits(plan, opts) -> None:
     if opts.quants is not None or opts.eval_set:  # the user chose the list, or the gate is trying them
         return
     feasible = plan.all_feasible
-    if not feasible or any(c.quant in FULL_PRECISION for c in feasible):
+    if not feasible or any(c.quant in FULL_PRECISION or is_stored(c.quant) for c in feasible):
         return
     logging.getLogger(__name__).warning(
         "%s does not fit this GPU at full precision, so calibration is limited to %s. The Hub's pre-quantized "
@@ -893,7 +894,8 @@ def prepare_and_plan(
             prepared = backend.prepare(spec, hw, quants=allowed)
             if prepared.arch.checkpoint_quant:
                 result.notes.append(f"{name}: {spec.hf_id} is stored quantized ({prepared.arch.checkpoint_quant}), "
-                                    "so it is served as stored and no other precision was tried")
+                                    f"so it is served as stored ({prepared.arch.stored_as}) and no other precision "
+                                    "was tried")
             prepared.drafts_mode = "verified" if verified else "table"
             from rigtune.pairing import hub_off
             if speculative_all and not (prepared.drafts_mode == "verified" and hub_off(hub)):

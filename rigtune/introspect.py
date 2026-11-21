@@ -89,6 +89,11 @@ class MtpHead:
         return f"{self.layers} layer{'s' if self.layers != 1 else ''} ({self.config_key}), {self.tensors} tensors{size}"
 
 
+# The precision label of a checkpoint served as its author quantized it ("ckpt-fp8", "ckpt-nvfp4"), apart from
+# rigtune's own precisions: "fp8" is vLLM or SGLang quantizing 16-bit weights, "awq" a Hub copy rigtune found.
+STORED_PREFIX = "ckpt-"
+
+
 @dataclass(frozen=True)
 class QuantFacts:
     method: str  # quant_method ("fp8", "awq", "gptq", "compressed-tensors", ...) or "modelopt"
@@ -107,6 +112,27 @@ class QuantFacts:
         if self.kv_scheme:
             parts.append(f"KV cache {self.kv_scheme}")
         return ", ".join(parts)
+
+    @property
+    def label(self) -> str:
+        """STORED_PREFIX and a short name: ModelOpt's algorithm, a compressed-tensors scheme by its format or its
+        bits ("w8a8", "w4a16": activations not quantized stay 16-bit), else the quant_method."""
+        fmt = (self.fmt or "").lower()
+        if self.method == "modelopt" and fmt:
+            short = fmt
+        elif self.method in ("compressed-tensors", "compressed_tensors"):
+            named = next((n for n in ("nvfp4", "mxfp4", "mxfp8") if n in fmt), None)
+            if named:
+                short = named
+            elif fmt.startswith("float") and self.weight_bits == 8:
+                short = "fp8"
+            elif self.weight_bits:
+                short = f"w{self.weight_bits}a{self.activation_bits or 16}"
+            else:
+                short = "compressed-tensors"
+        else:
+            short = self.method
+        return STORED_PREFIX + re.sub(r"[^a-z0-9_.-]+", "-", short.lower())
 
 
 @dataclass(frozen=True)

@@ -38,6 +38,7 @@ from rigtune.models import (
     Profile,
     TrialMetrics,
 )
+from rigtune.quantized import STORED, stored_quant
 
 logger = logging.getLogger(__name__)
 
@@ -851,7 +852,10 @@ def compare(
         if reason is not None:
             skipped.append(SkippedRow(label=label, kind=row.kind, source=row.source, reason=reason))
             continue
-        refs[label] = row.config
+        stored = stored_quant(models[row.config.backend].weights_bytes)
+        # The model's own weights at 16 bits are, for a checkpoint its author quantized, the checkpoint as stored.
+        refs[label] = (row.config.model_copy(update={"quant": stored}) if stored and row.config.quant in STORED
+                       else row.config)
         added[label] = row
 
     sink = RequestLog(requests_dir) if requests_dir is not None else None

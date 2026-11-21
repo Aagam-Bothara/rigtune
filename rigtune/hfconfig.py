@@ -90,6 +90,7 @@ def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
         has_mm_config=mm,
         mtp_layers=mtp[0] if mtp else 0,
         checkpoint_quant=quant.describe() if quant else None,
+        stored_as=quant.label if quant else None,
         **hybrid_layout(cfg, layers, dtype),
     )
 
@@ -318,8 +319,8 @@ def hub_weights(spec: ModelSpec, token: Optional[str] = None
 HF_QUANT = "hf_quant_config.json"  # ModelOpt's own file, which some of its exports declare their quantization in only
 
 
-def _modelopt_quant(read: Callable[[], Union[str, Path]]) -> Optional[str]:
-    """What hf_quant_config.json declares (introspect.quantization), described; None when it cannot be read."""
+def _modelopt_quant(arch: ArchInfo, read: Callable[[], Union[str, Path]]) -> None:
+    """Set the checkpoint's quantization from hf_quant_config.json (introspect.quantization); unset when unreadable."""
     from rigtune.introspect import quantization
 
     try:
@@ -327,8 +328,9 @@ def _modelopt_quant(read: Callable[[], Union[str, Path]]) -> Optional[str]:
             quant = quantization(None, json.load(fh))
     except Exception as exc:
         logger.debug("could not read %s: %s", HF_QUANT, exc)
-        return None
-    return quant.describe() if quant else None
+        return
+    if quant:
+        arch.checkpoint_quant, arch.stored_as = quant.describe(), quant.label
 
 
 def hub_listing(info: Any) -> Dict[str, Optional[int]]:
@@ -384,7 +386,7 @@ def load_arch(spec: ModelSpec, token: Optional[str] = None) -> ArchInfo:
     if os.path.isdir(spec.hf_id):
         arch.checkpoint_bytes = local_checkpoint_bytes(spec.hf_id)
         if arch.checkpoint_quant is None and os.path.isfile(os.path.join(spec.hf_id, HF_QUANT)):
-            arch.checkpoint_quant = _modelopt_quant(lambda: os.path.join(spec.hf_id, HF_QUANT))
+            _modelopt_quant(arch, lambda: os.path.join(spec.hf_id, HF_QUANT))
         return arch
     exact, arch.checkpoint_bytes, listing = hub_weights(spec, token=token)
     if exact:
@@ -392,6 +394,5 @@ def load_arch(spec: ModelSpec, token: Optional[str] = None) -> ArchInfo:
     if arch.checkpoint_quant is None and HF_QUANT in listing:
         from huggingface_hub import hf_hub_download
 
-        arch.checkpoint_quant = _modelopt_quant(lambda: hf_hub_download(spec.hf_id, HF_QUANT, revision=spec.revision,
-                                                                        token=token))
+        _modelopt_quant(arch, lambda: hf_hub_download(spec.hf_id, HF_QUANT, revision=spec.revision, token=token))
     return arch
