@@ -1,4 +1,4 @@
-"""Recording a start-up never costs a trial or leaves an engine running, and reads vLLM's lines as it prints them."""
+"""Recording a start-up never costs a trial or leaves an engine running, and reads the lines as the engine prints them."""
 
 from __future__ import annotations
 
@@ -49,8 +49,13 @@ def test_a_log_that_cannot_be_read_costs_the_record_not_the_trial(monkeypatch):
     assert res.startup.seconds == 60.0 and res.startup.parsed == []  # timed; nothing claimed from the log
 
 
-def test_another_engines_log_is_not_read_at_all(monkeypatch):
+def test_an_sglang_log_is_read_after_the_stop_too(monkeypatch):
     res = _run("sglang", monkeypatch)
+    assert res.ok and _Unreadable.order == ["stop", "read"] and res.startup.parsed == []
+
+
+def test_another_engines_log_is_not_read_at_all(monkeypatch):
+    res = _run("llamacpp", monkeypatch)
     assert res.ok and _Unreadable.order == ["stop"] and res.startup.seconds == 60.0
 
 

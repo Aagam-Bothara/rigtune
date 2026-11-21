@@ -44,6 +44,7 @@ from rigtune.memlog import (
     device_used_mb,
     merge,
     parse_acceptance,
+    STARTUP_LOGS,
     parse_log,
     parse_startup,
 )
@@ -638,7 +639,7 @@ class SubprocessTrialRunner:
             if proc is not None:
                 proc.stop()  # first, and whatever follows: nothing here may leave an engine holding the GPU
                 log = ""
-                if cfg.backend == "vllm":  # the only engine whose start-up lines are known (memlog.parse_startup)
+                if cfg.backend in STARTUP_LOGS:  # the engines whose start-up lines are known
                     try:  # its file outlives the process; a log that cannot be read costs the record, not the trial
                         log = proc.tail_log(1_000_000)
                     except Exception as exc:

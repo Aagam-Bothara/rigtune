@@ -300,6 +300,32 @@ _REWRITE = re.compile(r"; setting (cudagraph_mode=[A-Z_]+)")
 _REWRITE_TO = re.compile(r"Setting cudagraph_mode to ([A-Z_]+)")
 
 
+# SGLang's capture lines, v0.5.23 (model_runner_components/cuda_graph_setup.py and speculative/*_worker_v2.py), one
+# per graph set ("target prefill", "target verify", "draft decode", ...), each with its own time and memory, the same
+# figures as its "Engine startup timings" summary (A100 and A40 sessions, 16-18 Nov 2026):
+#   "Capture <set> CUDA graph end. [bs=[...], ]elapsed=%.2f s, mem usage=%.2f GB, avail mem=%.2f GB."
+# GB is GiB there (get_available_gpu_memory divides by 1 << 30). Each rank logs its own, prefixed " TP<rank>".
+_SGLANG_CAPTURE = re.compile(r"Capture [A-Za-z_ ]+ CUDA graph end\. (?:bs=\[[\d, ]*\], )?(?:step=\d+, )?"
+                             r"elapsed=(\d+\.\d+) s, mem usage=(-?\d+\.\d+) GB")
+STARTUP_LOGS = ("vllm", "sglang")  # the engines whose start-up lines parse_startup knows
+
+
+def _parse_sglang_startup(text: str) -> Dict[str, object]:
+    """SGLang's graph sets, summed per rank; the slowest rank bounds the start-up."""
+    ranks: Dict[Optional[int], List[float]] = {}
+    lines = 0
+    for line in text.splitlines():
+        if m := _SGLANG_CAPTURE.search(line):
+            seconds, gib = ranks.get(_sglang_rank(line), [0.0, 0.0])
+            ranks[_sglang_rank(line)] = [seconds + float(m.group(1)), gib + float(m.group(2))]
+            lines += 1
+    if not ranks:
+        return {"parsed": []}
+    seconds, gib = max(ranks.values())
+    return {"capture_s": round(seconds, 2), "cudagraph_gib": round(gib, 2), "capture_lines": lines,
+            "parsed": ["capture"]}
+
+
 def _per_part(rx: re.Pattern, text: str) -> Dict[str, float]:
     """Seconds per compiled part (the backbone, an MTP head) from a line `rx` matches as (prefix, seconds): the
     slowest worker's, as every tensor-parallel worker prints its own."""
@@ -312,12 +338,15 @@ def _per_part(rx: re.Pattern, text: str) -> Dict[str, float]:
 def parse_startup(backend: str, text: str) -> Dict[str, object]:
     """What an engine's log says its start-up cost: the fields of models.StartupCost other than `seconds`.
 
-    Only vLLM's lines are known; another engine's log, an empty log and a log cut before these lines all give
-    nothing, with `parsed` empty to say so. A value is never guessed: no capture line leaves the capture unknown,
-    and without a compile line or a cache line `compile_cached` stays None rather than False."""
+    vLLM's lines and SGLang's capture lines are known (STARTUP_LOGS); another engine's log, an empty log and a log
+    cut before these lines all give nothing, with `parsed` empty to say so. A value is never guessed: no capture
+    line leaves the capture unknown, and without a compile line or a cache line `compile_cached` stays None rather
+    than False."""
     out: Dict[str, object] = {"parsed": []}
-    if backend != "vllm" or not text:
+    if backend not in STARTUP_LOGS or not text:
         return out
+    if backend == "sglang":
+        return _parse_sglang_startup(text)
     parsed: List[str] = []
     # Per worker process: its passes summed, and the memory of its last pass, the graphs it keeps. The slowest worker
     # bounds the start-up. A line without a process tag cannot be placed, so it counts as a worker of its own.

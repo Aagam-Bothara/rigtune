@@ -1,7 +1,7 @@
-"""vLLM's start-up lines are read from its log into the trial's start-up record, and nothing is guessed.
+"""vLLM's and SGLang's start-up lines are read from the log into the trial's start-up record, and nothing is guessed.
 
-Each line is matched on its whole phrase with its unit. The fixtures are the format strings of vLLM v0.29.0 and
-v0.33.0 (cited in rigtune/memlog.py) filled in; none of these lines has been read from a real log yet.
+Each line is matched on its whole phrase with its unit. The fixtures are the format strings cited in rigtune/memlog.py
+filled in, and lines copied from real logs where the comment above them says so.
 """
 
 from __future__ import annotations
@@ -185,10 +185,33 @@ def test_empty_or_truncated_log_parses_nothing_and_says_so(text):
     assert parse_startup("vllm", text) == {"parsed": []}
 
 
-def test_sglang_log_gets_seconds_only():
-    """No SGLang start-up line has been read from a real log, so none is matched, even one shaped like vLLM's."""
+# From the A100 session's SGLang 0.5.23 MTP launch of Qwen3.5-9B (18 Nov 2026), one GPU, so no rank prefix.
+SGLANG_MTP = [
+    "[2026-11-18 05:39:19] Capture target prefill CUDA graph end. elapsed=19.15 s, mem usage=1.91 GB, avail mem=8.58 GB.",
+    "[2026-11-18 05:39:24] Capture target verify CUDA graph end. bs=[1, 2, 3, 4, 8, 52, 53], elapsed=5.42 s, "
+    "mem usage=0.37 GB, avail mem=8.20 GB.",
+    "[2026-11-18 05:39:26] Capture draft prefill CUDA graph end. elapsed=1.53 s, mem usage=0.15 GB, avail mem=8.06 GB.",
+    "[2026-11-18 05:39:29] Capture draft decode CUDA graph end. elapsed=3.48 s, mem usage=0.50 GB, avail mem=7.56 GB.",
+    "[2026-11-18 05:39:31] Capture draft extend CUDA graph end. elapsed=1.20 s, mem usage=0.27 GB, avail mem=7.29 GB.",
+]
+
+
+def test_sglang_graph_sets_are_summed():
+    got = parse_startup("sglang", "\n".join(SGLANG_MTP))
+    assert (got["capture_s"], got["cudagraph_gib"], got["capture_lines"]) == (30.78, 3.2, 5)
+    assert got["parsed"] == ["capture"]
+
+
+def test_sglang_ranks_are_summed_apart_and_the_slowest_kept():
+    tp = [line.replace("] Capture", f" TP{r}] Capture") for line in SGLANG_MTP[:2] for r in (0, 1)]
+    tp[1] = tp[1].replace("elapsed=19.15", "elapsed=20.00")  # rank 1's prefill graphs took longer
+    got = parse_startup("sglang", "\n".join(tp))
+    assert (got["capture_s"], got["cudagraph_gib"], got["capture_lines"]) == (25.42, 2.28, 4)
+
+
+def test_vllm_lines_in_an_sglang_log_and_other_engines_are_not_read():
     assert parse_startup("sglang", _log(CAPTURE, MISS_033)) == {"parsed": []}
-    assert parse_startup("llamacpp", _log(CAPTURE)) == {"parsed": []}
+    assert parse_startup("llamacpp", _log(CAPTURE, SGLANG_MTP[0])) == {"parsed": []}
 
 
 class _Logged(_Live):

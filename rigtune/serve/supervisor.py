@@ -172,13 +172,13 @@ class Supervisor:
 
     def _startup_record(self, process: Process) -> StartupCost:
         """The start-up record calibration keeps for a trial, read from this start's log."""
-        from rigtune.memlog import parse_startup
+        from rigtune.memlog import STARTUP_LOGS, parse_startup
 
         started, ready = getattr(process, "started_at", None), getattr(process, "ready_at", None)
         fields = {}
-        if self.cfg.backend == "vllm":  # the only engine whose start-up lines are known (memlog.parse_startup)
+        if self.cfg.backend in STARTUP_LOGS:  # the engines whose start-up lines are known
             try:  # a log that cannot be read costs the report, never the server
-                fields = parse_startup("vllm", process.tail_log(1_000_000))
+                fields = parse_startup(self.cfg.backend, process.tail_log(1_000_000))
             except Exception as exc:
                 logger.warning("start-up log not read: %s", type(exc).__name__)
         seconds = round(ready - started, 3) if started is not None and ready is not None else None
