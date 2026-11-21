@@ -29,7 +29,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -118,10 +118,8 @@ def _scrub(value: Any) -> Any:
     return value
 
 
-def parse(engine: str, stdout: str, why_missing: str) -> EngineFacts:
-    """EngineFacts from a probe's output: the marked lines, whatever else the engine printed around them. A key with
-    no line gets `why_missing` as its error; an empty answer is no answer. Paths are cut out of every error and
-    default, so the answers kept on disk, and the records made from them, name no folder."""
+def marked(stdout: str) -> Tuple[Dict[str, Any], Dict[str, str]]:
+    """(answers, errors) from the marked lines of a probe's output, whatever else the engine printed around them."""
     answers: Dict[str, Any] = {}
     errors: Dict[str, str] = {}
     for line in (stdout or "").splitlines():
@@ -137,6 +135,14 @@ def parse(engine: str, stdout: str, why_missing: str) -> EngineFacts:
             errors[str(item["key"])] = str(item["error"])
         else:
             answers[str(item["key"])] = item.get("value")
+    return answers, errors
+
+
+def parse(engine: str, stdout: str, why_missing: str) -> EngineFacts:
+    """EngineFacts from a probe's output (marked). A key with no line gets `why_missing` as its error; an empty answer
+    is no answer. Paths are cut out of every error and default, so the answers kept on disk, and the records made
+    from them, name no folder."""
+    answers, errors = marked(stdout)
     data: Dict[str, Any] = {"engine": engine}
     for key in KEYS[engine]:
         if key in errors:
@@ -168,10 +174,9 @@ def _text(output: Any) -> str:
     return output or ""
 
 
-def run_probe(engine: str, python: str, timeout: float = PROBE_TIMEOUT,
-              run: Callable[..., Any] = subprocess.run, clock: Callable[[], float] = time.monotonic) -> EngineFacts:
-    """Ask `python` what `engine` offers. Never raises: a probe that cannot start, crashes or runs out of time returns
-    facts with what it answered (possibly nothing) and an error for every other key.
+def run_script(python: str, script: Path, args: Sequence[str] = (), timeout: float = PROBE_TIMEOUT,
+               run: Callable[..., Any] = subprocess.run) -> Tuple[str, str]:
+    """(stdout, why a key has no answer) of a probe script run by `python`. Never raises.
 
     It runs in rigtune's environment, which the engine inherits, so it imports what a launch would (PYTHONPATH
     included), with CUDA_VISIBLE_DEVICES="" so that nothing it imports can take a GPU, and from an empty directory, as
@@ -179,21 +184,25 @@ def run_probe(engine: str, python: str, timeout: float = PROBE_TIMEOUT,
     the current one in the engine's place. (The script's own folder, not the current one, is first on its
     sys.path.)"""
     env = dict(os.environ, CUDA_VISIBLE_DEVICES="")
-    started = clock()
-    stdout, why = "", ""
     try:
         with tempfile.TemporaryDirectory(prefix="rigtune-probe-") as empty:
-            out = run([python, str(script_path(engine))], capture_output=True, timeout=timeout, cwd=empty, env=env)
-        stdout = _text(out.stdout)
+            out = run([python, str(script), *args], capture_output=True, timeout=timeout, cwd=empty, env=env)
         if out.returncode != 0:
             tail = (_text(out.stderr).strip().splitlines() or ["no output"])[-1]
-            why = f"the probe exited {out.returncode}: {tail[:200]}"
-        else:
-            why = "not answered"
+            return _text(out.stdout), f"the probe exited {out.returncode}: {tail[:200]}"
+        return _text(out.stdout), "not answered"
     except subprocess.TimeoutExpired as exc:
-        stdout, why = _text(exc.stdout), f"{TIMED_OUT} {timeout:g} s"
+        return _text(exc.stdout), f"{TIMED_OUT} {timeout:g} s"
     except Exception as exc:  # OSError: no such interpreter, not executable
-        why = f"the probe could not run: {type(exc).__name__}: {exc}"[:300]
+        return "", f"the probe could not run: {type(exc).__name__}: {exc}"[:300]
+
+
+def run_probe(engine: str, python: str, timeout: float = PROBE_TIMEOUT,
+              run: Callable[..., Any] = subprocess.run, clock: Callable[[], float] = time.monotonic) -> EngineFacts:
+    """Ask `python` what `engine` offers (run_script). Never raises: a probe that cannot start, crashes or runs out of
+    time returns facts with what it answered (possibly nothing) and an error for every other key."""
+    started = clock()
+    stdout, why = run_script(python, script_path(engine), timeout=timeout, run=run)
     facts = parse(engine, stdout, why)
     facts.probed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     facts.seconds = round(clock() - started, 1)
