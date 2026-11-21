@@ -207,13 +207,15 @@ def vllm_hybrid_kv_any_depth(cfg: Config, arch: ArchInfo, default_batched_tokens
 
 
 def vllm_mtp_extra_weights(cfg: Config, model: PreparedModel) -> int:
-    """Weight bytes an MTP setting adds to the plan's. None for a Hub checkpoint: load_arch takes its parameter count
-    from the Hub's safetensors total, which already holds the mtp.* tensors (vLLM skips them without MTP). For a
-    local checkpoint directory the count is estimated from the config and leaves the head out, so its bytes
-    (spec_bytes["mtp"]) are added. Qwen3_5MTP.load_weights also loads its own copy of the embedding and output head
-    before v1/spec_decode/llm_base_proposer.py load_model swaps in the target's (_maybe_share_embeddings, _maybe_share_lm_head): a
-    transient of shared_bytes at load, which is not planned (docs/benchmarks.md lists it for the GPU run)."""
-    if speculative.own_head(cfg.spec_decode) and os.path.isdir(model.spec.hf_id):
+    """Weight bytes an MTP setting adds to the plan's. None when the target's weights were sized from the checkpoint's
+    files or the Hub's safetensors total, which hold the mtp.* tensors already (vLLM skips them without MTP). Only
+    for a local checkpoint directory whose files could not be read is the count estimated from the config, leaving
+    the head out, so its bytes (spec_bytes["mtp"]) are added. Qwen3_5MTP.load_weights also loads its own copy of the
+    embedding and output head before v1/spec_decode/llm_base_proposer.py load_model swaps in the target's
+    (_maybe_share_embeddings, _maybe_share_lm_head): a transient of shared_bytes at load, which is not planned
+    (docs/benchmarks.md lists it for the GPU run)."""
+    if (speculative.own_head(cfg.spec_decode) and os.path.isdir(model.spec.hf_id)
+            and model.arch.checkpoint_bytes is None):
         return int(model.spec_bytes.get(speculative.MTP_KEY) or 0)
     from rigtune.pairing import extra_weights
     return extra_weights(cfg, model)

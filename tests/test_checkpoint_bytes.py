@@ -131,6 +131,52 @@ def test_a_pair_is_sized_by_its_index_and_an_unreadable_index_is_unread(tmp_path
     assert files.size_bytes is None and files.sha == "b" * 40  # the read stands; only its size is unread
 
 
+def _safetensors(path, tensors):
+    """A real safetensors file: {name: (dtype, shape)}, each tensor zero-filled."""
+    import math
+    import struct
+
+    header, offset = {}, 0
+    for name, (dtype, shape) in tensors.items():
+        size = math.prod(shape) * {"BF16": 2, "F32": 4}[dtype]
+        header[name] = {"dtype": dtype, "shape": shape, "data_offsets": [offset, offset + size]}
+        offset += size
+    raw = json.dumps(header).encode()
+    path.write_bytes(struct.pack("<Q", len(raw)) + raw + b"\0" * offset)
+
+
+def _local(tmp_path, dtype="BF16"):
+    """A local checkpoint: 64 parameters of body and a 16-parameter MTP head, which the config's estimate omits."""
+    (tmp_path / "config.json").write_text(json.dumps({**LLAMA_3B_CONFIG, "torch_dtype": dtype.lower()}))
+    _safetensors(tmp_path / "model.safetensors", {"model.layers.0.w": (dtype, [8, 8]), "mtp.layers.0.w": (dtype, [4, 4])})
+    return ModelSpec(hf_id=str(tmp_path))
+
+
+def test_a_local_checkpoint_is_counted_from_its_files_mtp_head_included(tmp_path):
+    arch = load_arch(_local(tmp_path))
+    assert arch.num_params == 80 and arch.checkpoint_bytes == (tmp_path / "model.safetensors").stat().st_size
+
+
+def test_when_the_headers_cannot_be_counted_the_size_over_the_dtype_stands_in(tmp_path):
+    spec = _local(tmp_path)
+    (tmp_path / "extra.safetensors").write_bytes(b"not a safetensors file")  # the strict count gives up
+    arch = load_arch(spec)
+    assert arch.num_params == arch.checkpoint_bytes // 2 > 80
+
+
+@pytest.mark.parametrize("files_read, added", [(True, 0), (False, 512)])
+def test_vllm_adds_a_local_mtp_head_only_when_the_files_were_not_read(tmp_path, files_read, added):
+    from rigtune.backends.vllm import vllm_mtp_extra_weights
+    from rigtune.models import Config, PreparedModel
+
+    arch = load_arch(_local(tmp_path))
+    if not files_read:
+        arch.checkpoint_bytes = None
+    model = PreparedModel(spec=ModelSpec(hf_id=str(tmp_path)), backend="vllm", arch=arch,
+                          spec_repos={"mtp": str(tmp_path)}, spec_bytes={"mtp": 512})
+    assert vllm_mtp_extra_weights(Config(backend="vllm", quant="bf16", spec_decode="mtp:1"), model) == added
+
+
 def _weights(params, stored, wanted=("bf16", "fp8")):
     return hf_weight_options(ModelSpec(hf_id="m"), params, list(wanted),
                              lambda p: 1 if p == "fp8" else 2, stored)[0]

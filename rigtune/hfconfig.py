@@ -384,9 +384,20 @@ def resolve_revision(spec: ModelSpec, fetch: Optional[Callable[[ModelSpec], Opti
 def load_arch(spec: ModelSpec, token: Optional[str] = None) -> ArchInfo:
     arch = arch_from_config(fetch_config(spec, token=token))
     if os.path.isdir(spec.hf_id):
-        arch.checkpoint_bytes = local_checkpoint_bytes(spec.hf_id)
-        if arch.checkpoint_quant is None and os.path.isfile(os.path.join(spec.hf_id, HF_QUANT)):
-            _modelopt_quant(arch, lambda: os.path.join(spec.hf_id, HF_QUANT))
+        root = Path(spec.hf_id)
+        arch.checkpoint_bytes = local_checkpoint_bytes(root)
+        if arch.checkpoint_quant is None and (root / HF_QUANT).is_file():
+            _modelopt_quant(arch, lambda: root / HF_QUANT)
+        if arch.checkpoint_quant is None:  # a quantized one is sized by its files alone (quantized.as_stored)
+            # From the files, like the Hub's count, rather than the dense estimate above, which leaves out an MoE's
+            # experts and an MTP head: exact from the headers, else the files' size over the config's dtype.
+            from rigtune.pairing import _local_params
+
+            counted = _local_params(root, sorted(root.glob("*.safetensors")))
+            if counted:
+                arch.num_params = counted
+            elif arch.checkpoint_bytes:
+                arch.num_params = arch.checkpoint_bytes // dtype_bytes(arch.torch_dtype)
         return arch
     exact, arch.checkpoint_bytes, listing = hub_weights(spec, token=token)
     if exact:
