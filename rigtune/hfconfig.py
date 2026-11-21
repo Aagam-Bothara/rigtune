@@ -7,7 +7,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
 from rigtune.models import ArchInfo, ModelSpec
 
@@ -245,18 +245,68 @@ def fetch_config(spec: ModelSpec, token: Optional[str] = None) -> Dict[str, Any]
         return json.load(fh)
 
 
-def safetensors_param_count(spec: ModelSpec, token: Optional[str] = None) -> Optional[int]:
-    """Exact parameter count from the hub's safetensors metadata, if published."""
-    try:
-        from huggingface_hub import HfApi
+INDEX = "model.safetensors.index.json"
 
-        info = HfApi(token=token).model_info(spec.hf_id, revision=spec.revision)
-        st = getattr(info, "safetensors", None)
-        if st and getattr(st, "total", None):
-            return int(st.total)
+
+def loaded_bytes(sizes: Dict[str, Optional[int]], index_files: Optional[Iterable[str]]) -> Optional[int]:
+    """Bytes of the safetensors files an engine loads, given each file's size by its path in the checkpoint. With an
+    index, the files it maps tensors to and no others: both engines filter by it, which leaves out a second copy of
+    the weights such as gpt-oss's original/model.safetensors (SGLang model_loader/loader.py and vLLM's default
+    loader, filter_duplicate_safetensors_files). Without one, every safetensors file at the top level, the folder the
+    engines glob. None when a file is missing or has no size: a partial sum would plan too little memory."""
+    files = list(index_files) if index_files is not None else [n for n in sizes if "/" not in n]
+    if not files or any(not sizes.get(f) for f in files):
+        return None
+    return int(sum(sizes[f] for f in files))  # type: ignore[misc]
+
+
+def _index_files(path: Union[str, Path]) -> list:
+    with open(path, "r", encoding="utf-8") as fh:
+        return sorted(set((json.load(fh).get("weight_map") or {}).values()))
+
+
+def local_checkpoint_bytes(root: Union[str, Path]) -> Optional[int]:
+    """loaded_bytes for a local checkpoint directory; None when it cannot be read."""
+    root = Path(root)
+    try:
+        sizes: Dict[str, Optional[int]] = {f.name: f.stat().st_size for f in root.glob("*.safetensors")}
+        index = root / INDEX
+        files = _index_files(index) if index.is_file() else None
+        for name in files or []:
+            if name not in sizes and (root / name).is_file():
+                sizes[name] = (root / name).stat().st_size
+        return loaded_bytes(sizes, files)
+    except (OSError, ValueError, AttributeError) as exc:
+        logger.debug("could not size the checkpoint in %s: %s", root, exc)
+        return None
+
+
+def hub_weights(spec: ModelSpec, token: Optional[str] = None) -> Tuple[Optional[int], Optional[int]]:
+    """(parameter count, loaded_bytes) for a Hub model from one model_info call, plus its index when it has one.
+    The count is the Hub's safetensors total, which counts elements, so it says nothing of bytes: an FP8 checkpoint
+    holds one byte a parameter, and the Hub counts AWQ's packed int4 values unpacked but NVFP4's packed. Each is None
+    when the Hub does not say."""
+    from huggingface_hub import HfApi, hf_hub_download
+
+    try:
+        info = HfApi(token=token).model_info(spec.hf_id, revision=spec.revision, files_metadata=True)
     except Exception as exc:
         logger.debug("safetensors metadata unavailable for %s: %s", spec.hf_id, exc)
-    return None
+        return None, None
+    st = getattr(info, "safetensors", None)
+    params = int(st.total) if st and getattr(st, "total", None) else None
+    names = {getattr(s, "rfilename", ""): getattr(s, "size", None) for s in (getattr(info, "siblings", None) or [])}
+    sizes = {n: size for n, size in names.items() if n.endswith(".safetensors")}
+    files = None
+    if INDEX in names:
+        sha = getattr(info, "sha", None)
+        try:
+            files = _index_files(hf_hub_download(spec.hf_id, INDEX, revision=sha if isinstance(sha, str) else
+                                                 spec.revision, token=token))
+        except Exception as exc:  # a gated repository answers model_info but not a download without a token
+            logger.debug("could not read %s of %s: %s", INDEX, spec.hf_id, exc)
+            return params, None
+    return params, loaded_bytes(sizes, files)
 
 
 def snapshot_revision(spec: ModelSpec, cache_dir: Union[str, Path, None] = None) -> Optional[str]:
@@ -304,7 +354,10 @@ def resolve_revision(spec: ModelSpec, fetch: Optional[Callable[[ModelSpec], Opti
 
 def load_arch(spec: ModelSpec, token: Optional[str] = None) -> ArchInfo:
     arch = arch_from_config(fetch_config(spec, token=token))
-    exact = safetensors_param_count(spec, token=token)
+    if os.path.isdir(spec.hf_id):
+        arch.checkpoint_bytes = local_checkpoint_bytes(spec.hf_id)
+        return arch
+    exact, arch.checkpoint_bytes = hub_weights(spec, token=token)
     if exact:
         arch.num_params = exact
     return arch

@@ -745,7 +745,7 @@ class VllmBackend(BaseBackend):
     def prepare(self, model: ModelSpec, hw: HardwareDescriptor, quants: Optional[List[str]] = None) -> PreparedModel:
         arch = load_arch(model)
         weights, paths = hf_weight_options(model, arch.num_params or 0, list(quants or self.precisions(hw)),
-                                           lambda p: 1 if p == "fp8" else dtype_bytes(p))
+                                           lambda p: 1 if p == "fp8" else dtype_bytes(p), arch.checkpoint_bytes)
         return PreparedModel(spec=model, backend=self.name, arch=arch, hf_path=model.hf_id, hf_paths=paths,
                              weights_bytes=weights)
 

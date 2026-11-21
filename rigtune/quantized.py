@@ -144,14 +144,21 @@ def find_prequantized_repos(
 
 
 def hf_weight_options(spec: ModelSpec, params: int, wanted: Sequence[str],
-                      bytes_per_param: Callable[[str], float]) -> Tuple[Dict[str, int], Dict[str, str]]:
+                      bytes_per_param: Callable[[str], float],
+                      stored_bytes: Optional[int] = None) -> Tuple[Dict[str, int], Dict[str, str]]:
     """(weights_bytes, repo per quant) for a Hugging Face backend: full/fp8 from the base repo,
-    4-bit and W8A8 from whatever pre-quantized repository the Hub has."""
+    4-bit and W8A8 from whatever pre-quantized repository the Hub has.
+
+    A 16-bit precision loads the checkpoint as it is stored, so given the size of its files (`stored_bytes`,
+    ArchInfo.checkpoint_bytes) it takes that size: an FP8, NVFP4, MXFP4 or AWQ checkpoint holds far less than two
+    bytes a parameter. Capped at two bytes a parameter, which a float32 checkpoint is cast down to."""
     weights: Dict[str, int] = {}
     paths: Dict[str, str] = {}
     for p in wanted:
         if p not in PREQUANTIZED:
             weights[p] = int(params * bytes_per_param(p))
+            if stored_bytes and bytes_per_param(p) == 2:
+                weights[p] = min(weights[p], stored_bytes) if weights[p] else stored_bytes
     pre = [p for p in wanted if p in PREQUANTIZED]
     if pre:
         try:

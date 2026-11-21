@@ -137,6 +137,9 @@ class ArchInfo(BaseModel):
     # (rigtune.introspect.mtp_layers); 0 for none. The planner counts them only for an "mtp" speculation setting,
     # which is offered only once the head's weights were found. Defaulted, so older profiles load.
     mtp_layers: int = 0
+    # Bytes of the safetensors files the engines load (hfconfig.loaded_bytes); None when unknown. Not saved: a profile
+    # keeps the weights_bytes worked out from it.
+    checkpoint_bytes: Optional[int] = Field(default=None, exclude=True)
 
     @property
     def multimodal_arch(self) -> bool:
