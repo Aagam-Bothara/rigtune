@@ -19,7 +19,7 @@ from rigtune.hfconfig import dtype_bytes, load_arch
 from rigtune.memory import HOST_TIER_RESERVE, MIN_SAFETY_MARGIN, HybridKV, MemoryModel, estimate
 from rigtune.models import ArchInfo, Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
 from rigtune.hardware import nvlink_between, sglang_python
-from rigtune.quantized import INT4_METHODS, hf_weight_options
+from rigtune.quantized import INT4_METHODS, as_stored, hf_weight_options
 
 logger = logging.getLogger(__name__)
 
@@ -574,7 +574,8 @@ class SglangBackend(BaseBackend):
 
     def prepare(self, model: ModelSpec, hw: HardwareDescriptor, quants: Optional[List[str]] = None) -> PreparedModel:
         arch = load_arch(model)
-        weights, paths = hf_weight_options(model, arch.num_params or 0, list(quants or self.precisions(hw)),
+        wanted = as_stored(quants or self.precisions(hw), arch.checkpoint_quant, model.hf_id)
+        weights, paths = hf_weight_options(model, arch.num_params or 0, wanted,
                                            lambda p: 1 if p == "fp8" else dtype_bytes(p), arch.checkpoint_bytes)
         return PreparedModel(spec=model, backend=self.name, arch=arch, hf_path=model.hf_id, hf_paths=paths,
                              weights_bytes=weights)

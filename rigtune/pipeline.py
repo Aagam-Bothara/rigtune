@@ -891,6 +891,9 @@ def prepare_and_plan(
             if quants is not None and allowed == []:
                 raise RuntimeError(f"none of --quant {','.join(quants)} is available on {name}")
             prepared = backend.prepare(spec, hw, quants=allowed)
+            if prepared.arch.checkpoint_quant:
+                result.notes.append(f"{name}: {spec.hf_id} is stored quantized ({prepared.arch.checkpoint_quant}), "
+                                    "so it is served as stored and no other precision was tried")
             prepared.drafts_mode = "verified" if verified else "table"
             from rigtune.pairing import hub_off
             if speculative_all and not (prepared.drafts_mode == "verified" and hub_off(hub)):

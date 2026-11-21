@@ -55,10 +55,11 @@ def _first(cfg: Dict[str, Any], *keys: str, default: Any = None) -> Any:
 
 def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
     """Build ArchInfo from a raw config.json dict. Handles nested text_config (multimodal)."""
-    from rigtune.introspect import mtp_layers
+    from rigtune.introspect import mtp_layers, quantization
 
     mm = any(isinstance(cfg.get(k), dict) for k in ("vision_config", "audio_config"))
     mtp = mtp_layers(cfg)
+    quant = quantization(cfg)
     if "text_config" in cfg and isinstance(cfg["text_config"], dict):
         merged = dict(cfg)
         merged.update(cfg["text_config"])
@@ -88,6 +89,7 @@ def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
         torch_dtype=dtype,
         has_mm_config=mm,
         mtp_layers=mtp[0] if mtp else 0,
+        checkpoint_quant=quant.describe() if quant else None,
         **hybrid_layout(cfg, layers, dtype),
     )
 
@@ -288,27 +290,45 @@ def local_checkpoint_bytes(root: Union[str, Path]) -> Optional[int]:
         return None
 
 
-def hub_weights(spec: ModelSpec, token: Optional[str] = None) -> Tuple[Optional[int], Optional[int]]:
-    """(parameter count, loaded_bytes) for a Hub model from one model_info call, plus its index when it has one.
-    The count is the Hub's safetensors total, which counts elements, so it says nothing of bytes: an FP8 checkpoint
-    holds one byte a parameter, and the Hub counts AWQ's packed int4 values unpacked but NVFP4's packed. Each is None
-    when the Hub does not say."""
+def hub_weights(spec: ModelSpec, token: Optional[str] = None
+                ) -> Tuple[Optional[int], Optional[int], Dict[str, Optional[int]]]:
+    """(parameter count, loaded_bytes, the file listing) for a Hub model from one model_info call, plus its index
+    when it has one. The count is the Hub's safetensors total, which counts elements, so it says nothing of bytes: an
+    FP8 checkpoint holds one byte a parameter, and the Hub counts AWQ's packed int4 values unpacked but NVFP4's
+    packed. Each is None (the listing empty) when the Hub does not say."""
     from huggingface_hub import HfApi, hf_hub_download
 
     try:
         info = HfApi(token=token).model_info(spec.hf_id, revision=spec.revision, files_metadata=True)
     except Exception as exc:
         logger.debug("safetensors metadata unavailable for %s: %s", spec.hf_id, exc)
-        return None, None
+        return None, None, {}
     st = getattr(info, "safetensors", None)
     params = int(st.total) if st and getattr(st, "total", None) else None
     sha = getattr(info, "sha", None)
+    listing = hub_listing(info)
     try:
-        return params, listed_bytes(hub_listing(info), lambda: hf_hub_download(
-            spec.hf_id, INDEX, revision=sha if isinstance(sha, str) else spec.revision, token=token))
+        return params, listed_bytes(listing, lambda: hf_hub_download(
+            spec.hf_id, INDEX, revision=sha if isinstance(sha, str) else spec.revision, token=token)), listing
     except Exception as exc:  # a gated repository answers model_info but not a download without a token
         logger.debug("could not read %s of %s: %s", INDEX, spec.hf_id, exc)
-        return params, None
+        return params, None, listing
+
+
+HF_QUANT = "hf_quant_config.json"  # ModelOpt's own file, which some of its exports declare their quantization in only
+
+
+def _modelopt_quant(read: Callable[[], Union[str, Path]]) -> Optional[str]:
+    """What hf_quant_config.json declares (introspect.quantization), described; None when it cannot be read."""
+    from rigtune.introspect import quantization
+
+    try:
+        with open(read(), "r", encoding="utf-8") as fh:
+            quant = quantization(None, json.load(fh))
+    except Exception as exc:
+        logger.debug("could not read %s: %s", HF_QUANT, exc)
+        return None
+    return quant.describe() if quant else None
 
 
 def hub_listing(info: Any) -> Dict[str, Optional[int]]:
@@ -363,8 +383,15 @@ def load_arch(spec: ModelSpec, token: Optional[str] = None) -> ArchInfo:
     arch = arch_from_config(fetch_config(spec, token=token))
     if os.path.isdir(spec.hf_id):
         arch.checkpoint_bytes = local_checkpoint_bytes(spec.hf_id)
+        if arch.checkpoint_quant is None and os.path.isfile(os.path.join(spec.hf_id, HF_QUANT)):
+            arch.checkpoint_quant = _modelopt_quant(lambda: os.path.join(spec.hf_id, HF_QUANT))
         return arch
-    exact, arch.checkpoint_bytes = hub_weights(spec, token=token)
+    exact, arch.checkpoint_bytes, listing = hub_weights(spec, token=token)
     if exact:
         arch.num_params = exact
+    if arch.checkpoint_quant is None and HF_QUANT in listing:
+        from huggingface_hub import hf_hub_download
+
+        arch.checkpoint_quant = _modelopt_quant(lambda: hf_hub_download(spec.hf_id, HF_QUANT, revision=spec.revision,
+                                                                        token=token))
     return arch

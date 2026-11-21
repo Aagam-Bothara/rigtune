@@ -147,6 +147,25 @@ def find_prequantized_repos(
     return found
 
 
+STORED: Tuple[str, ...] = ("bf16", "fp16")  # the precisions that load a checkpoint as it is stored (--dtype only)
+
+
+def as_stored(wanted: Sequence[str], checkpoint_quant: Optional[str], model: str) -> List[str]:
+    """The precisions a checkpoint may be served at: all of `wanted` for an unquantized one, and for one its author
+    quantized only those that load it as stored. Both engines take the method from its quantization_config and refuse
+    another --quantization (vLLM 0.33 config/model.py ModelConfig._verify_quantization; SGLang 0.5.23
+    configs/model_config.py, whose only requantization is quark_mxfp4), so online fp8 on top fails to start, or on an
+    fp8 checkpoint repeats the stored launch; and Hub copies quantized from it are not looked for. Raises when
+    `wanted` holds none of them (a --quant that leaves no way to serve it)."""
+    if not checkpoint_quant:
+        return list(wanted)
+    kept = [q for q in wanted if q in STORED]
+    if not kept:
+        raise RuntimeError(f"{model} is already quantized ({checkpoint_quant}) and can only be served as stored, "
+                           f"which --quant {','.join(wanted)} leaves out: add auto or {STORED[0]}")
+    return kept
+
+
 def hf_weight_options(spec: ModelSpec, params: int, wanted: Sequence[str],
                       bytes_per_param: Callable[[str], float],
                       stored_bytes: Optional[int] = None) -> Tuple[Dict[str, int], Dict[str, str]]:

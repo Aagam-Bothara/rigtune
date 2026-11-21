@@ -19,7 +19,7 @@ from rigtune.hfconfig import dtype_bytes, kv_element_bytes, load_arch
 from rigtune.memory import HybridKV, MemoryModel, estimate
 from rigtune.models import ArchInfo, Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
 from rigtune.hardware import nvlink_between
-from rigtune.quantized import INT4_METHODS, INT8_METHODS, PREQUANTIZED, hf_weight_options
+from rigtune.quantized import INT4_METHODS, INT8_METHODS, PREQUANTIZED, as_stored, hf_weight_options
 
 # The fp8 KV-cache type offered on Ampere. It runs through FlashInfer: vLLM 0.11's default Triton
 # attention builds its fp8 kernels with e4m3, which Ampere cannot compile, whatever the cache type.
@@ -744,7 +744,8 @@ class VllmBackend(BaseBackend):
 
     def prepare(self, model: ModelSpec, hw: HardwareDescriptor, quants: Optional[List[str]] = None) -> PreparedModel:
         arch = load_arch(model)
-        weights, paths = hf_weight_options(model, arch.num_params or 0, list(quants or self.precisions(hw)),
+        wanted = as_stored(quants or self.precisions(hw), arch.checkpoint_quant, model.hf_id)
+        weights, paths = hf_weight_options(model, arch.num_params or 0, wanted,
                                            lambda p: 1 if p == "fp8" else dtype_bytes(p), arch.checkpoint_bytes)
         return PreparedModel(spec=model, backend=self.name, arch=arch, hf_path=model.hf_id, hf_paths=paths,
                              weights_bytes=weights)
