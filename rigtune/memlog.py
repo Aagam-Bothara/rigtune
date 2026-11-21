@@ -275,10 +275,15 @@ PARSERS = {
 #                                                            from the AOT cache, where no compile-range line follows.
 #                                                            Read from a real log: Gemma 4 12B's relaunch on an A40,
 #                                                            16 Nov 2026, "torch.compile took 0.54 s in total"
+#   "[prefix] torch.compile took %.2f s in total"            compilation/monitor.py:62 (0.33): the whole compile of
+#                                                            one compiled part, Dynamo's bytecode transform and the
+#                                                            cache save included, which the compile-range lines leave
+#                                                            out (H200, 20 Nov 2026: ranges 18.88 s, total 40.95 s)
 _CAPTURE = re.compile(r"(?<!Encoder )Graph capturing finished in (\d+) secs, took (-?\d+\.\d+) GiB")
 _COMPILED = re.compile(r"Compiling a graph for compile range (.+?) takes (\d+\.\d+) s")
 _CACHED = re.compile(r"Directly load the compiled graph\(s\) for compile range .+? from the cache, took \d+\.\d+ s"
                      r"|Directly load AOT compilation from path \S")
+_COMPILE_TOTAL = re.compile(r"(\[[\w.-]+\] )?torch\.compile took (\d+\.\d+) s in total")
 #   "[prefix] Initial profiling/warmup run took %.2f s"      compilation/monitor.py:91 (0.33): the first forward of
 #                                                            each compiled part, where Triton compiles and autotunes
 #                                                            on a cold cache (Qwen3.5's GDN kernels: 74-82 s cold,
@@ -288,6 +293,15 @@ _REWRITE = re.compile(r"; setting (cudagraph_mode=[A-Z_]+)")
 # The other wording, for piecewise compilation with nothing to split (config/compilation.py:1204 / 1226); the
 # source breaks the phrase across two string literals, the log does not.
 _REWRITE_TO = re.compile(r"Setting cudagraph_mode to ([A-Z_]+)")
+
+
+def _per_part(rx: re.Pattern, text: str) -> Dict[str, float]:
+    """Seconds per compiled part (the backbone, an MTP head) from a line `rx` matches as (prefix, seconds): the
+    slowest worker's, as every tensor-parallel worker prints its own."""
+    parts: Dict[str, float] = {}
+    for prefix, seconds in rx.findall(text):
+        parts[prefix] = max(parts.get(prefix, 0.0), float(seconds))
+    return parts
 
 
 def parse_startup(backend: str, text: str) -> Dict[str, object]:
@@ -311,17 +325,15 @@ def parse_startup(backend: str, text: str) -> Dict[str, object]:
     for compile_range, seconds in _COMPILED.findall(text):
         ranges[compile_range] = max(ranges.get(compile_range, 0.0), float(seconds))
     compiled, cached = list(ranges.values()), _CACHED.findall(text)
-    if compiled:
-        out["compile_s"] = round(sum(compiled), 2)
+    totals = _per_part(_COMPILE_TOTAL, text)  # vLLM's own total where it prints one: the ranges miss Dynamo
+    if totals or compiled:
+        out["compile_s"] = round(sum(totals.values()) if totals else sum(compiled), 2)
         parsed.append("compile")
     if cached:
         parsed.append("compile_cache")
     if compiled or cached:
         out["compile_cached"] = not compiled
-    # One figure per compiled part (the backbone, an MTP head), the slowest worker's, summed over the parts.
-    warmups: Dict[str, float] = {}
-    for prefix, seconds in _WARMUP.findall(text):
-        warmups[prefix] = max(warmups.get(prefix, 0.0), float(seconds))
+    warmups = _per_part(_WARMUP, text)  # summed over the compiled parts
     if warmups:
         out["warmup_s"] = round(sum(warmups.values()), 2)
         parsed.append("warmup")

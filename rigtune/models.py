@@ -543,7 +543,8 @@ class StartupCost(BaseModel):
     capture_s: Optional[float] = None  # CUDA-graph capture time; the slowest worker's when several report
     cudagraph_gib: Optional[float] = None  # memory the captured graphs took, of that same worker
     capture_lines: int = 0  # how many workers reported a capture
-    compile_s: Optional[float] = None  # seconds spent compiling, summed over the ranges compiled
+    # seconds torch.compile took, summed over the compiled parts (vLLM's own total; a cache load reads its load time)
+    compile_s: Optional[float] = None
     compile_cached: Optional[bool] = None  # every range loaded from the compile cache; None when no line says
     # The first forward's profiling/warm-up run, summed over the compiled parts: where Triton compiles and autotunes
     # its kernels when its cache is cold (74 s on Qwen3.5-9B on an A100, 0.3 s warm)

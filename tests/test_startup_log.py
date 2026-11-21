@@ -102,6 +102,29 @@ def test_an_aot_load_beside_a_compiled_range_is_not_a_hit():
     assert got["compile_cached"] is False and got["compile_s"] == 3.29
 
 
+# From the H200 session's Qwen3.5-35B-A3B MTP launch and its AOT-cached relaunch (20 Nov 2026).
+RANGE_H200 = ("(EngineCore pid=1619) INFO 11-20 23:28:36 [backends.py:417] [backbone] Compiling a graph for compile "
+              "range (1, 8192) takes 16.41 s")
+TOTAL_H200 = "(EngineCore pid=1619) INFO 11-20 23:28:43 [monitor.py:62] [backbone] torch.compile took 34.83 s in total"
+TOTAL_HEAD = "(EngineCore pid=1619) INFO 11-20 23:29:10 [monitor.py:62] [eagle_head] torch.compile took 4.83 s in total"
+
+
+def test_compile_reads_vllms_own_total_not_the_ranges():
+    """The compile-range line leaves out Dynamo's transform and the cache save; the total has them."""
+    got = parse_startup("vllm", _log(RANGE_H200, TOTAL_H200))
+    assert got["compile_s"] == 34.83 and got["compile_cached"] is False and got["parsed"] == ["compile"]
+
+
+def test_compile_total_summed_over_parts_once_per_worker():
+    other_worker = TOTAL_H200.replace("pid=1619", "pid=1620").replace("34.83", "33.10")
+    assert parse_startup("vllm", _log(TOTAL_H200, other_worker, TOTAL_HEAD))["compile_s"] == 39.66
+
+
+def test_a_cache_load_reads_its_load_time():
+    got = parse_startup("vllm", _log(AOT_HIT_033, TOTAL_H200.replace("34.83", "0.48")))
+    assert got["compile_cached"] is True and got["compile_s"] == 0.48
+
+
 # From the A100 session's Qwen3.5-9B MTP launch (18 Nov 2026), cold, and the Modal run's warm start (19 Nov 2026).
 WARMUP_COLD = ("(EngineCore pid=19238) INFO 11-18 05:57:41 [monitor.py:91] [backbone] Initial profiling/warmup run "
                "took 81.98 s")
