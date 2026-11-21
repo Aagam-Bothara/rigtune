@@ -79,6 +79,14 @@
   since SGLang's rules rename by architecture whatever the weights hold; with the engine probe off, Qwen3.5 only, as
   before. The KV pool is planned with the layers SGLang says its draft reads (1 for most of its rules), not the
   checkpoint's count. Qwen3.5's head is offered as before.
+- Under `--speculative all`, a setting of the checkpoint's own MTP head whose start failed for a reason of its own
+  (a load failure, or no cause in the log) is not launched again in that calibration at other batches or prefill
+  budgets; 0.3.0 launched it each time. The setting is the engine, the target's weights, KV cache and tensor
+  parallelism, the token count and the output-head quantization, so the head's other settings are still tried. A
+  memory shortage never blocks it (out of memory, or vLLM's and SGLang's other words for it, found in the log,
+  where it often sits above the tail), nor does a start that ran out of time, a failure after a memory retry, the
+  target's multimodal profiling, a kernel setting, or the same setting having started earlier. The profile says how
+  many trials each block skipped.
 
 ## 0.3.0 (2026-11-18)
 

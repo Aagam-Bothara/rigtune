@@ -79,6 +79,41 @@ def mentions_oom(log: str) -> bool:
     return "out of memory" in text or "outofmemoryerror" in text
 
 
+# How an engine says at start-up that memory was short without the words "out of memory". vLLM: its free-memory check
+# ("... is less than desired GPU memory utilization", v1/worker/utils.py line 530 at v0.29.0, 766 at v0.33.0) and its
+# KV-cache checks ("No available memory for the cache blocks. Try increasing `gpu_memory_utilization` ...", "... is
+# larger than the available KV cache memory ...", v1/core/kv_cache_utils.py 860-886 at v0.29.0,
+# v1/core/kv_cache_planning.py 58-82 at v0.33.0). SGLang's pool sizing, model_executor/pool_configurator.py: "Not
+# enough memory. Please try to increase --mem-fraction-static." (line 83 at v0.5.19, 96 at v0.5.23), the SWA and
+# DSV4 caps ending "... or increase --mem-fraction-static." (1025-1031 and 1679-1684 at v0.5.23), and "SWA pool (N
+# tokens) cannot hold even one request" (612-616 at v0.5.19, 211-215 at v0.5.23). Matched lower-case, backticks
+# dropped. Not "available kv cache memory" alone: vLLM logs "Available KV cache memory: X GiB" on every start.
+MEMORY_SHORT = ("less than desired gpu memory utilization", "no available memory for the cache blocks",
+                "than the available kv cache memory", "try increasing gpu_memory_utilization", "not enough memory",
+                "increase --mem-fraction-static", "cannot hold even one request")
+MEMORY_SHORT_CAUSE = "memory short at start-up"  # an MTP trial's error, when the log said so above its tail
+
+
+def _normal(text: str) -> str:
+    return " ".join(text.lower().replace("`", "").split())
+
+
+def memory_short_line(log: str) -> Optional[str]:
+    """The first log line that says memory was short at start-up (MEMORY_SHORT), or None."""
+    for line in log.splitlines():
+        if any(phrase in _normal(line) for phrase in MEMORY_SHORT):
+            return line.strip()[:200]
+    return None
+
+
+def memory_short(res: "TrialResult") -> bool:
+    """Whether a failed start was the memory's, not the configuration's: out of memory, or a shortage in other words
+    (MEMORY_SHORT), in its error or found in its log above the tail (MEMORY_SHORT_CAUSE)."""
+    if failure_kind(res) == "oom_startup" or (res.error or "").startswith(MEMORY_SHORT_CAUSE):
+        return True
+    return any(phrase in _normal(res.error or "") for phrase in MEMORY_SHORT)
+
+
 # How a start-up failure's error begins when the engine log shows its cause (SubprocessTrialRunner.run).
 MM_PROFILING_FAILED = "multimodal profiling failed at start-up"
 LOAD_FAILED = "model failed to load at start-up"
@@ -544,6 +579,11 @@ class SubprocessTrialRunner:
                     line = None if cause else find(log)  # never when a cause is already known
                     if line:
                         cause, why = f"{kind} ({line}); ", _CAUSE_KINDS[kind]
+                # vLLM raises its memory shortages in the engine core, above the API server's own traceback that ends
+                # the log, so for an MTP trial, whose failures can block the setting, the line is found in the log.
+                short = memory_short_line(log) if not cause and (cfg.spec_decode or "").startswith("mtp:") else None
+                if short:
+                    cause = f"{MEMORY_SHORT_CAUSE} ({short}); "
                 return TrialResult(
                     config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
                     error=f"{cause}failed to start (rc={proc.returncode()})\n{tail}", memory=observation,
@@ -856,6 +896,14 @@ class StagedSearch:
     # (engine, kind, second model) that started in this calibration: a later start-up failure of the pair is put
     # down to that trial's other settings, not the second model, and blocks nothing.
     _pair_started: set = field(default_factory=set)
+    # The checkpoint's own MTP head, per setting (_head_key: engine, weights, KV cache, tensor parallelism, spec and
+    # output-head quantization): one whose start failed for a reason of its own is not launched again at other
+    # batches or budgets (_head_failed); one that started in this calibration is never blocked. key -> the config
+    # keys skipped for it (a set: a stage may ask for a skipped key again).
+    _head_blocked: Dict[tuple, set] = field(default_factory=dict)
+    _head_started: set = field(default_factory=set)
+    _head_noted: set = field(default_factory=set)
+    _headroom_retried: set = field(default_factory=set)  # config keys launched again with less memory reserved
     block_failed_pairs: bool = False  # verified mode only: table mode launches what it always launched
 
     # ---- predictor helpers
@@ -992,6 +1040,13 @@ class StagedSearch:
                 config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
                 error=f"skipped: {spec_kind} decoding failed to start earlier in this calibration",
                 failure_kind="skipped_blocked"))
+        head_key = self._head_key(cfg) if spec_kind == "mtp" else None
+        if head_key in self._head_blocked:
+            self._head_blocked[head_key].add(key)
+            return self._skip(TrialResult(
+                config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
+                error="skipped: the checkpoint's MTP head failed to start with this setting earlier in this calibration",
+                failure_kind="skipped_blocked"))
         if self.progress:
             self.progress(stage, cfg, None)
         t0 = self.clock()
@@ -1004,6 +1059,8 @@ class StagedSearch:
         self._done[key] = res
         if pair_key is not None and res.launched:
             self._pair_started.add(pair_key)
+        if head_key is not None and res.launched:
+            self._head_started.add(head_key)
         if not res.launched and spec_kind and startup_cause(res.error)[0] == SUFFIX_FAILED:
             self._spec_blocked.setdefault(spec_kind, [])
         retry = self._headroom_retry(cfg, res)
@@ -1013,6 +1070,7 @@ class StagedSearch:
                 self.progress(stage, cfg, res)
             self.notes.append(f"{key} ran out of memory at start-up; retried at gpu_memory_utilization "
                               f"{retry.gpu_memory_utilization:.2f}")
+            self._headroom_retried.add(retry.key())
             return self._run(retry, stage)
         retry = self._startup_retry(cfg, res)
         if retry is not None:
@@ -1037,10 +1095,44 @@ class StagedSearch:
                 self._pair_blocked.add(pair_key)
                 self.notes.append(f"{cfg.backend}: {pair_key[2]} failed to start ({failure_kind(res)}); "
                                   "only this candidate is blocked on this engine for this calibration")
+        if head_key is not None and key not in self._headroom_retried and self._head_failed(cfg, res):
+            setting = self._head_setting(cfg)
+            if head_key in self._head_started:
+                if head_key not in self._head_noted:
+                    self._head_noted.add(head_key)
+                    self.notes.append(f"{cfg.backend}: the MTP head setting {setting} failed to start with {key}, "
+                                      "but it started earlier in this calibration; the failure is put down to that "
+                                      "trial's other settings and nothing is blocked")
+            else:
+                self._head_blocked[head_key] = set()
+                self.notes.append(f"{cfg.backend}: the MTP head setting {setting} failed to start with {key} "
+                                  f"({failure_kind(res)}); it is not launched again in this calibration")
         self.results.append(res)
         if self.progress:
             self.progress(stage, cfg, res)
         return res
+
+    @staticmethod
+    def _head_key(cfg: Config) -> tuple:
+        """What an MTP head's start depends on besides batch and budget: the engine, the target's weights and KV
+        cache, tensor parallelism, and the head setting itself. A sample stage_explore draws with every other setting
+        free is not skipped for a failure at another of these."""
+        return (cfg.backend, cfg.quant, cfg.kv_dtype, cfg.tp, cfg.spec_decode, cfg.spec_head_quant)
+
+    @staticmethod
+    def _head_setting(cfg: Config) -> str:
+        return cfg.spec_decode + (f" with a {cfg.spec_head_quant} output head" if cfg.spec_head_quant else "")
+
+    @staticmethod
+    def _head_failed(cfg: Config, res: TrialResult) -> bool:
+        """Whether an MTP trial's failed start says something about the head setting: it did not start, for a reason
+        that is neither the memory's (memory_short: a batch or a fraction problem, which another trial can avoid) nor
+        another part of the configuration's (a kernel setting, the target's multimodal profiling, Arctic Inference),
+        and not because it ran out of time (rc=None: a cold first start can be slow; the next would be warmer). A
+        load failure, or a start-up failure the log gave no cause for, is the head's."""
+        return (not res.launched and cfg.kernels is None and not memory_short(res)
+                and "(rc=None)" not in (res.error or "")
+                and failure_kind(res) in ("load_failure", "startup_other"))
 
     def _grading_seconds(self) -> float:
         return float(getattr(self.gate, "seconds_total", 0.0)) if self.gate is not None else 0.0
@@ -1897,6 +1989,13 @@ class StagedSearch:
         for kind, skipped in self._spec_blocked.items():
             self.notes.append(f"{kind} decoding failed to start (its cause is noted above) and was not launched again "
                               f"in this calibration" + (f": {len(skipped)} configurations skipped" if skipped else ""))
+        for (engine, quant, kv, tp, spec, head_quant), skipped in self._head_blocked.items():
+            if skipped:
+                setting = spec + (f" with a {head_quant} output head" if head_quant else "")
+                n = len(skipped)
+                self.notes.append(f"{engine}: {n} configuration{'s' if n != 1 else ''} with the MTP head setting "
+                                  f"{setting} ({quant} weights, {kv} KV cache, tp {tp}) skipped after it failed to "
+                                  "start (noted above)")
         if self._skipped:
             shown = "; ".join(self._skipped[:5]) + (f"; and {len(self._skipped) - 5} more" if len(self._skipped) > 5 else "")
             self.notes.append(f"calibration budget of {self.budget_s:.0f}s reached after {len(self.results)} trials; "
