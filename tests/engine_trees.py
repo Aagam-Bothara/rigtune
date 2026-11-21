@@ -289,7 +289,8 @@ def _clear() -> None:
                vl._language_model_only_flag, vl._offload_features, vl._mtp_archs, vl._own_head, vl._vllm_python,
                vl._suffix_refusal, vl._arctic_report, vl._engine_facts, sg._engine_facts,
                vl._offload_counts_every_group_as_draft, sg.sglang_spec_methods,
-               sg._cache_report_flag, sg._hicache_features, sg._tier_details_flag, sg.sglang_mtp_archs):
+               sg._cache_report_flag, sg._hicache_features, sg._tier_details_flag, sg.sglang_mtp_archs,
+               sg._own_head):
         if hasattr(fn, "cache_clear"):  # a test may have put a plain function in its place
             fn.cache_clear()
 

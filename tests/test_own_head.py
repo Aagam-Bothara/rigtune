@@ -30,6 +30,9 @@ CONFIGS = {
     "acme/no-architectures": (None, "llama", {}),
     "acme/raises-later": (["InklingForConditionalGeneration"], "inkling_mm_model",
                           {"mtp_config": {"num_nextn_predict_layers": 8}}),
+    "thinkingmachines/Inkling-Small-banded": (["InklingForConditionalGeneration"], "inkling_mm_model",
+                                              {"mtp_config": {"num_nextn_predict_layers": 8,
+                                                              "local_layer_ids": [0, 2, 4, 5, 6, 7]}}),
     "meta-llama/Llama-3.1-8B-Instruct": (["LlamaForCausalLM"], "llama", {}),
 }
 
@@ -94,7 +97,9 @@ FAKE_SGLANG = {
                     raise ValueError(f"Unrecognized model in {model_path}")
                 archs, model_type, extra = configs[model_path]
                 self.hf_config = types.SimpleNamespace(architectures=list(archs or []), model_type=model_type)
-                self.hf_text_config = types.SimpleNamespace()
+                # configs/inkling.py copies mtp_config.local_layer_ids onto the text config (lines 337-342)
+                local = (extra.get("mtp_config") or {}).get("local_layer_ids", [])
+                self.hf_text_config = types.SimpleNamespace(mtp_local_layer_ids=local)
                 self.is_draft_model = is_draft_model
                 self._config_draft_model()
                 if model_path == "acme/raises-later":  # a check after the rename (_verify_quantization and others)
@@ -192,6 +197,18 @@ def test_sglang_has_a_draft_for_inkling(engine_tree):
     a = _probe("sglang", "thinkingmachines/Inkling-Small")
     assert (a.target_arch, a.draft_arch) == ("InklingForConditionalGeneration", "InklingForConditionalGenerationMTP")
     assert oh.verdict(a, {"InklingForConditionalGenerationMTP"}).loads is True
+
+
+def test_sglang_says_when_a_head_is_banded(engine_tree):
+    """Inkling's banded head runs only on SGLang's multi-layer EAGLE worker (models/inkling.py 1792-1797)."""
+    engine_tree(FAKE_SGLANG)
+    banded = _probe("sglang", "thinkingmachines/Inkling-Small-banded")
+    plain = _probe("sglang", "thinkingmachines/Inkling-Small")
+    assert (banded.banded, plain.banded) == (True, False)
+    assert oh.verdict(banded).banded is True and oh.verdict(banded).loads is True
+    kept = oh.HeadAnswer.model_validate_json(oh.HeadAnswer(engine="sglang", target_arch="X", draft_arch="Y")
+                                             .model_dump_json(exclude={"banded"}))
+    assert oh.verdict(kept).banded is False  # an answer kept before the field reads as not banded
 
 
 def test_sglangs_answer_stands_when_its_init_raises_after_the_rename(engine_tree):

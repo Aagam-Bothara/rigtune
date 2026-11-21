@@ -61,6 +61,7 @@ class HeadAnswer(BaseModel):
     target_arch: Optional[str] = None
     draft_arch: Optional[str] = None
     layers: Optional[int] = None
+    banded: Optional[bool] = None  # SGLang: the head needs the multi-layer EAGLE worker (Inkling's mtp_local_layer_ids)
     libs: Dict[str, str] = Field(default_factory=dict)  # CONFIG_LIBS' versions in the engine's Python
     errors: Dict[str, str] = Field(default_factory=dict)
     probed_at: Optional[str] = None
@@ -85,6 +86,7 @@ class Verdict:
     draft_arch: Optional[str] = None
     layers: Optional[int] = None
     asked: bool = True  # False when probing is off or the engine's Python was not found: nothing to report
+    banded: bool = False  # SGLang: the head runs only on its multi-layer EAGLE worker (HeadAnswer.banded)
 
 
 def verdict(answer: Optional[HeadAnswer], registered: Optional[Collection[str]] = None) -> Verdict:
@@ -111,7 +113,7 @@ def verdict(answer: Optional[HeadAnswer], registered: Optional[Collection[str]] 
         if layers < 1:
             return Verdict(False, f"vllm's rule for {target} reads no MTP layers from this config", arch, layers)
         return Verdict(True, f"vllm builds {arch} with {layers} MTP layer{'s' if layers != 1 else ''}", arch, layers)
-    return Verdict(True, f"{engine} builds {arch} for {target}", arch, layers)
+    return Verdict(True, f"{engine} builds {arch} for {target}", arch, layers, banded=bool(answer.banded))
 
 
 def local_model(model: str) -> str:
@@ -167,6 +169,8 @@ def run_head_probe(engine: str, python: str, model: str, revision: Optional[str]
     layers = answers.get("layers")
     if isinstance(layers, int) and not isinstance(layers, bool):
         data["layers"] = layers
+    if isinstance(answers.get("banded"), bool):
+        data["banded"] = answers["banded"]
     libs = answers.get("libs")
     if isinstance(libs, dict) and all(isinstance(v, str) for v in libs.values()):
         data["libs"] = libs

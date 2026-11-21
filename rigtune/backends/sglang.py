@@ -158,12 +158,14 @@ def sglang_hybrid_kv(cfg: Config, arch: ArchInfo, vram_total_bytes: int, version
     its cell by 1 + draft layers / full-attention layers for EAGLE (NEXTN resolves to it), with the draft's layers
     read as num_nextn_predict_layers (v0.5.19 lines 183-222, v0.5.23 lines 259-314; only with a draft path, which
     sglang_config passes). _config_draft_model sets that to 1 for a Qwen3.5 head, and Qwen3_5ForCausalLMMTP builds
-    one layer whatever the checkpoint declares (mtp_config.num_hidden_layers = 1), so one full layer is added.
+    one layer whatever the checkpoint declares (mtp_config.num_hidden_layers = 1), so one full layer is added. For
+    another family the count is the one SGLang said its draft reads (SglangBackend._own_head_notes puts it in
+    arch.mtp_layers), else the checkpoint's.
     """
     draft = sglang_draft_tokens(cfg.spec_decode)
     full_layers = None
     if speculative.own_head(cfg.spec_decode) and arch.full_attention_layers:
-        full_layers = arch.full_attention_layers + SGLANG_MTP_DRAFT_LAYERS
+        full_layers = arch.full_attention_layers + (arch.mtp_layers or SGLANG_MTP_DRAFT_LAYERS)
     if cfg.prefix_cache is not False:
         slots = sglang_mamba_slots_per_request(cfg, arch) * cfg.batch + 1
         return HybridKV(state_slots=slots + draft * (cfg.batch + 1),
@@ -304,9 +306,40 @@ def mtp_archs_in(args_source: str, model_config_source: str, mtp_model_source: s
     return frozenset(a for a in speculative.MTP_ARCHS if a in listed)
 
 
+# MTP drafts SGLang runs on its multi-layer EAGLE worker, which builds one model runner per step, each with its own
+# embedding and output head and its own head layer (managers/tp_worker.py _init_multi_layer_eagle_model_runners,
+# lines 502-519 at v0.5.23). The worker is turned on for MiMo-V2 (arg_groups/model_overrides/mimo_v2.py, lines 23-25 at
+# v0.5.23, 26 at v0.5.19), GigaChat-3.5 (arg_groups/model_overrides/gigachat35.py 18-22, v0.5.23 only) and Step-3.5
+# and 3.7 (arg_groups/overrides.py 346-350 at v0.5.23, 469 at v0.5.19), and Inkling's banded heads refuse to run
+# without it (models/inkling.py 1792-1797; own_head.HeadAnswer.banded; every Inkling checkpoint on the Hub is banded).
+# rigtune plans one runner, so these are not offered on SGLang until their layout is planned. The targets are listed
+# too, by configs/model_config.py's own names (MIMO_V2_MODEL_ARCHS, line 74 at v0.5.23), for an answer that names no
+# draft class (SGLang could not load the config).
+SGLANG_MULTI_LAYER_DRAFTS = frozenset({"MiMoV2MTP", "GigaChat35ForCausalLMNextN", "Step3p5MTP"})
+SGLANG_MULTI_LAYER_TARGETS = frozenset({"MiMoV2ForCausalLM", "MiMoV2FlashForCausalLM", "GigaChat35ForCausalLM",
+                                        "Step3p5ForCausalLM", "Step3p7ForConditionalGeneration",
+                                        "InklingForConditionalGeneration"})
+
+
+@functools.lru_cache(maxsize=32)
+def _own_head(model_id: str, revision: Optional[str]):
+    """Whether the SGLang that would be launched has an MTP draft for this model's architecture: asked of it
+    (rigtune.backends.own_head, which builds the draft's ModelConfig as a launch does and reads what
+    _config_draft_model renamed it to), with its model registry from the install probe. Until 20 Nov 2026 only the
+    Qwen3.5 family was offered, from sglang_mtp_archs; that is still what is read when SGLang is not asked."""
+    from rigtune.backends import own_head
+
+    python = sglang_python()
+    facts = _engine_facts()
+    registered = facts.archs if facts is not None and facts.answered("archs") else None
+    return own_head.ask("sglang", python, _sglang_package_dir(python) if python else None, model_id, revision,
+                        registered)[0]
+
+
 @functools.lru_cache(maxsize=1)
 def sglang_mtp_archs() -> FrozenSet[str]:
-    """mtp_archs_in for the SGLang that would be launched; empty when it cannot be found."""
+    """mtp_archs_in for the SGLang that would be launched; empty when it cannot be found. What is read when SGLang is
+    not asked (_own_head: probing off, or its Python not found), as before it was asked."""
     python = sglang_python()
     pkg = _sglang_package_dir(python) if python else None
     if not pkg:
@@ -507,6 +540,7 @@ class SglangBackend(BaseBackend):
             python = sglang_python()
             facts.forget("sglang", python, _sglang_package_dir(python) if python else None)
             _engine_facts.cache_clear()
+            _own_head.cache_clear()
         return _engine_facts()
 
     def supports(self, hw: HardwareDescriptor, model: ModelSpec) -> bool:
@@ -576,12 +610,54 @@ class SglangBackend(BaseBackend):
             if size:
                 prepared.spec_repos["draft"] = draft
                 prepared.spec_bytes[draft] = int(size)
-        if prepared.arch.architecture in sglang_mtp_archs():  # the checkpoint's own MTP head
-            notes += speculative.record_mtp_head(prepared, self.name)
-            if speculative.MTP_KEY in prepared.spec_repos and speculative.draft_bytes("mtp:1", prepared) is None:
-                notes.append(f"sglang: MTP head of {prepared.spec.hf_id} not tried, its size could not be read")
+        notes += self._own_head_notes(prepared)
+        if speculative.MTP_KEY in prepared.spec_repos and speculative.draft_bytes("mtp:1", prepared) is None:
+            notes.append(f"sglang: MTP head of {prepared.spec.hf_id} not tried, its size could not be read")
         for n in notes:
             logger.warning(n)
+        return notes
+
+    def _own_head_notes(self, prepared: PreparedModel) -> List[str]:
+        """Record the checkpoint's own MTP head when it holds one and this SGLang may load it, as the vLLM backend
+        does: the checkpoint first, then SGLang, asked only when there is a head. SGLang's rules rename by
+        architecture alone (a Qwen3-30B-A3B without MTP weights gets a draft class too), so the checkpoint's yes is
+        what keeps a head that is not there from being offered. When SGLang is asked, the layers it says its draft
+        reads (num_nextn_predict_layers, which many of its rules set to 1) replace the checkpoint's count for the
+        planner: its KV pool is sized by them (sglang_hybrid_kv)."""
+        if "draft" not in feature("spec_methods"):  # a release whose second-model behaviour was not read (mtp_archs_in)
+            return []
+        facts, notes = speculative.look_for_mtp_head(prepared.spec, self.name)
+        if facts is None:
+            return notes
+        arch = prepared.arch.architecture
+        verdict = _own_head(prepared.spec.hf_id, prepared.spec.revision)
+        multi_layer = verdict.banded or verdict.draft_arch in SGLANG_MULTI_LAYER_DRAFTS or (
+            verdict.asked and verdict.draft_arch is None and arch in SGLANG_MULTI_LAYER_TARGETS)
+        if verdict.loads is not False and multi_layer:
+            return [f"sglang: the checkpoint's MTP head not tried: SGLang runs {verdict.draft_arch or arch}'s MTP head "
+                    "only on its multi-layer EAGLE worker, one model runner and one copy of the embedding and output "
+                    "head per step, which rigtune does not plan yet"]
+        if not verdict.asked:  # as before SGLang was asked: its source, read for the Qwen3.5 family only
+            if arch not in sglang_mtp_archs():
+                why = ("and this SGLang's source has no Qwen3.5 MTP draft" if arch in speculative.MTP_ARCHS
+                       else "and its source is read for the Qwen3.5 family only")
+                return [f"sglang: the checkpoint's MTP head not tried: SGLang was not asked whether it loads one "
+                        f"({verdict.why}), {why}"]
+            return speculative.record_mtp_head(prepared, self.name, found=facts)
+        if verdict.loads is False:
+            return [f"sglang: the checkpoint's MTP head not tried: {verdict.why}"]
+        notes = speculative.record_mtp_head(prepared, self.name, found=facts)
+        if verdict.layers:
+            prepared.arch.mtp_layers = verdict.layers
+        if verdict.loads is None:
+            notes.append(f"sglang: the checkpoint's MTP head is tried although whether SGLang loads it could not be "
+                         f"told ({verdict.why}); a start that fails costs one trial")
+        if arch not in speculative.MTP_ARCHS:
+            # sglang_hybrid_kv's MTP rule and speculative.draft_bytes were read for Qwen3_5ForCausalLMMTP only.
+            notes.append(f"sglang: {arch}'s MTP head: its draft's KV cache is planned only on a model with "
+                         "linear-attention layers, as Qwen3.5's is, and not otherwise, though SGLang reserves one; "
+                         "the draft's copy of the embedding and output head is counted as a single-step draft holds "
+                         "it; neither was checked for this family")
         return notes
 
     def find_pairs(self, prepared: PreparedModel, ctx: int = 4096, *, draft: Optional[str] = None,
@@ -839,11 +915,10 @@ class SglangBackend(BaseBackend):
         return self.own_head_fit(variants, model, hw, min_batch)
 
     def _offers_mtp(self, cfg: Config, model: PreparedModel) -> bool:
-        """The checkpoint's own MTP head: its weights were found (find_second_models), this SGLang can load it for
-        the architecture (sglang_mtp_archs), and the launch reads the checkpoint it was found in, not a 4-bit
+        """The checkpoint's own MTP head: recorded by find_second_models (the checkpoint holds it, and SGLang did not
+        say it builds no draft from it), and the launch reads the checkpoint it was found in, not a 4-bit
         repository's."""
-        return (speculative.MTP_KEY in model.spec_repos and cfg.quant not in INT4_METHODS
-                and model.arch.architecture in sglang_mtp_archs())
+        return speculative.MTP_KEY in model.spec_repos and cfg.quant not in INT4_METHODS
 
     PREFILL_BUDGETS = (2048, 8192, 16384)
 

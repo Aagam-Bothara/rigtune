@@ -74,6 +74,11 @@
   not offered on a head of 2 layers, which vLLM refuses. A head of more than one layer is planned at every depth
   vLLM might build, taking the largest of each part of the cache, since one more layer can make the cache smaller.
   Qwen3.5's head is offered as before.
+- SGLang is offered the checkpoint's own MTP head the same way: for any family SGLang has an MTP draft for, asked of
+  SGLang itself (it builds the draft's model config as a launch does), only for a checkpoint that holds the head,
+  since SGLang's rules rename by architecture whatever the weights hold; with the engine probe off, Qwen3.5 only, as
+  before. The KV pool is planned with the layers SGLang says its draft reads (1 for most of its rules), not the
+  checkpoint's count. Qwen3.5's head is offered as before.
 
 ## 0.3.0 (2026-11-18)
 

@@ -218,9 +218,7 @@ def test_both_depths_offered_on_sglang_with_room_for_the_draft(tmp_path, tmp_hom
         assert "mtp:3" not in specs(be.spec_variants(small, with_head("sglang", head_bytes=None), hw_rtx4090, True))
         assert "mtp:3" not in specs(be.spec_variants(small, with_head("sglang", shared_bytes=None), hw_rtx4090,
                                                      True))
-    with installed("sglang", "0.5.23", tmp_path / "s2") as pkg:
-        (pkg / "srt" / "configs" / "model_config.py").write_text("", encoding="utf-8")  # no Qwen3.5 rewrite
-        assert "mtp:3" not in specs(SglangBackend().spec_variants(small, with_head("sglang"), hw_rtx4090, True))
+    # Whether this SGLang loads the head is decided when it is recorded (tests/test_sglang_own_head.py).
     assert SglangBackend().tier_host_need(scfg(spec_decode="mtp:3"), 1000) == 2000  # the draft's host pool
 
 

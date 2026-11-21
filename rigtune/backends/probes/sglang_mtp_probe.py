@@ -14,6 +14,8 @@ Printed as vllm_probe.py prints:
   draft_arch   architectures[0] after it: the draft's class, or the target's own when SGLang has no rule for it
   layers       hf_text_config.num_nextn_predict_layers after it, the field SGLang reads (line 1602). Many rules force it
                to 1 whatever the checkpoint holds, so it says what SGLang builds, not what the checkpoint has.
+  banded       whether the draft's text config has mtp_local_layer_ids (Inkling's banded head), which SGLang runs only
+               on its multi-layer EAGLE worker (--enable-multi-layer-eagle).
   libs         the versions of transformers and huggingface_hub here, which load the config.
 The rename does not read the weights: a rule for the architecture is all a yes says. ModelConfig is built with
 trust_remote_code off (its own default is on), so no code from the repository runs. Whether the class is registered is
@@ -55,15 +57,18 @@ def main():
                 super()._config_draft_model()
                 seen["draft_arch"] = first_arch(self.hf_config)
                 seen["layers"] = getattr(self.hf_text_config, "num_nextn_predict_layers", None)
+                # Inkling's banded head (mtp_config.local_layer_ids) only runs on the multi-layer EAGLE worker
+                # (models/inkling.py InklingForConditionalGenerationMTP.__init__, lines 1792-1797 at v0.5.23).
+                seen["banded"] = bool(getattr(self.hf_text_config, "mtp_local_layer_ids", None))
 
         Probe(model, trust_remote_code=False, revision=revision, is_draft_model=True, speculative_algorithm="EAGLE")
         error = "not reached"
     except BaseException as exc:  # an ImportError, a config that cannot be read, a check after the rename: say why
         error = (type(exc).__name__ + ": " + str(exc))[:300]
-    for key in ("target_arch", "draft_arch", "layers"):
+    for key in ("target_arch", "draft_arch", "layers", "banded"):
         if key in seen:
             say(key, seen[key])
-        elif key != "layers":
+        elif key not in ("layers", "banded"):
             say(key, error=error)
             break
     say("done", True)
