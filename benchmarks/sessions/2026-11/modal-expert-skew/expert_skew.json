@@ -1,0 +1,78 @@
+{
+  "experts_per_layer": 256,
+  "layers": 40,
+  "prompts_per_domain": 50,
+  "vram_fraction": 0.0833,
+  "phases": {
+    "decode": {
+      "code": {
+        "top10_share": 0.452,
+        "top20_share": 0.62,
+        "effective_experts": 128.7,
+        "vram_set_held_out": 0.398,
+        "top20_held_out": 0.607,
+        "vram_set_other_domains": {
+          "maths": 0.154,
+          "chat": 0.089
+        }
+      },
+      "maths": {
+        "top10_share": 0.469,
+        "top20_share": 0.652,
+        "effective_experts": 119.2,
+        "vram_set_held_out": 0.409,
+        "top20_held_out": 0.639,
+        "vram_set_other_domains": {
+          "code": 0.159,
+          "chat": 0.15
+        }
+      },
+      "chat": {
+        "top10_share": 0.348,
+        "top20_share": 0.539,
+        "effective_experts": 159.6,
+        "vram_set_held_out": 0.26,
+        "top20_held_out": 0.485,
+        "vram_set_other_domains": {
+          "code": 0.094,
+          "maths": 0.149
+        }
+      }
+    },
+    "prefill": {
+      "code": {
+        "top10_share": 0.474,
+        "top20_share": 0.646,
+        "effective_experts": 120.3,
+        "vram_set_held_out": 0.419,
+        "top20_held_out": 0.636,
+        "vram_set_other_domains": {
+          "maths": 0.221,
+          "chat": 0.158
+        }
+      },
+      "maths": {
+        "top10_share": 0.511,
+        "top20_share": 0.691,
+        "effective_experts": 102.3,
+        "vram_set_held_out": 0.45,
+        "top20_held_out": 0.674,
+        "vram_set_other_domains": {
+          "code": 0.188,
+          "chat": 0.21
+        }
+      },
+      "chat": {
+        "top10_share": 0.369,
+        "top20_share": 0.549,
+        "effective_experts": 152.8,
+        "vram_set_held_out": 0.279,
+        "top20_held_out": 0.486,
+        "vram_set_other_domains": {
+          "code": 0.154,
+          "maths": 0.248
+        }
+      }
+    }
+  }
+}
