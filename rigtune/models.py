@@ -540,9 +540,9 @@ class StartupCost(BaseModel):
 
     seconds: Optional[float] = None  # launch to the first healthy answer; None when it never became ready
     # Read from the engine's own log (memlog.parse_startup); each None unless its line was found.
-    capture_s: Optional[float] = None  # CUDA-graph capture time; the slowest worker's when several report
-    cudagraph_gib: Optional[float] = None  # memory the captured graphs took, of that same worker
-    capture_lines: int = 0  # how many workers reported a capture
+    capture_s: Optional[float] = None  # CUDA-graph capture time, all passes; the slowest worker's when several report
+    cudagraph_gib: Optional[float] = None  # memory the kept graphs took (the last pass), of that same worker
+    capture_lines: int = 0  # capture lines read: one per worker per pass
     # seconds torch.compile took, summed over the compiled parts (vLLM's own total; a cache load reads its load time)
     compile_s: Optional[float] = None
     compile_cached: Optional[bool] = None  # every range loaded from the compile cache; None when no line says

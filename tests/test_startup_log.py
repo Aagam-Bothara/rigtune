@@ -162,6 +162,24 @@ def test_tp_workers_reduced_by_max_with_count():
     assert (got["capture_s"], got["cudagraph_gib"], got["capture_lines"]) == (31.0, 0.64, 2)
 
 
+# From the H200 session (20 Nov 2026): one worker captures to size the graphs' memory, then for real.
+SIZING_H200 = ("(EngineCore pid=972) INFO 11-20 23:19:24 [model_runner.py:1163] Graph capturing finished in 9 secs, "
+               "took 0.42 GiB")
+KEPT_H200 = ("(EngineCore pid=972) INFO 11-20 23:19:35 [model_runner.py:1163] Graph capturing finished in 8 secs, "
+             "took 0.22 GiB")
+
+
+def test_both_passes_of_one_worker_are_summed_and_the_last_is_kept():
+    got = parse_startup("vllm", _log(SIZING_H200, KEPT_H200))
+    assert (got["capture_s"], got["cudagraph_gib"], got["capture_lines"]) == (17.0, 0.22, 2)
+
+
+def test_two_workers_each_with_two_passes_give_the_slowest_worker():
+    other = [line.replace("pid=972", "pid=973").replace("9 secs", "12 secs") for line in (SIZING_H200, KEPT_H200)]
+    got = parse_startup("vllm", _log(SIZING_H200, other[0], KEPT_H200, other[1]))
+    assert (got["capture_s"], got["cudagraph_gib"], got["capture_lines"]) == (20.0, 0.22, 4)
+
+
 @pytest.mark.parametrize("text", ["", "INFO 11-16 02:09:00 [api_server.py:1] vLLM API ser", CAPTURE[:60]])
 def test_empty_or_truncated_log_parses_nothing_and_says_so(text):
     assert parse_startup("vllm", text) == {"parsed": []}

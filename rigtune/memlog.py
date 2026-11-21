@@ -266,6 +266,10 @@ PARSERS = {
 # vLLM's start-up lines, each matched on its whole phrase with its unit, case-sensitively. Sources, v0.29.0 / v0.33.0:
 #   "Graph capturing finished in %.0f secs, took %.2f GiB"   v1/worker/gpu_model_runner.py:7002 / 6517 and
 #                                                            v1/worker/gpu/model_runner.py:961 / 1164
+#                                                            Each worker captures twice: once to size the graphs'
+#                                                            memory before the KV cache is allocated (the default
+#                                                            since 0.21), then for real (H200, 20 Nov 2026: 9 s then
+#                                                            8 s, one EngineCore pid)
 #   "Encoder graph capturing finished in ... (%d graphs)"    v1/worker/mm_encoder_model_runner.py:95 (0.33 only):
 #                                                            a different capture, never read as the decoder's
 #   "[prefix]Compiling a graph for compile range %s takes %.2f s"       compilation/backends.py:394 / 418
@@ -280,6 +284,7 @@ PARSERS = {
 #                                                            cache save included, which the compile-range lines leave
 #                                                            out (H200, 20 Nov 2026: ranges 18.88 s, total 40.95 s)
 _CAPTURE = re.compile(r"(?<!Encoder )Graph capturing finished in (\d+) secs, took (-?\d+\.\d+) GiB")
+_PROCESS = re.compile(r"^\(([^()]*pid=\d+)\)")  # vLLM's tag on each process's lines: "(EngineCore pid=972)"
 _COMPILED = re.compile(r"Compiling a graph for compile range (.+?) takes (\d+\.\d+) s")
 _CACHED = re.compile(r"Directly load the compiled graph\(s\) for compile range .+? from the cache, took \d+\.\d+ s"
                      r"|Directly load AOT compilation from path \S")
@@ -314,10 +319,19 @@ def parse_startup(backend: str, text: str) -> Dict[str, object]:
     if backend != "vllm" or not text:
         return out
     parsed: List[str] = []
-    captures = [(float(s), float(g)) for s, g in _CAPTURE.findall(text)]
-    if captures:  # one line per worker under tensor parallelism: the slowest one bounds the start-up
-        out["capture_s"], out["cudagraph_gib"] = max(captures)
-        out["capture_lines"] = len(captures)
+    # Per worker process: its passes summed, and the memory of its last pass, the graphs it keeps. The slowest worker
+    # bounds the start-up. A line without a process tag cannot be placed, so it counts as a worker of its own.
+    workers: Dict[str, List[float]] = {}
+    lines = 0
+    for i, line in enumerate(text.splitlines()):
+        if m := _CAPTURE.search(line):
+            tag = p.group(1) if (p := _PROCESS.match(line)) else f"line {i}"
+            seconds = workers.get(tag, [0.0])[0]
+            workers[tag] = [seconds + float(m.group(1)), float(m.group(2))]
+            lines += 1
+    if workers:
+        out["capture_s"], out["cudagraph_gib"] = max(workers.values())
+        out["capture_lines"] = lines
         parsed.append("capture")
     # One figure per compile range, the slowest: 0.33 prints the line once per tensor-parallel worker, all
     # compiling at once, and 0.29 once in all, so summing lines would double the time on one release only.
