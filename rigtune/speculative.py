@@ -109,11 +109,13 @@ EAGLE3_TOKENS = 3
 DRAFT_TOKENS_SGLANG = 3
 NGRAM_TOKENS_SGLANG = 12
 
-# The checkpoint's own MTP head ("mtp:<k>"), for the architectures both engines rewrite to an MTP draft:
+# The Qwen3.5 family, whose own MTP head ("mtp:<k>") was read in both engines' source and measured:
 #   vLLM (v0.29.0 and v0.33.0): config/speculative.py SpeculativeConfig.hf_config_override turns model types
 #     qwen3_5, qwen3_5_moe, qwen3_5_text and qwen3_5_moe_text (lines 882-899 / 987-1007) into Qwen3_5MTP or
 #     Qwen3_5MoeMTP (model_executor/models/qwen3_5_mtp.py); with no "model" the draft is the target's own
-#     checkpoint and quantization (SpeculativeConfig.__post_init__, lines 1096-1111 / 1252-1267).
+#     checkpoint and quantization (SpeculativeConfig.__post_init__, lines 1096-1111 / 1252-1267). vLLM is now asked
+#     for every family (rigtune.backends.own_head); this list is what it is checked against when it cannot be asked,
+#     and what the planner's MTP rule and the fp8 output head were read for.
 #   SGLang (v0.5.19 and v0.5.23): configs/model_config.py ModelConfig._config_draft_model loads a draft of these
 #     four architectures as Qwen3_5ForCausalLMMTP (lines 751-773 / 1159-1181).
 MTP_ARCHS = frozenset({"Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration",
@@ -233,22 +235,32 @@ def find_eagle3_head(
     return None
 
 
-def record_mtp_head(prepared: PreparedModel, engine: str,
-                    inspect: Optional[Callable[[ModelSpec], Any]] = None) -> List[str]:
-    """Look for the checkpoint's own MTP head (rigtune.introspect: its config's layer count and its mtp.* tensors,
-    from the safetensors headers only) and record it in `prepared`: spec_repos["mtp"] is the model itself and
-    spec_bytes["mtp"] the head's size and spec_bytes["mtp_shared"] that of the target's embedding and output head,
-    when the listing gave them. Returns a note for the profile when no head was
-    recorded although the config declares one (weights without it, or a Hub that could not be asked)."""
+def look_for_mtp_head(spec: ModelSpec, engine: str, inspect: Optional[Callable[[ModelSpec], Any]] = None):
+    """The checkpoint's own MTP head (rigtune.introspect: its config's layer count and its tensors, from the
+    safetensors headers only), as (introspect.ModelFacts or None, notes). The notes say why none was found when the
+    config declares one (weights without it, or a Hub that could not be asked)."""
     from rigtune import introspect
 
-    look = inspect or (lambda spec: introspect.inspect_model(spec, features=("mtp",)))
+    look = inspect or (lambda s: introspect.inspect_model(s, features=("mtp",)))
     try:
-        facts = look(prepared.spec)
+        facts = look(spec)
     except Exception as exc:  # inspect_model never raises; an injected one might
-        return [f"{engine}: no MTP head tried ({exc})"]
+        return None, [f"{engine}: no MTP head tried ({exc})"]
     if facts.mtp is None:
-        return [f"{engine}: no MTP head tried: " + "; ".join(facts.notes)] if facts.notes else []
+        return None, ([f"{engine}: no MTP head tried: " + "; ".join(facts.notes)] if facts.notes else [])
+    return facts, []
+
+
+def record_mtp_head(prepared: PreparedModel, engine: str,
+                    inspect: Optional[Callable[[ModelSpec], Any]] = None, found: Any = None) -> List[str]:
+    """Record the checkpoint's own MTP head in `prepared` (`found`, from look_for_mtp_head, or looked for now):
+    spec_repos["mtp"] is the model itself and spec_bytes["mtp"] the head's size and spec_bytes["mtp_shared"] that of
+    the target's embedding and output head, when the listing gave them. Returns notes for the profile."""
+    facts = found
+    if facts is None:
+        facts, notes = look_for_mtp_head(prepared.spec, engine, inspect)
+        if facts is None:
+            return notes
     prepared.spec_repos[MTP_KEY] = prepared.spec.hf_id
     if facts.mtp.bytes:
         prepared.spec_bytes[MTP_KEY] = int(facts.mtp.bytes)

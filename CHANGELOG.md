@@ -61,6 +61,19 @@
   20-minute calibrations of Qwen3.5-9B on Modal picked plain bf16.
 - The confirm note counts the configurations re-measured, not the shortlist, and says when the budget ran out
   first: a 20-minute calibration that re-measured only its pick said "re-measured the best 3 configurations".
+- On vLLM, `--speculative all` offers the checkpoint's own MTP head for any family vLLM has an MTP draft for, not
+  only Qwen3.5: rigtune asks vLLM, in its own Python, to apply its own config rewrite to the model's config (about
+  twenty families at 0.33: Inkling, DeepSeek, GLM, Kimi, MiMo, Ernie and more), kept per install and model commit.
+  The checkpoint is read first and vLLM is asked only when it holds a head, now found in every layout 36 checkpoints
+  on the Hub use: declared in `mtp_config` (Inkling) or not at all (Qwen3-Next, LongCat, found through the weight
+  index), stored as `model.mtp.*` or as decoder layers past the last (DeepSeek, GLM, Step), and sized without
+  counting a head's own embedding or output head twice. A head vLLM has no draft for is noted; one it could not be
+  asked about is tried, with a note. With the engine probe off, as before: Qwen3.5 only, read from vLLM's source.
+  For a family other than Qwen3.5 the profile says what is not checked: the head's cache is planned by Qwen3.5's
+  rule and its load-time copy of the embedding is not planned. The fp8 output head stays Qwen3.5's; 3 tokens are
+  not offered on a head of 2 layers, which vLLM refuses. A head of more than one layer is planned at every depth
+  vLLM might build, taking the largest of each part of the cache, since one more layer can make the cache smaller.
+  Qwen3.5's head is offered as before.
 
 ## 0.3.0 (2026-11-18)
 

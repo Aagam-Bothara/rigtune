@@ -98,7 +98,7 @@ W8A8 = {"config_groups": {"group_0": {
     "sparsity_config": {}}
 
 
-def fetchers(config=None, texts=None, files=(), tensors=None, calls=None):
+def fetchers(config=None, texts=None, files=(), tensors=None, calls=None, index=()):
     """Fetchers over fixed data; each records its calls in `calls`, and a value that is an exception is raised."""
     calls = calls if calls is not None else []
 
@@ -111,7 +111,8 @@ def fetchers(config=None, texts=None, files=(), tensors=None, calls=None):
     return dict(fetch_config=lambda s: give("config", config),
                 fetch_text=lambda s, f: give(f, (texts or {}).get(f)),
                 list_files=lambda s: give("files", files if isinstance(files, Exception) else list(files)),
-                list_tensors=lambda s: give("tensors", tensors))
+                list_tensors=lambda s: give("tensors", tensors),
+                list_index=lambda s: give("index", index if isinstance(index, Exception) else list(index)))
 
 
 # ---------------------------------------------------------------- MTP heads
@@ -146,9 +147,23 @@ def test_the_moe_sibling_declares_its_head_the_same_way():
 def test_a_dense_model_has_no_head_and_its_weights_are_never_listed():
     calls = []
     facts = introspect.inspect_model(ModelSpec(hf_id="Qwen/Qwen2.5-7B-Instruct"), features=("mtp",),
-                                     **fetchers(QWEN25, tensors=pytest.fail, calls=calls))
-    assert facts.mtp is None and facts.notes == [] and calls == ["config"]
+                                     **fetchers(QWEN25, tensors=pytest.fail, calls=calls,
+                                                index=["model.layers.0.mlp.up_proj.weight"]))
+    assert facts.mtp is None and facts.notes == [] and calls == ["config", "index"]  # one small file, no headers
     assert facts.describe()["mtp"] == "none"
+
+
+def test_a_head_the_config_does_not_declare_is_found_through_the_weight_index():
+    """Qwen3-Next, LongCat and MiMo-V2 ship mtp.* tensors and declare no count: the index names them, and only then
+    are the headers listed."""
+    calls = []
+    facts = introspect.inspect_model(ModelSpec(hf_id="Qwen/Qwen3-Next-80B-A3B-Instruct"), features=("mtp",),
+                                     **fetchers(QWEN25, tensors=QWEN35_TENSORS, calls=calls,
+                                                index=list(QWEN35_TENSORS)))
+    assert calls == ["config", "index", "tensors"] and (facts.mtp.layers, facts.mtp.config_key) == (1, "the tensors")
+    facts = introspect.inspect_model(ModelSpec(hf_id="x"), features=("mtp",),
+                                     **fetchers(QWEN25, tensors=pytest.fail, index=OSError("offline")))
+    assert facts.mtp is None and facts.notes == ["x: could not read model.safetensors.index.json (offline)"]
 
 
 def test_a_declared_head_without_its_tensors_is_a_note_not_a_head():

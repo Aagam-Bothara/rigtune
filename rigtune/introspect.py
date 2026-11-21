@@ -475,6 +475,13 @@ def cached_tensors(spec: ModelSpec) -> Optional[Dict[str, Optional[int]]]:
     return out
 
 
+def _default_index_names(spec: ModelSpec, token: Optional[str] = None) -> List[str]:
+    """The tensor names model.safetensors.index.json maps to files: one small file, read before the headers it
+    points to. Empty for a checkpoint without one (a single safetensors file)."""
+    text = _default_text(spec, "model.safetensors.index.json", token)
+    return list((json.loads(text).get("weight_map") or {}).keys()) if text else []
+
+
 def inspect_model(
     spec: ModelSpec,
     features: Sequence[str] = FEATURES,
@@ -482,14 +489,19 @@ def inspect_model(
     fetch_text: Optional[Callable[[ModelSpec, str], Optional[str]]] = None,
     list_files: Optional[Callable[[ModelSpec], List[str]]] = None,
     list_tensors: Optional[Callable[[ModelSpec], Dict[str, Optional[int]]]] = None,
+    list_index: Optional[Callable[[ModelSpec], List[str]]] = None,
     token: Optional[str] = None,
 ) -> ModelFacts:
     """What `spec`'s checkpoint declares, for the `features` asked for; only what those need is fetched. Every
-    fetcher can be replaced (tests never touch the network). A fetch that fails is a note, never an exception."""
+    fetcher can be replaced (tests never touch the network). A fetch that fails is a note, never an exception.
+
+    For the MTP head the safetensors headers are listed when the config declares one, and when it declares none but
+    the weight index names MTP tensors (Qwen3-Next, LongCat, MiMo-V2): one small file for a model without a head."""
     get_config = fetch_config or (lambda s: _default_config(s, token))
     get_text = fetch_text or (lambda s, f: _default_text(s, f, token))
     get_files = list_files or (lambda s: _default_files(s, token))
     get_tensors = list_tensors or (lambda s: _default_tensors(s, token))
+    get_index = list_index or (lambda s: _default_index_names(s, token))
     facts = ModelFacts()
     name = spec.hf_id
 
@@ -503,7 +515,12 @@ def inspect_model(
     wanted = set(features)
     config = attempt("config.json", lambda: get_config(spec)) if wanted else None
     if "mtp" in wanted:
-        tensors = attempt("the safetensors headers", lambda: get_tensors(spec)) if mtp_layers(config) else {}
+        if mtp_layers(config):
+            tensors = attempt("the safetensors headers", lambda: get_tensors(spec))
+        else:
+            index = attempt("model.safetensors.index.json", lambda: get_index(spec)) if config is not None else None
+            named = bool(index) and any(MTP_SEGMENT.search(n) for n in index)
+            tensors = attempt("the safetensors headers", lambda: get_tensors(spec)) if named else {}
         facts.mtp, notes = mtp_head(config, tensors, name)
         facts.notes += notes
     if "quantization" in wanted:

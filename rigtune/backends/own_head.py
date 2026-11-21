@@ -84,13 +84,14 @@ class Verdict:
     why: str
     draft_arch: Optional[str] = None
     layers: Optional[int] = None
+    asked: bool = True  # False when probing is off or the engine's Python was not found: nothing to report
 
 
 def verdict(answer: Optional[HeadAnswer], registered: Optional[Collection[str]] = None) -> Verdict:
     """What `answer` says. `registered` is the engine's model registry (its install probe's `archs`), or None when
     that was not answered."""
     if answer is None:
-        return Verdict(None, "the engine was not asked (probing is off, or its Python was not found)")
+        return Verdict(None, "the engine was not asked (probing is off, or its Python was not found)", asked=False)
     engine, target, arch, layers = answer.engine, answer.target_arch, answer.draft_arch, answer.layers
     if target is None:
         return Verdict(None, f"{engine} could not load the model's config ({answer.errors.get('target_arch', '')})")

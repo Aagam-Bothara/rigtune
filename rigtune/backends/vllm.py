@@ -182,6 +182,30 @@ def vllm_hybrid_kv(cfg: Config, arch: ArchInfo, default_batched_tokens: int = 20
     )
 
 
+def vllm_hybrid_kv_any_depth(cfg: Config, arch: ArchInfo, default_batched_tokens: int = 2048) -> HybridKV:
+    """vllm_hybrid_kv, with an MTP setting planned at every head depth vLLM might build, from one to the checkpoint's
+    count, keeping the largest of each field that changes with the depth (full-layer and sliding-layer pages, a state
+    copy's bytes, the start-up minimum): an upper bound at every token count, for every reader of the plan. vLLM
+    builds all of Qwen3.5's layers (one) but, at v0.33.0, min(n_predict, num_speculative_tokens) of Inkling-Small's
+    eight (models/inkling/nvidia/mtp.py _select_mtp_depth_count), and the layer-group padding is not monotonic in the
+    full-layer count: with 24 linear layers, 11 full layers pad the linear ones to 33 pages and 12 to 24, so the
+    declared count alone could plan less than the engine needs. Choosing one depth would not do either: which is the
+    larger depends on how many tokens are planned."""
+    if not speculative.own_head(cfg.spec_decode) or arch.mtp_layers <= 1:
+        return vllm_hybrid_kv(cfg, arch, default_batched_tokens)
+    import dataclasses
+
+    plans = [vllm_hybrid_kv(cfg, arch.model_copy(update={"mtp_layers": m}), default_batched_tokens)
+             for m in range(1, arch.mtp_layers + 1)]
+
+    def most(field: str) -> Optional[int]:
+        values = [getattr(p, field) for p in plans if getattr(p, field) is not None]
+        return max(values) if values else None
+
+    return dataclasses.replace(plans[-1], full_layers=most("full_layers"), sliding_layers=most("sliding_layers"),
+                               state_bytes=most("state_bytes"), min_bytes=most("min_bytes"))
+
+
 def vllm_mtp_extra_weights(cfg: Config, model: PreparedModel) -> int:
     """Weight bytes an MTP setting adds to the plan's. None for a Hub checkpoint: load_arch takes its parameter count
     from the Hub's safetensors total, which already holds the mtp.* tensors (vLLM skips them without MTP). For a
@@ -568,8 +592,8 @@ def _probe_lists(field: str, value: str) -> bool:
     return answer is not False
 
 
-# Which architectures the vLLM that will run can serve with their own MTP head, read from its source (importing vLLM
-# costs seconds). config/speculative.py SpeculativeConfig.hf_config_override rewrites a draft of each model type below
+# Which architectures the vLLM that will run can serve with their own MTP head, read from its source: what rigtune
+# checks when vLLM is not asked (_own_head; probing off, or its Python not found), as it did before it asked. config/speculative.py SpeculativeConfig.hf_config_override rewrites a draft of each model type below
 # to "qwen3_5_mtp" (v0.29.0 lines 882-899, v0.33.0 987-1007), and model_executor/models/qwen3_5_mtp.py defines the
 # draft class it then loads (Qwen3_5MTP line 215 / 216, Qwen3_5MoeMTP line 320 / 322). Not yet run on hardware.
 VLLM_MTP_REWRITE = 'hf_config.model_type = "qwen3_5_mtp"'
@@ -606,6 +630,20 @@ def _mtp_archs() -> frozenset:
         except OSError:
             continue
     return mtp_archs_in(sources)
+
+
+
+@functools.lru_cache(maxsize=32)
+def _own_head(model_id: str, revision: Optional[str]):
+    """Whether the vLLM that will run has an MTP draft for this model's architecture: asked of it
+    (rigtune.backends.own_head, which applies its own SpeculativeConfig.hf_config_override to the model's config),
+    with its model registry from the install probe. Until 20 Nov 2026 a list of the four Qwen3.5 architectures read
+    from vLLM's source stood here, and no other family's head (Inkling's, DeepSeek's, GLM's) was ever offered."""
+    from rigtune.backends import own_head
+
+    facts = _engine_facts()
+    registered = facts.archs if facts is not None and facts.answered("archs") else None
+    return own_head.ask("vllm", _vllm_python(), _vllm_package(), model_id, revision, registered)[0]
 
 
 # With an EAGLE-family proposer (MTP included) and no KV cache group marked as the draft's, vLLM 0.29's offloading
@@ -666,6 +704,7 @@ class VllmBackend(BaseBackend):
 
             facts.forget("vllm", _vllm_python(), _vllm_package())
             _engine_facts.cache_clear()
+            _own_head.cache_clear()
         return _engine_facts()
 
     def supports(self, hw: HardwareDescriptor, model: ModelSpec) -> bool:
@@ -803,11 +842,20 @@ class VllmBackend(BaseBackend):
         busiest level (`min_batch`), or not at all; either is noted (BaseBackend.own_head_fit)."""
         if not (all_methods and hw is not None and self._offers_mtp(cfg, model)):
             return [], []
+        # vLLM refuses more tokens than the head's layers unless they are a multiple of them (config/speculative.py,
+        # v0.33.0 lines 1600-1611): 3 tokens on a two-layer head would never start. The count is vLLM's own n_predict.
+        verdict = _own_head(model.spec.hf_id, model.spec.revision)
+        layers = verdict.layers if verdict.loads is not False else None
         variants = [cfg.model_copy(update={"spec_decode": speculative.mtp(k), "spec_head_quant": None})
-                    for k in speculative.MTP_TOKENS]
+                    for k in speculative.MTP_TOKENS if not layers or k <= layers or k % layers == 0]
         facts = _engine_facts()
         head_notes = []
-        if (_vllm_version() >= (0, 33) and hw.gpu is not None and hw.gpu.cc >= (8, 9)
+        # The fp8 output head needs a drafter that shares the target's (v1/worker/gpu/spec_decode/eagle/utils.py
+        # load_eagle_model, v0.33.0 lines 109-134): Step-3.5's and Step-5's bring their own and are refused, Gemma 4's
+        # is refused outright (config/speculative.py 1953-1959). It was read and measured for Qwen3.5 only, so it is
+        # offered there only.
+        if (model.arch.architecture in speculative.MTP_ARCHS
+                and _vllm_version() >= (0, 33) and hw.gpu is not None and hw.gpu.cc >= (8, 9)
                 and "fp8" in self.precisions(hw) and facts is not None and facts.answered("spec_fields")
                 and "draft_lm_head_quantization" in facts.spec_fields):
             if os.environ.get("VLLM_USE_V2_MODEL_RUNNER") == "0":
@@ -820,11 +868,10 @@ class VllmBackend(BaseBackend):
         return fitted, notes + head_notes
 
     def _offers_mtp(self, cfg: Config, model: PreparedModel) -> bool:
-        """The checkpoint's own MTP head: its weights were found (find_second_models), the vLLM that will run can
-        load it for this architecture (_mtp_archs), and the launch reads the checkpoint the head was found in, not a
+        """The checkpoint's own MTP head: recorded by find_second_models (the checkpoint holds it, and vLLM did not
+        say it builds no draft from it), and the launch reads the checkpoint the head was found in, not a
         pre-quantized repository's."""
-        return (speculative.MTP_KEY in model.spec_repos and cfg.quant not in PREQUANTIZED
-                and model.arch.architecture in _mtp_archs())
+        return speculative.MTP_KEY in model.spec_repos and cfg.quant not in PREQUANTIZED
 
     def config_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
         if (model.drafts_mode == "verified" and cfg.kv_dtype == AMPERE_FP8_KV
@@ -872,9 +919,12 @@ class VllmBackend(BaseBackend):
     def find_second_models(self, prepared: PreparedModel) -> List[str]:
         """Under --speculative all: the verified EAGLE3 head for this model, the one SGLang gets, so the two engines
         are compared on one proposer. vLLM plans no memory for it, so its size is recorded but not needed. And the
-        checkpoint's own MTP head, where this vLLM can load one for the architecture: its weights are already in the
-        plan's weights, which load_arch takes from the Hub's safetensors total (vLLM skips them without MTP). For a
-        local directory the parameter count is estimated from the config and leaves them out."""
+        checkpoint's own MTP head, when the checkpoint holds one (rigtune.introspect) and vLLM, asked (_own_head), did
+        not answer that it builds no draft from it: both must say yes, since vLLM's rules go by architecture and
+        config, not by the weights. One it could not be asked about is tried, with a note; a start that fails costs
+        one trial. Its weights are already in the plan's weights, which load_arch takes from the Hub's safetensors
+        total (vLLM skips them without MTP). For a local directory the parameter count is estimated from the config
+        and leaves them out."""
         notes: List[str] = []
         if speculative.vllm_supports_eagle3() and speculative.eagle3_heads_for(prepared.spec.hf_id):
             try:
@@ -886,10 +936,39 @@ class VllmBackend(BaseBackend):
                 prepared.spec_repos["eagle3"] = found[0]
                 if found[1]:
                     prepared.spec_bytes[found[0]] = int(found[1])
-        if prepared.arch.architecture in _mtp_archs():
-            notes += speculative.record_mtp_head(prepared, self.name)
+        notes += self._own_head_notes(prepared)
         for n in notes:
             logger.warning(n)
+        return notes
+
+    def _own_head_notes(self, prepared: PreparedModel) -> List[str]:
+        """Record the checkpoint's own MTP head when it holds one and this vLLM may load it; the notes say why not, or
+        what is unchecked. The checkpoint is read first (its config, and its weight index when the config declares
+        nothing), so a model without a head costs no question to vLLM, which imports vLLM and takes seconds."""
+        facts, notes = speculative.look_for_mtp_head(prepared.spec, self.name)
+        if facts is None:
+            return notes
+        arch = prepared.arch.architecture
+        verdict = _own_head(prepared.spec.hf_id, prepared.spec.revision)
+        if not verdict.asked:  # as before vLLM was asked: its source, read for the Qwen3.5 family only
+            if arch not in _mtp_archs():
+                why = ("and this vLLM's source has no Qwen3.5 MTP draft" if arch in speculative.MTP_ARCHS
+                       else "and its source is read for the Qwen3.5 family only")
+                return [f"vllm: the checkpoint's MTP head not tried: vLLM was not asked whether it loads one "
+                        f"({verdict.why}), {why}"]
+            return speculative.record_mtp_head(prepared, self.name, found=facts)
+        if verdict.loads is False:
+            return [f"vllm: the checkpoint's MTP head not tried: {verdict.why}"]
+        notes = speculative.record_mtp_head(prepared, self.name, found=facts)
+        if verdict.loads is None:
+            notes.append(f"vllm: the checkpoint's MTP head is tried although whether vLLM loads it could not be told "
+                         f"({verdict.why}); a start that fails costs one trial")
+        if arch not in speculative.MTP_ARCHS:
+            # vllm_hybrid_kv's MTP rule and the load-time transient were read for Qwen3.5 only.
+            notes.append(f"vllm: {arch}'s MTP head is planned as Qwen3.5's is (each depth a full-attention layer, and "
+                         "on a model without linear or sliding-window layers no cache of its own), and the copy of "
+                         "the embedding and output head it may build at load is not planned; neither was checked for "
+                         "this family")
         return notes
 
     def materialize(self, model: PreparedModel, quants: List[str]) -> PreparedModel:
@@ -899,7 +978,7 @@ class VllmBackend(BaseBackend):
 
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
         return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "gpu",
-                                      hybrid_fn=lambda cfg, arch: vllm_hybrid_kv(
+                                      hybrid_fn=lambda cfg, arch: vllm_hybrid_kv_any_depth(
                                           cfg, arch, vllm_default_batched_tokens(hw)),
                                       extra_weights_fn=vllm_mtp_extra_weights)
 

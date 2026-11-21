@@ -13,7 +13,6 @@ from tests.test_spec_mtp import with_head, vcfg
 @pytest.fixture
 def capable(monkeypatch):
     monkeypatch.setattr(vl, "_vllm_version", lambda: (0, 33))
-    monkeypatch.setattr(vl, "_mtp_archs", lambda: sp.MTP_ARCHS)
     facts = EngineFacts(engine="vllm", version="0.33.0", spec_fields=["draft_lm_head_quantization"])
     monkeypatch.setattr(vl, "_engine_facts", lambda: facts)
     return facts

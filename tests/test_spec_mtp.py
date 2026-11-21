@@ -15,6 +15,7 @@ import pytest
 import rigtune.backends.sglang as sg
 import rigtune.backends.vllm as vl
 from rigtune import introspect, speculative
+from rigtune.backends import own_head
 from rigtune.backends.sglang import SglangBackend
 from rigtune.backends.vllm import AMPERE_FP8_KV, VllmBackend, vllm_hybrid_kv
 from rigtune.hfconfig import arch_from_config
@@ -108,6 +109,7 @@ def test_what_sglangs_draft_holds_while_its_pools_are_sized():
 
 @pytest.mark.parametrize("name", VERSIONS)
 def test_every_checked_release_can_load_a_qwen3_5_head(name, tmp_path):
+    """Read from source: on vLLM, what is checked when vLLM is not asked (tests/test_vllm_own_head.py)."""
     engine, version = name.split("-")
     with installed(engine, version, tmp_path):
         found = vl._mtp_archs() if engine == "vllm" else sg.sglang_mtp_archs()
@@ -193,12 +195,7 @@ def test_both_depths_offered_on_vllm_only_under_all_with_a_head_and_support(tmp_
         assert "mtp:1" not in specs(be.spec_variants(vcfg(), qwen35(weights=dict(WEIGHTS)), hw_rtx4090, True))
         assert "mtp:1" not in specs(be.spec_variants(vcfg(), with_head(), None, True))  # no machine, no fit check
         assert "mtp:1" not in specs(be.spec_variants(vcfg(quant="awq"), with_head(), hw_rtx4090, True))
-        pm = with_head()
-        pm.arch = qwen25().arch  # a head recorded for an architecture this vLLM cannot load as MTP
-        assert "mtp:1" not in specs(be.spec_variants(vcfg(), pm, hw_rtx4090, True))
-    with installed("vllm", "0.33.0", tmp_path / "bare") as pkg:
-        (pkg / "model_executor" / "models" / "qwen3_5_mtp.py").unlink()  # a release without the draft class
-        assert "mtp:1" not in specs(VllmBackend().spec_variants(vcfg(), with_head(), hw_rtx4090, True))
+    # Whether this vLLM loads the head is decided when it is recorded, by asking vLLM (tests/test_vllm_own_head.py).
 
 
 def test_both_depths_offered_on_sglang_with_room_for_the_draft(tmp_path, tmp_home, hw_rtx4090, hw_a100):
@@ -439,9 +436,11 @@ def test_the_head_is_looked_up_only_under_all_and_only_for_an_architecture_that_
         assert asked == [("Qwen/Qwen3.5-9B", ("mtp",))]  # the head alone: config and safetensors headers
         dense = qwen25().arch
         monkeypatch.setattr(vl, "load_arch", lambda spec, token=None: dense)
-        prepare_and_plan(hw_rtx4090, ModelSpec(hf_id="Qwen/Qwen2.5-7B-Instruct"), ["vllm"], registry(),
-                         speculative_all=True)
-        assert len(asked) == 1  # an architecture no engine loads an MTP head for asks nothing
+        monkeypatch.setattr(vl, "_own_head", lambda model, revision: own_head.Verdict(False, "no MTP draft"))
+        plan = prepare_and_plan(hw_rtx4090, ModelSpec(hf_id="Qwen/Qwen2.5-7B-Instruct"), ["vllm"], registry(),
+                                speculative_all=True)
+        # The checkpoint is read (this stub says it holds a head); vLLM says it has no draft for it: none is kept.
+        assert plan.prepared["vllm"].spec_repos == {} and asked[-1] == ("Qwen/Qwen2.5-7B-Instruct", ("mtp",))
 
 
 def test_sglang_notes_a_head_whose_size_is_unknown(monkeypatch, tmp_path, tmp_home):
