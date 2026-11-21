@@ -6,7 +6,7 @@ Every number rigtune claims, and how it was measured. The [README](../README.md#
 
 ## At a glance
 
-The newest results are in [2026 models on current engines](#2026-models-on-current-engines): Qwen3.5-9B and Gemma 4 12B on vLLM 0.33 and SGLang 0.5.23, against vLLM's auto_tune, llm-optimizer and expert settings, with answers checked. The table below comes from the 2025 engines.
+The newest results are in [2026 models on current engines](#2026-models-on-current-engines): Qwen3.5-9B and Gemma 4 12B on vLLM 0.33 and SGLang 0.5.23, against vLLM's auto_tune, llm-optimizer and expert settings, and Qwen3.5-35B-A3B (MoE) on an H200 against vLLM's stock and expert settings, with answers checked. The table below comes from the 2025 engines.
 
 Qwen2.5 and Llama 3.1 models on rented GPUs, objective `balanced`, rigtune's default `--quant auto` (no 4-bit weights), vLLM 0.29 on the A40, A100, H100 and RTX 4090 and vLLM 0.11 on the L4. The latency ceiling is judged on the 95th-percentile time to first token, rigtune's default. The Llama rows, your own prompts and the L4 on `sharegpt` were calibrated that way on 14–15 September, and every row there was measured 3 times, interleaved (twice on the H100). The other rows are single runs judged by the median and **re-scored** from their recorded measurements with `benchmarks/rescore_ttft.py`, not re-measured; where that changed a number, the median's follows in brackets, and a calibration judged at p95 could choose differently. Full tables, per-strategy ablations and methods are in the sections below.
 
@@ -39,7 +39,7 @@ Qwen2.5 and Llama 3.1 models on rented GPUs, objective `balanced`, rigtune's def
 
 | Hardware | Backends tried | Measured |
 |---|---|---|
-| NVIDIA, compute capability ≥ 7.5 | vLLM, SGLang, llama.cpp (CUDA) | vLLM 0.11 and 0.29 and llama.cpp on an A40 and an L4, two-GPU layouts on a pair of A40s; vLLM 0.29 and SGLang 0.5.19 (from its own environment via `SGLANG_PYTHON`) on an A40, an A100, an RTX 4090 and, vLLM only, an H100 NVL; vLLM 0.33 and SGLang 0.5.23 on an A40 and an A100 SXM ([2026 models](#2026-models-on-current-engines)) |
+| NVIDIA, compute capability ≥ 7.5 | vLLM, SGLang, llama.cpp (CUDA) | vLLM 0.11 and 0.29 and llama.cpp on an A40 and an L4, two-GPU layouts on a pair of A40s; vLLM 0.29 and SGLang 0.5.19 (from its own environment via `SGLANG_PYTHON`) on an A40, an A100, an RTX 4090 and, vLLM only, an H100 NVL; vLLM 0.33 and SGLang 0.5.23 on an A40 and an A100 SXM, and vLLM 0.33 on an H200 ([2026 models](#2026-models-on-current-engines)) |
 | NVIDIA, compute capability < 7.5 | llama.cpp (CUDA) | **never benchmarked** |
 | x86 CPU | llama.cpp; vLLM-CPU with AVX-512 | llama.cpp in a CPU container; vLLM-CPU **never benchmarked** |
 
@@ -469,7 +469,7 @@ The card's mean power is averaged over the Poisson count of requests in flight, 
 
 ## 2026 models on current engines
 
-Three head-to-head comparisons ran in November 2026: on a rented A40 48 GB (16–18 November) and an A100 SXM4 80 GB (18 November), with vLLM 0.33.0 and SGLang 0.5.23 in separate environments. Their verdicts and scored results are in [benchmarks/sessions/2026-11/](../benchmarks/sessions/2026-11/); the plans that ran them come from `benchmarks/next_session_plan.py`.
+Four head-to-head comparisons ran in November 2026: on a rented A40 48 GB (16–18 November) and an A100 SXM4 80 GB (18 November), with vLLM 0.33.0 and SGLang 0.5.23 in separate environments, and on a Modal H200 (20–21 November), vLLM 0.33.0 only, described [below the table](#qwen35-35b-a3b-on-an-h200). Their verdicts and scored results are in [benchmarks/sessions/2026-11/](../benchmarks/sessions/2026-11/); the plans that ran them come from `benchmarks/next_session_plan.py`.
 
 **Method.**
 - rigtune calibrated with `--speculative all --drafts verified --budget 60m`, objective `balanced` (p95 TTFT at most 500 ms, TPOT at most 50 ms), on 300 Dolly prompts.
@@ -506,11 +506,25 @@ The A40 bounds above therefore come from scripts run afterwards, in `benchmarks/
 
 On the A100, 19–27 of each row's 1,319 answers still stopped at that limit and were graded wrong. That is the same for every row, so it does not favour rigtune.
 
+### Qwen3.5-35B-A3B on an H200
+
+A mixture-of-experts model (35B parameters, about 3B used a token) on a Hopper card, run with [modal_calibrate.py](../benchmarks/modal_calibrate.py) on vLLM 0.33.0's own image, so without SGLang or the competitor tools. Same method and prompts as above; answers graded by the comparison on 300 GSM8K items. Raw files and the command: [h200-qwen3.5-35b-a3b](../benchmarks/sessions/2026-11/h200-qwen3.5-35b-a3b/).
+
+| tok/s at 8 users, held-out prompts | median (runs) | rigtune's gain, worst paired round |
+|---|---|---|
+| **rigtune's pick**: fp8 weights, fp8 KV cache, the MTP head at 3 tokens, batch 64 | **2058.5** (2018.1–2075.5) | |
+| stock vLLM (bf16) / bare stock | 912.0 / 922.7 | +121.3% / +118.7% |
+| stock vLLM with `--quantization fp8` | 1232.7 | +65.2% |
+| best expert row (vLLM fp8 KV cache) | 933.5 | +116.0% |
+| expert n-gram row | 720.1 | +177.3% |
+
+Answers: 290 of 300 right, as stock vLLM; 3 lost, 3 gained; bound −2.0. The verdict is a win on all 6 rows that ran; the 4 SGLang expert rows are not applicable. Unlike the Ampere picks, this one takes fp8 weights and an fp8 KV cache together with MTP.
+
 **What these results do not show.**
 - **Much of the gain on Qwen comes from one setting an engineer could switch on by hand: the checkpoint's own MTP head.** None of the expert rows uses it. In the A100 calibration, SGLang with the head at 3 tokens reached 937–948 tok/s and vLLM at 1 token 877, against 1022.6 for the pick. An expert row with the MTP head is not built yet, so the margin over a well-read expert on this model is unmeasured and probably far smaller than the table's.
 - **Only 1 to 8 users.** At 8 users the competitor tools' settings (batch caps, batched-token budgets, context length) cannot act, so their rows measure like stock; each verdict says so per row. 32–64 users need a load client with more than one process, which is not built ([Limits](#limits)).
 - **Suffix decoding and its prompts.** Gemma's gain comes from suffix decoding on Dolly prompts, which copy from their context. Suffix decoding's gain varies between rounds (about 15% here; under 2% for the other rows), and it would be smaller on open-ended chat.
-- **Coverage.** Two models, two cards, both Ampere, and GSM8K as the only answer check. No MoE model and no Hopper card.
+- **Coverage.** Three models on three cards, GSM8K as the only answer check. The one MoE model and the one Hopper card (the H200) were measured with vLLM only, against stock and expert rows, not the competitor tools.
 - **Not applicable on these cards:**
   - SGLang with `--enable-torch-compile`: for Qwen, out of memory at start-up on both cards; for Gemma on the A40, it started but ran 7.8 tok/s at 1 user and never met the limits.
   - vLLM with an fp8 KV cache, for Gemma: did not start.
