@@ -121,7 +121,9 @@ LOAD_FAILED = "model failed to load at start-up"
 SUFFIX_FAILED = "suffix decoding failed at start-up"  # Arctic Inference not usable; suffix is not tried again
 ARCTIC_PLUGIN_FAILED = "arctic-inference's plugin stopped vLLM at start-up"  # any vLLM launch
 SUFFIX_TRIAL_ERROR = "a suffix trial failed to start"  # anything else on a suffix trial: quoted, not blamed
-STARTUP_CAUSES = (MM_PROFILING_FAILED, LOAD_FAILED, SUFFIX_FAILED, ARCTIC_PLUGIN_FAILED, SUFFIX_TRIAL_ERROR)
+QUANT_REFUSED = "the engine refused the quantization on this GPU at start-up"  # every config of the precision fails
+STARTUP_CAUSES = (MM_PROFILING_FAILED, LOAD_FAILED, SUFFIX_FAILED, ARCTIC_PLUGIN_FAILED, SUFFIX_TRIAL_ERROR,
+                  QUANT_REFUSED)
 # TrialResult.failure_kind: why a trial failed, as a word a program can match on rather than an error's prefix.
 #   oom_startup        out of memory at start-up (the error's "out of memory at start-up; ")
 #   mm_profiling, load_failure, suffix_unusable, arctic_plugin
@@ -133,11 +135,13 @@ STARTUP_CAUSES = (MM_PROFILING_FAILED, LOAD_FAILED, SUFFIX_FAILED, ARCTIC_PLUGIN
 #   skipped_budget     not launched: --budget was spent
 #   skipped_blocked    not launched: its speculation method failed to start earlier in the calibration
 #   kernel_refused     the engine exited at start-up naming a kernel setting of the config (Config.kernels)
+#   quant_refused      the engine's own check refused the checkpoint's quantization on this GPU (QUANT_REFUSED)
 FAILURE_KINDS = ("oom_startup", "mm_profiling", "load_failure", "suffix_unusable", "arctic_plugin", "startup_other",
                  "power_unavailable", "request_failures", "crashed", "skipped_budget", "skipped_blocked",
-                 "draft_refused", "draft_unavailable", "kernel_refused")
+                 "draft_refused", "draft_unavailable", "kernel_refused", "quant_refused")
 _CAUSE_KINDS = {MM_PROFILING_FAILED: "mm_profiling", LOAD_FAILED: "load_failure", SUFFIX_FAILED: "suffix_unusable",
-                ARCTIC_PLUGIN_FAILED: "arctic_plugin", SUFFIX_TRIAL_ERROR: "startup_other"}
+                ARCTIC_PLUGIN_FAILED: "arctic_plugin", SUFFIX_TRIAL_ERROR: "startup_other",
+                QUANT_REFUSED: "quant_refused"}
 BUDGET_SKIPPED = "skipped: calibration budget reached"
 KERNEL_REFUSED = "the engine refused a kernel setting"
 
@@ -248,6 +252,34 @@ def load_failure(log: str) -> Optional[str]:
     return _first_line(log, (_LOAD_FAILURE,))
 
 
+# How both engines refuse, at start-up, a quantization this GPU cannot run. Whole phrases, vLLM v0.33.0 / SGLang
+# v0.5.23, after each resolved the checkpoint's method (an NVFP4 ModelOpt checkpoint's "modelopt" to modelopt_fp4):
+#   "The quantization method X is not supported for the current GPU. Minimum capability: N. Current capability: M."
+#       vLLM config/vllm.py VllmConfig._get_quantization_config (930-936), SGLang model_loader/loader.py (259-264),
+#       and SGLang's "The quantization method moe_wna16 + awq is not supported for the current GPU. ..."
+#   "Quantization scheme is not supported for the current GPU. Min capability: N. Current capability: M."
+#       compressed-tensors, checked per layer's scheme (vLLM also says "Required capability"): vLLM
+#       compressed_tensors.py (401-414); SGLang (421-425) passes the parts as separate arguments, so its log shows
+#       them quoted and comma-separated
+#   "<dtype> is not supported for quantization method X. Supported dtypes: [...]"     both, right after the first
+_QUANT_GPU = re.compile(r"(?:quantization method (\S+(?: \+ \S+)?)|quantization scheme) is not supported for\W+the "
+                        r"current GPU\W+(?:minimum|min|required) capability: (\d+)\W+current capability: (\d+)",
+                        re.IGNORECASE)
+_QUANT_DTYPE = re.compile(r"\S+ is not supported for quantization method \S+\. Supported dtypes: \[[^\]\n]{0,200}\]")
+
+
+def quant_refusal(log: str) -> Optional[str]:
+    """What the engine said when it would not run the checkpoint's quantization here, or None: "modelopt_fp4 needs
+    compute capability 10.0, this GPU has 8.9", or its dtype line."""
+    m = _QUANT_GPU.search(log)
+    if m:
+        need, have = int(m.group(2)), int(m.group(3))
+        return (f"{m.group(1) or 'its quantization scheme'} needs compute capability {need // 10}.{need % 10}, "
+                f"this GPU has {have // 10}.{have % 10}")
+    m = _QUANT_DTYPE.search(log)
+    return _short(m.group(0)) if m else None
+
+
 def _short(line: str, limit: int = 160) -> str:
     line = line.strip()
     return line if len(line) <= limit else line[:limit - 3] + "..."
@@ -356,7 +388,8 @@ def startup_finders(cfg: Config, log: str) -> List[Tuple[str, Callable[[str], Op
     suffix = (cfg.spec_decode or "").startswith("suffix:")
     if suffix:
         finders.append((SUFFIX_FAILED, lambda text: arctic_failure(text, ("import", "build", "missing"))))
-    finders += [(MM_PROFILING_FAILED, mm_profiling_failure), (LOAD_FAILED, load_failure)]
+    finders += [(QUANT_REFUSED, quant_refusal), (MM_PROFILING_FAILED, mm_profiling_failure),
+                (LOAD_FAILED, load_failure)]
     lowered = log.lower()
     if suffix and "failed to allocate" not in lowered and "no available memory" not in lowered:
         finders.append((SUFFIX_TRIAL_ERROR, lambda text: (lambda e: f"error in the log: {e}" if e else None)(
@@ -905,6 +938,9 @@ class StagedSearch:
     _head_started: set = field(default_factory=set)
     _head_noted: set = field(default_factory=set)
     _headroom_retried: set = field(default_factory=set)  # config keys launched again with less memory reserved
+    # (engine, precision) whose quantization the engine refused on this GPU (quant_refused) in a trial without a
+    # second model: its check is the method's and the card's, so every other config of the precision would fail too.
+    _quant_blocked: set = field(default_factory=set)
     block_failed_pairs: bool = False  # verified mode only: table mode launches what it always launched
 
     # ---- predictor helpers
@@ -1026,6 +1062,11 @@ class StagedSearch:
             self._skipped.append(f"{stage} {key}")
             return self._skip(TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
                                           error=BUDGET_SKIPPED, failure_kind="skipped_budget"))
+        if (cfg.backend, cfg.quant) in self._quant_blocked:
+            return self._skip(TrialResult(
+                config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
+                error=f"skipped: the engine refused {cfg.quant} on this GPU earlier in this calibration",
+                failure_kind="skipped_blocked"))
         spec_kind = (cfg.spec_decode or "").partition(":")[0]
         pair_key = None
         if spec_kind in ("draft", "assist"):
@@ -1064,6 +1105,11 @@ class StagedSearch:
             self._head_started.add(head_key)
         if not res.launched and spec_kind and startup_cause(res.error)[0] == SUFFIX_FAILED:
             self._spec_blocked.setdefault(spec_kind, [])
+        # A trial with a second model may have failed on that model's own quantization (a draft, an fp8 MTP head).
+        if not res.launched and not cfg.spec_decode and failure_kind(res) == "quant_refused":
+            self._quant_blocked.add((cfg.backend, cfg.quant))
+            self.notes.append(f"{cfg.backend}: the engine refused {cfg.quant} on this GPU "
+                              f"({startup_cause(res.error)[1]}); it is not launched again in this calibration")
         retry = self._headroom_retry(cfg, res)
         if retry is not None:
             self.results.append(res)  # the failed launch stays on record for the memory report

@@ -631,6 +631,7 @@ def startup_failure_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan
     from rigtune.calibrate.search import (
         ARCTIC_PLUGIN_FAILED,
         LOAD_FAILED,
+        QUANT_REFUSED,
         SUFFIX_FAILED,
         SUFFIX_TRIAL_ERROR,
         startup_cause,
@@ -639,7 +640,7 @@ def startup_failure_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan
     def fn(c: Config, res) -> Tuple[Optional[Config], Optional[str]]:
         be, pm = reg.get(c.backend), plan.prepared.get(c.backend)
         kind, line = startup_cause(res.error)
-        if be is None or pm is None or kind is None:
+        if be is None or pm is None or kind is None or kind == QUANT_REFUSED:  # the search blocks and notes it
             return None, None
         engine = f"{ENGINE_NAMES.get(c.backend, c.backend)} {be.version(hw) or '(version unknown)'}"
         if kind in (SUFFIX_FAILED, ARCTIC_PLUGIN_FAILED, SUFFIX_TRIAL_ERROR):
