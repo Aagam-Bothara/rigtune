@@ -252,9 +252,13 @@ def record_mtp_head(prepared: PreparedModel, engine: str,
     prepared.spec_repos[MTP_KEY] = prepared.spec.hf_id
     if facts.mtp.bytes:
         prepared.spec_bytes[MTP_KEY] = int(facts.mtp.bytes)
-    if facts.mtp.shared_bytes:
+    if facts.mtp.shared_bytes is not None:  # 0: the head brings its own embedding and output head
         prepared.spec_bytes[MTP_SHARED_KEY] = int(facts.mtp.shared_bytes)
-    return []
+    # The planner's count (hfconfig.arch_from_config) comes from the config alone; a head counted from its tensors
+    # (Qwen3-Next declares none) must reach it too.
+    if prepared.arch.mtp_layers != facts.mtp.layers:
+        prepared.arch.mtp_layers = facts.mtp.layers
+    return [f"{engine}: {n}" for n in facts.notes]
 
 
 def _vllm_version() -> Optional[str]:
@@ -592,13 +596,14 @@ def draft_bytes(spec: Optional[str], model: PreparedModel) -> Optional[int]:
     EAGLEWorkerV2.alloc_memory_pool -> init_lm_head, after the scheduler has sized the target's pools
     (managers/scheduler.py init_model_worker: target, draft, then init_memory_pools; lines 1047-1056 at v0.5.19,
     1128-1137 at v0.5.23). So both copies are resident when the pools are sized: 2 x 248,320 x 4,096 x 2 B =
-    4.07 GB for Qwen3.5-9B in bf16, beside its 0.49 GB head. None when either size is unknown."""
+    4.07 GB for Qwen3.5-9B in bf16, beside its 0.49 GB head. A head that brings its own embedding and output head
+    (GLM's, DeepSeek's) has them in its own bytes, and shared bytes of 0. None when either size is unknown."""
     if not spec:
         return 0
     kind, model_id, _ = parse(spec)
     if kind in SELF_HEAD:
         head, shared = model.spec_bytes.get(MTP_KEY), model.spec_bytes.get(MTP_SHARED_KEY)
-        return head + shared if head and shared else None
+        return None if not head or shared is None else head + shared
     if kind not in SECOND_MODEL:
         return 0
     return model.spec_bytes.get(model_id or "")

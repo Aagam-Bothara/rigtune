@@ -156,13 +156,135 @@ def test_a_declared_head_without_its_tensors_is_a_note_not_a_head():
     facts = introspect.inspect_model(SPEC, features=("mtp",), **fetchers(QWEN35, tensors=no_head))
     assert facts.mtp is None
     assert facts.notes == ["Qwen/Qwen3.5-9B declares 1 MTP layer(s) (mtp_num_hidden_layers) but its weights hold no "
-                           "mtp.* tensors; no MTP head is reported"]
+                           "MTP tensors (none named mtp or nextn, and no decoder layer past the last); no MTP head is "
+                           "reported"]
 
 
-def test_tensors_without_a_declared_head_are_a_note():
+def test_a_head_shipped_without_a_declared_count_is_counted_from_its_tensors():
+    """Qwen3-Next, LongCat-Flash and MiMo-V2-Flash ship mtp.* tensors and declare no count."""
     head, notes = introspect.mtp_head(QWEN25, QWEN35_TENSORS, "x")
-    assert head is None and notes == ["x has 15 mtp.* tensors but its config declares no MTP layers; no MTP head is "
-                                      "reported"]
+    assert (head.layers, head.config_key, head.tensors) == (1, "the tensors", 15)
+    assert notes == ["x declares no MTP layers but ships 15 MTP-named tensors; counted 1 layer(s) from them"]
+    mimo_v2 = {f"model.mtp.layers.{i}.mlp.weight": 1 for i in range(3)}  # MiMo-V2-Flash: model.mtp.layers.0-2
+    assert introspect.mtp_head({"num_hidden_layers": 48}, mimo_v2)[0].layers == 3
+
+
+# Other families' layouts, as their configs and model.safetensors.index.json name them on the Hub (read on
+# 20 November 2026); sizes made up.
+def _decoder(prefix: str, layers: int, *, norm: bool = True) -> dict:
+    """A decoder's layers, with the final norm that sits beside them (prefix + "norm.weight") unless `norm` is off."""
+    out = {f"{prefix}layers.{i}.self_attn.q_proj.weight": 1000 for i in range(layers)}
+    return {**out, f"{prefix}norm.weight": 1} if norm else out
+
+
+INKLING = {"architectures": ["InklingForConditionalGeneration"], "model_type": "inkling_mm_model",
+           "text_config": {"num_hidden_layers": 42},
+           "mtp_config": {"num_nextn_predict_layers": 8, "chain_hidden_post_norm": False}}
+INKLING_TENSORS = {**_decoder("model.llm.", 42), "model.llm.embed.weight": 50, "model.llm.unembed.weight": 50,
+                   **{f"model.mtp.layers.{i}.mlp.down_proj.weight": 7 for i in range(8)}}
+DEEPSEEK = {"architectures": ["DeepseekV3ForCausalLM"], "num_hidden_layers": 61, "num_nextn_predict_layers": 1}
+DEEPSEEK_TENSORS = {**_decoder("model.", 61), "model.embed_tokens.weight": 50, "lm_head.weight": 50,
+                    "model.layers.61.self_attn.q_a_proj.weight": 7, "model.layers.61.eh_proj.weight": 7}
+GLM_AIR = {"architectures": ["Glm4MoeForCausalLM"], "num_hidden_layers": 46, "num_nextn_predict_layers": 1}
+GLM_AIR_TENSORS = {**_decoder("model.", 46), "model.embed_tokens.weight": 50, "lm_head.weight": 50,
+                   "model.layers.46.embed_tokens.weight": 9, "model.layers.46.shared_head.head.weight": 9}
+MIMO = {"architectures": ["MiMoForCausalLM"], "num_hidden_layers": 36, "num_nextn_predict_layers": 1}
+MIMO_TENSORS = {**_decoder("model.", 36), "model.mtp_layers.0.input_layernorm.weight": 3,
+                "model.mtp_layers.0.eh_proj.weight": 4}
+STEP = {"architectures": ["Step3p5ForCausalLM"], "num_hidden_layers": 45, "num_nextn_predict_layers": 3}
+STEP_TENSORS = {**_decoder("model.", 45), "model.embed_tokens.weight": 50,
+                **{f"model.layers.{i}.transformer.shared_head.output.weight": 9 for i in (45, 46, 47)}}
+
+
+@pytest.mark.parametrize("config, tensors, layers, key, count, size", [
+    (INKLING, INKLING_TENSORS, 8, "mtp_config.num_nextn_predict_layers", 8, 56),  # a sub-config, model.mtp.*
+    (DEEPSEEK, DEEPSEEK_TENSORS, 1, "num_nextn_predict_layers", 2, 14),  # a decoder layer past the 61st
+    (GLM_AIR, GLM_AIR_TENSORS, 1, "num_nextn_predict_layers", 2, 18),
+    (MIMO, MIMO_TENSORS, 1, "num_nextn_predict_layers", 2, 7),  # model.mtp_layers.*
+    (STEP, STEP_TENSORS, 3, "num_nextn_predict_layers", 3, 27),  # three layers past the last
+])
+def test_every_family_s_layout_is_found(config, tensors, layers, key, count, size):
+    head, notes = introspect.mtp_head(config, tensors, "x")
+    assert (head.layers, head.config_key, head.tensors, head.bytes) == (layers, key, count, size) and notes == []
+
+
+GLM_46 = {"architectures": ["Glm4MoeForCausalLM"], "num_hidden_layers": 92, "num_nextn_predict_layers": 1}
+GLM_46_TENSORS = {**_decoder("model.", 92), "model.embed_tokens.weight": 50, "lm_head.weight": 50,
+                  "model.layers.92.eh_proj.weight": 9, "model.layers.92.shared_head.norm.weight": 1}
+
+
+@pytest.mark.parametrize("config, tensors, shared", [
+    (GLM_AIR, GLM_AIR_TENSORS, 0),  # it brings its own embed_tokens and shared_head.head: none of the target's
+    (GLM_46, GLM_46_TENSORS, 100),  # only a shared_head.norm: both of the target's are copied
+    (DEEPSEEK, {**DEEPSEEK_TENSORS, "model.layers.61.embed_tokens.weight": 9}, 50),  # its own embedding only
+    (STEP, STEP_TENSORS, 50),  # its own output head (shared_head.output) only: the target's embedding is copied
+    ({**MIMO, "num_hidden_layers": 2}, {**_decoder("model.", 2), "model.embed_tokens.weight": 50, "lm_head.weight": 50,
+                                        "model.mtp.embed_tokens.weight": 9, "model.mtp.layers.0.w": 3}, 50),  # LongCat
+    (INKLING, INKLING_TENSORS, 100),  # model.llm.embed and model.llm.unembed
+    (QWEN35, QWEN35_TENSORS, QWEN35_SHARED_BYTES),
+    ({"num_hidden_layers": 2, "num_nextn_predict_layers": 1},  # Nemotron-H's backbone.embeddings
+     {"backbone.embeddings.weight": 40, "lm_head.weight": 40, "mtp.layers.0.mixer.weight": 3}, 80),
+])
+def test_the_target_s_embedding_and_output_head_as_each_family_names_them(config, tensors, shared):
+    assert introspect.mtp_head(config, tensors)[0].shared_bytes == shared
+
+
+def test_a_head_that_brings_its_own_embedding_is_sized_by_its_own_bytes():
+    from rigtune import speculative
+    from rigtune.hfconfig import arch_from_config
+    from rigtune.models import PreparedModel
+
+    arch = arch_from_config({k: v for k, v in GLM_AIR.items() if k != "num_nextn_predict_layers"})  # planner: 0
+    pm = PreparedModel(spec=ModelSpec(hf_id="zai-org/GLM-4.5-Air"), backend="sglang", arch=arch,
+                       hf_path="zai-org/GLM-4.5-Air")
+    head = introspect.mtp_head(GLM_AIR, GLM_AIR_TENSORS)[0]
+    notes = speculative.record_mtp_head(pm, "sglang", inspect=lambda spec: introspect.ModelFacts(mtp=head))
+    assert notes == [] and speculative.draft_bytes("mtp:1", pm) == 18  # its 18 bytes, nothing added
+    assert pm.arch.mtp_layers == 1  # the planner gets the head's count
+    glm46 = introspect.mtp_head(GLM_46, GLM_46_TENSORS)[0]
+    speculative.record_mtp_head(pm, "sglang", inspect=lambda spec: introspect.ModelFacts(mtp=glm46))
+    assert speculative.draft_bytes("mtp:1", pm) == 10 + 100  # its own 10, and both of the target's copied
+
+
+@pytest.mark.parametrize("tower_layers", [29, 32])  # one past the text model's 28, and well past it
+def test_a_vision_tower_s_layers_are_never_taken_for_a_head(tower_layers):
+    config = {"text_config": {"num_hidden_layers": 28}, "num_nextn_predict_layers": 1}
+    tensors = {**_decoder("model.language_model.", 28), **_decoder("model.visual.encoder.", tower_layers)}
+    head, notes = introspect.mtp_head(config, tensors, "x")
+    assert head is None and "hold no MTP tensors" in notes[0]
+
+
+def test_a_layer_stack_with_no_embedding_or_norm_beside_it_is_not_the_language_model():
+    config = {"num_hidden_layers": 28, "num_nextn_predict_layers": 1}
+    tensors = {**_decoder("model.", 28), **_decoder("encoder.", 29, norm=False)}
+    assert introspect.mtp_head(config, tensors)[0] is None
+
+
+def test_a_named_head_ends_the_search():
+    # Inkling's 8 named MTP layers beside a 47-layer audio encoder whose layers 42-46 run past the text model's.
+    tensors = {**INKLING_TENSORS, **_decoder("model.audio.encoder.", 47)}
+    head, _ = introspect.mtp_head(INKLING, tensors)
+    assert head.tensors == 8
+
+
+@pytest.mark.parametrize("extra", [
+    {"model.layers.62.mlp.weight": 1},  # past the declared head: not a head layer
+    {"model.layers.61.mlp.weight": 1, "model.layers.63.mlp.weight": 1},
+])
+def test_layers_past_the_declared_count_are_not_a_head(extra):
+    head, _ = introspect.mtp_head(DEEPSEEK, {**_decoder("model.", 61), **extra})
+    assert head is None
+
+
+def test_a_decoder_with_a_gap_is_not_read_as_one():
+    tensors = {k: v for k, v in DEEPSEEK_TENSORS.items() if not k.startswith("model.layers.5.")}
+    assert introspect.mtp_head(DEEPSEEK, tensors)[0] is None
+
+
+def test_the_planner_counts_a_head_declared_in_a_sub_config():
+    from rigtune.hfconfig import arch_from_config
+
+    assert arch_from_config({**INKLING, "text_config": {**INKLING["text_config"], "hidden_size": 4096}}).mtp_layers == 8
 
 
 def test_unreadable_weights_or_config_are_notes_not_exceptions():
@@ -185,6 +307,9 @@ def test_a_listing_without_sizes_still_finds_the_head():
 @pytest.mark.parametrize("config, expected", [
     ({"num_nextn_predict_layers": 1}, (1, "num_nextn_predict_layers")),  # the DeepSeek-style key, top level
     ({"text_config": {"mtp_num_hidden_layers": 2}}, (2, "mtp_num_hidden_layers")),
+    ({"mtp_config": {"num_nextn_predict_layers": 8}}, (8, "mtp_config.num_nextn_predict_layers")),  # Inkling
+    ({"mtp_config": {"num_nextn_predict_layers": 0}, "num_nextn_predict_layers": 1}, (1, "num_nextn_predict_layers")),
+    ({"vision_config": {"num_nextn_predict_layers": 3}}, None),  # only a sub-config named for MTP
     ({"mtp_num_hidden_layers": 0}, None),
     ({"mtp_num_hidden_layers": True}, None),
     ({"mtp_num_hidden_layers": "1"}, None),

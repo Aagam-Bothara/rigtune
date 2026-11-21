@@ -5,19 +5,31 @@ safetensors headers), never from its name, for the reason quantized.verified_bit
 A feature the checkpoint does not declare, or one that could not be read, is None and describes itself as "none";
 a file that is missing or cannot be fetched adds a note and never raises.
 
-  * MTP head. Qwen3.5-family checkpoints carry a multi-token-prediction head beside the model: config.json declares
-    its layers (`mtp_num_hidden_layers`, in `text_config` for the multimodal ones) and the weights hold them under
-    `mtp.`. vLLM reads that key for Qwen3.5 (v0.29.0 config/speculative.py SpeculativeConfig.hf_config_override,
-    line 893; v0.33.0 line 998, falling back to text_config) and loads the `mtp.` tensors into its draft, besides
-    its own copy of the embedding and output head, which it then drops for the target's
-    (model_executor/models/qwen3_5_mtp.py Qwen3_5MTP.load_weights, both tags); SGLang loads only names containing
-    "mtp" and strips the `mtp.` prefix (srt/models/qwen3_5_mtp.py Qwen3_5ForCausalLMMTP.load_weights, both tags).
-    `num_nextn_predict_layers`, the key DeepSeek-style heads use, is read too. A declared head is reported only when
-    the weights hold `mtp.` tensors: a config key without them is a note. The weights are listed (their headers
-    only) just when the config declares a head, so a model without one costs no request beyond its config; when the
-    Hub cannot be asked, the headers of a fully cached snapshot in the local Hugging Face cache are read instead.
-    The listing also gives the size of the target's embedding and output head, which each engine's draft first
-    builds a copy of (MtpHead.shared_bytes).
+  * MTP head: a multi-token-prediction head a checkpoint ships beside the model. Whether an engine can load it is
+    the engine's own question (rigtune.backends.own_head); this says whether the checkpoint declares one and holds
+    its weights. Families declare it three ways, each read in config.json, in its text_config, and in a sub-config
+    whose name has "mtp" in it:
+      `mtp_num_hidden_layers` (Qwen3.5, Qwen3.6; vLLM v0.33.0 config/speculative.py hf_config_override line 998),
+      `num_nextn_predict_layers` (DeepSeek, GLM, MiMo, Ernie and most others),
+      `mtp_config.num_nextn_predict_layers` (Inkling; vLLM line 1088, SGLang configs/model_config.py line 1101).
+    Qwen3-Next, LongCat-Flash and MiMo-V2-Flash declare no count and ship the tensors: the count is then taken from
+    the tensors' layer indices, which the engine's own rule is asked about (rigtune.backends.own_head).
+    And they store it two ways, read from the weights' names (the safetensors headers of 36 checkpoints, checked on
+    the Hub on 20 November 2026):
+      under a segment that starts with "mtp" or "nextn": Qwen3.5's `mtp.layers.0...`, Inkling-Small's
+        `model.mtp.layers...`, MiMo-7B's `model.mtp_layers.0...`;
+      as decoder layers past the last: DeepSeek-V3's `model.layers.61...` (61 layers), GLM-4.5-Air's
+        `model.layers.46...` (46). Only under the prefix whose layer indices are the language model's own
+        (0 to num_hidden_layers - 1, then at most the declared count) and which has its own embedding or final norm
+        beside them, and not when a named head was found, so a vision or audio tower's `layers.N`, which can run
+        past the language model's count, is not taken for a head. (An unnamed stack with its own norm and exactly
+        the declared count past the language model's would be; none of the 36 checkpoints has one.)
+    A declared head is reported only when the weights hold it: a config key without the tensors is a note. The
+    weights are listed (their headers only) just when the config declares a head, so a model without one costs no
+    request beyond its config; when the Hub cannot be asked, the headers of a fully cached snapshot in the local
+    Hugging Face cache are read instead. The listing also gives the size of the target's embedding and output head,
+    which Qwen3.5's draft first builds a copy of in both engines (MtpHead.shared_bytes;
+    model_executor/models/qwen3_5_mtp.py Qwen3_5MTP.load_weights, srt/models/qwen3_5_mtp.py).
   * Quantization: what `quantization_config` (config.json, or its text_config) or ModelOpt's hf_quant_config.json
     declares: method, format, weight and activation bits, KV-cache scheme.
   * Thinking switch: an `enable_thinking` variable in the chat template, and what the template does without it.
@@ -48,7 +60,9 @@ logger = logging.getLogger(__name__)
 
 FEATURES: Tuple[str, ...] = ("mtp", "quantization", "thinking", "modalities")
 MTP_LAYER_KEYS: Tuple[str, ...] = ("mtp_num_hidden_layers", "num_nextn_predict_layers")
-MTP_PREFIX = "mtp."
+# A name segment that starts an MTP head's tensors: "mtp.", "model.mtp.", "model.mtp_layers.", "...nextn...".
+MTP_SEGMENT = re.compile(r"(?:^|\.)(?:mtp|nextn)[^.]*\.")
+_LAYER = re.compile(r"^(?:(.*)\.)?layers\.(\d+)\.")
 NONE = "none"
 
 # Bytes per element of each safetensors dtype (the format's own list); a tensor of another dtype has no size here.
@@ -62,8 +76,8 @@ MODELOPT_BITS = {"FP8": (8, 8), "NVFP4": (4, 4)}
 @dataclass(frozen=True)
 class MtpHead:
     layers: int  # MTP layers the config declares
-    config_key: str  # the key that declared them
-    tensors: int  # tensors under "mtp." in the weights
+    config_key: str  # the key that declared them ("mtp_config.num_nextn_predict_layers" for one in a sub-config)
+    tensors: int  # the head's tensors in the weights (head_tensors)
     bytes: Optional[int]  # their summed size; None when the listing gave names without sizes
     # The target's input embedding and output head in the listing (one tensor when they are tied). Both engines'
     # MTP drafts first build a copy of each and later swap in the target's (vLLM loads them too), so these bytes
@@ -129,14 +143,67 @@ def _sections(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [config] + ([text] if isinstance(text, dict) else [])
 
 
+def _mtp_sections(config: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
+    """(prefix, section) where a head's layer count can be declared: the config, its text_config, and in either a
+    sub-config whose name has "mtp" in it (Inkling's mtp_config)."""
+    out: List[Tuple[str, Dict[str, Any]]] = []
+    for section in _sections(config):
+        out.append(("", section))
+        out += [(f"{k}.", v) for k, v in section.items() if "mtp" in k.lower() and isinstance(v, dict)]
+    return out
+
+
 def mtp_layers(config: Optional[Dict[str, Any]]) -> Optional[Tuple[int, str]]:
     """(layers, key) of the MTP head a config declares, or None."""
-    for section in _sections(config or {}):
+    for prefix, section in _mtp_sections(config or {}):
         for key in MTP_LAYER_KEYS:
             value = section.get(key)
             if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-                return value, key
+                return value, prefix + key
     return None
+
+
+def _num_layers(config: Dict[str, Any]) -> Optional[int]:
+    """The language model's decoder layers: text_config's num_hidden_layers first, as for every other text field."""
+    for section in reversed(_sections(config)):
+        value = section.get("num_hidden_layers")
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
+def head_tensors(tensors: Dict[str, Optional[int]], config: Dict[str, Any], declared: int) -> List[str]:
+    """The names of an MTP head's tensors in a listing. Those under an "mtp"/"nextn" segment (MTP_SEGMENT) when there
+    are any; else decoder layers past the language model's last. The language model is the prefix whose layer indices
+    run 0..n-1 with none missing and at most `declared` more after them, and which has its own embedding or final norm
+    beside its layers (DeepSeek-V3's model.embed_tokens, model.norm): a vision or audio tower's `layers.N` can run
+    past the language model's count, even by exactly one, and has neither."""
+    named = sorted(n for n in tensors if MTP_SEGMENT.search(n))
+    n = _num_layers(config)
+    if named or n is None:
+        return named
+    layer_of: Dict[str, Tuple[str, int]] = {}  # name -> (prefix, layer index)
+    for name in tensors:
+        m = _LAYER.match(name)
+        if m:
+            layer_of[name] = (m.group(1) or "", int(m.group(2)))
+    indices: Dict[str, set] = {}
+    for prefix, i in layer_of.values():
+        indices.setdefault(prefix, set()).add(i)
+    found: List[str] = []
+    for prefix, seen in indices.items():
+        extra = {i for i in seen if i >= n}
+        if extra and set(range(n)) <= seen and extra <= set(range(n, n + declared)) and _decoder_of(prefix, tensors):
+            found += [name for name, (p, i) in layer_of.items() if p == prefix and i in extra]
+    return sorted(found)
+
+
+def _decoder_of(prefix: str, tensors: Dict[str, Optional[int]]) -> bool:
+    """Whether `prefix` holds a language model: not a tower by its name, and an embedding or a final norm sits beside
+    its layers."""
+    lead = prefix + "." if prefix else ""
+    return not _TOWER.search(lead) and any(f"{lead}{leaf}.weight" in tensors
+                                           for leaf in ("embed_tokens", "embed", "embeddings", "norm"))
 
 
 def mtp_head(config: Optional[Dict[str, Any]], tensors: Optional[Dict[str, Optional[int]]],
@@ -144,26 +211,56 @@ def mtp_head(config: Optional[Dict[str, Any]], tensors: Optional[Dict[str, Optio
     """The MTP head a config declares and its weights hold, with notes when only one of the two says so.
     `tensors` maps tensor names to bytes (None where unknown); None means the weights could not be listed."""
     declared = mtp_layers(config)
-    found = sorted(n for n in tensors if n.startswith(MTP_PREFIX)) if tensors is not None else None
+    notes: List[str] = []
     if declared is None:
-        notes = [f"{name} has {len(found)} {MTP_PREFIX}* tensors but its config declares no MTP layers; no MTP "
-                 "head is reported"] if found else []
-        return None, notes
+        # Qwen3-Next, LongCat-Flash and MiMo-V2-Flash ship mtp.* tensors and declare no count (vLLM's rules for them
+        # default or fix it); the depth is then counted from the tensors.
+        named = sorted(n for n in tensors if MTP_SEGMENT.search(n)) if tensors is not None else []
+        if not named:
+            return None, []
+        depths = {m.group(1) for n in named if (m := _HEAD_LAYER.search(n))}
+        declared = (len(depths) or 1, "the tensors")
+        notes.append(f"{name} declares no MTP layers but ships {len(named)} MTP-named tensors; counted "
+                     f"{declared[0]} layer(s) from them")
     layers, key = declared
-    if found is None:
+    if tensors is None:
         return None, [f"{name} declares {layers} MTP layer(s) ({key}) but its weights could not be listed; no MTP "
                       "head is reported"]
+    found = head_tensors(tensors, config or {}, layers)
     if not found:
-        return None, [f"{name} declares {layers} MTP layer(s) ({key}) but its weights hold no {MTP_PREFIX}* "
-                      "tensors; no MTP head is reported"]
+        return None, [f"{name} declares {layers} MTP layer(s) ({key}) but its weights hold no MTP tensors (none "
+                      "named mtp or nextn, and no decoder layer past the last); no MTP head is reported"]
+    head = set(found)
     return MtpHead(layers=layers, config_key=key, tensors=len(found), bytes=_total(tensors[n] for n in found),
-                   shared_bytes=_total(tensors[n] for n in tensors if _shared(n))), []
+                   shared_bytes=_shared_bytes(tensors, head)), notes
 
 
-def _shared(name: str) -> bool:
-    """The target's input embedding or output head (model.embed_tokens, model.language_model.embed_tokens,
-    lm_head), not a copy under mtp."""
-    return not name.startswith(MTP_PREFIX) and (name.endswith("embed_tokens.weight") or name == "lm_head.weight")
+# The target's input embedding and output head, as families name them: model.embed_tokens (Qwen, Llama, DeepSeek),
+# model.language_model.embed_tokens (multimodal Qwen), model.llm.embed and model.llm.unembed (Inkling),
+# backbone.embeddings (Nemotron-H), model.word_embeddings (Ling), lm_head. A tower's are not the language model's.
+_EMBEDDING = re.compile(r"(?:^|\.)(?:embed_tokens|embed|embeddings|word_embeddings|wte)\.weight$")
+_OUTPUT = re.compile(r"(?:^|\.)(?:lm_head|unembed)\.weight$")
+_TOWER = re.compile(r"(?:^|\.)(?:visual|vision\w*|audio\w*|speech\w*)\.")
+# A head's own copy of the output head (GLM-4.5's and DeepSeek's model.layers.<n>.shared_head.head, Step-3.5's
+# .transformer.shared_head.output); its own embedding copy matches _EMBEDDING (model.layers.<n>.embed_tokens,
+# LongCat's model.mtp.embed_tokens). GLM-4.6's layer 92 has only shared_head.norm, which is neither.
+_OWN_OUTPUT = re.compile(r"(?:^|\.)(?:shared_head\.head|shared_head\.output|lm_head|unembed)\.weight$")
+# A head's layer index: mtp.layers.<i>, model.mtp.layers.<i>, model.mtp_layers.<i>, ...nextn...layers.<i>.
+_HEAD_LAYER = re.compile(r"(?:mtp|nextn)(?:[^.]*\.(?:.*\.)?layers?|_layers?)\.(\d+)\.")
+
+
+def _shared_bytes(tensors: Dict[str, Optional[int]], head: set) -> Optional[int]:
+    """The target's embedding and output head that a draft builds a copy of: each one the head does not bring its own
+    of. 0 when it brings both; None when a size is unknown or the target's embedding is not found. A tied checkpoint
+    has no separate output head to add."""
+    own_embedding = any(_EMBEDDING.search(n) for n in head)
+    own_output = any(_OWN_OUTPUT.search(n) for n in head)
+    target = [n for n in tensors if n not in head and not _TOWER.search(n)]
+    embedding = [] if own_embedding else [n for n in target if _EMBEDDING.search(n)]
+    output = [] if own_output else [n for n in target if _OUTPUT.search(n)]
+    if not own_embedding and not embedding:
+        return None
+    return _total(tensors[n] for n in embedding + output) if embedding or output else 0
 
 
 def _total(sizes) -> Optional[int]:
