@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from rigtune.hfconfig import INDEX, listed_bytes, local_checkpoint_bytes
+
 
 class PairFiles(BaseModel):
     repo: Optional[str] = None
@@ -311,7 +313,7 @@ def _from_directory(root: Path, repo: Optional[str] = None, sha: Optional[str] =
     config = _json(root / "config.json")
     weights = sorted(root.glob("*.safetensors"))
     # Some shards of several: the size is unknown, not the sum of those present, which would plan too little memory.
-    size = None if _shards_missing(root, weights) else sum(f.stat().st_size for f in weights) or None
+    size = None if _shards_missing(root, weights) else local_checkpoint_bytes(root)
     if size is None and not weights and (root / "model.safetensors.index.json").is_file():
         size = _json(root / "model.safetensors.index.json").get("metadata", {}).get("total_size")
     tokenizer = root / "tokenizer.json"
@@ -355,8 +357,11 @@ def read_files(repo: str, source: str = "hub", *, revision: Optional[str] = None
             raise HubLookupError("error")
         config = _json(Path(file_fetcher(repo, "config.json", revision=sha)))
         files = {_get(s, "rfilename"): s for s in (_get(info, "siblings") or [])}
-        sizes = [_get(s, "size") for name, s in files.items() if name.endswith(".safetensors")]
-        size = sum(sizes) if sizes and all(_positive(s) for s in sizes) else None
+        try:  # the files the engines load: an unreadable index leaves the size unread, not the pair
+            size = listed_bytes({name: _get(s, "size") for name, s in files.items()},
+                                lambda: file_fetcher(repo, INDEX, revision=sha))
+        except Exception:
+            size = None
         tok = files.get("tokenizer.json")
         digest = _get(_get(tok, "lfs"), "sha256")  # a git blob id is NOT sha256
         ts = _get(tok, "size")

@@ -70,15 +70,19 @@ def _default_fetch_config(repo_id: str, token: Optional[str] = None) -> Optional
 
 
 def _repo_size(api: Any, repo_id: str) -> Optional[int]:
+    """The safetensors files an engine loads from the repository (hfconfig.loaded_bytes); None when unknown."""
+    from huggingface_hub import hf_hub_download
+
+    from rigtune.hfconfig import INDEX, hub_listing, listed_bytes
+
     try:
         info = api.model_info(repo_id, files_metadata=True)
+        sha = getattr(info, "sha", None)
+        return listed_bytes(hub_listing(info), lambda: hf_hub_download(
+            repo_id, INDEX, revision=sha if isinstance(sha, str) else None))
     except Exception as exc:
-        logger.debug("model_info(%s) failed: %s", repo_id, exc)
+        logger.debug("could not size %s: %s", repo_id, exc)
         return None
-    sizes = [getattr(s, "size", None) for s in (getattr(info, "siblings", None) or [])
-             if getattr(s, "rfilename", "").endswith(".safetensors")]
-    sizes = [s for s in sizes if s]
-    return int(sum(sizes)) if sizes else None
 
 
 def _int8(tensor: Any) -> bool:

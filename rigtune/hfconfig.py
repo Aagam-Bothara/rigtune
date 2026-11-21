@@ -265,6 +265,13 @@ def _index_files(path: Union[str, Path]) -> list:
         return sorted(set((json.load(fh).get("weight_map") or {}).values()))
 
 
+def listed_bytes(listing: Dict[str, Optional[int]], fetch_index: Callable[[], Union[str, Path]]) -> Optional[int]:
+    """loaded_bytes for a Hub repository's file listing (every file's path -> size), fetching its index through
+    `fetch_index` (a local path back) when the listing has one. Raises whatever fetch_index raises."""
+    sizes = {name: size for name, size in listing.items() if name.endswith(".safetensors")}
+    return loaded_bytes(sizes, _index_files(fetch_index()) if INDEX in listing else None)
+
+
 def local_checkpoint_bytes(root: Union[str, Path]) -> Optional[int]:
     """loaded_bytes for a local checkpoint directory; None when it cannot be read."""
     root = Path(root)
@@ -295,18 +302,18 @@ def hub_weights(spec: ModelSpec, token: Optional[str] = None) -> Tuple[Optional[
         return None, None
     st = getattr(info, "safetensors", None)
     params = int(st.total) if st and getattr(st, "total", None) else None
-    names = {getattr(s, "rfilename", ""): getattr(s, "size", None) for s in (getattr(info, "siblings", None) or [])}
-    sizes = {n: size for n, size in names.items() if n.endswith(".safetensors")}
-    files = None
-    if INDEX in names:
-        sha = getattr(info, "sha", None)
-        try:
-            files = _index_files(hf_hub_download(spec.hf_id, INDEX, revision=sha if isinstance(sha, str) else
-                                                 spec.revision, token=token))
-        except Exception as exc:  # a gated repository answers model_info but not a download without a token
-            logger.debug("could not read %s of %s: %s", INDEX, spec.hf_id, exc)
-            return params, None
-    return params, loaded_bytes(sizes, files)
+    sha = getattr(info, "sha", None)
+    try:
+        return params, listed_bytes(hub_listing(info), lambda: hf_hub_download(
+            spec.hf_id, INDEX, revision=sha if isinstance(sha, str) else spec.revision, token=token))
+    except Exception as exc:  # a gated repository answers model_info but not a download without a token
+        logger.debug("could not read %s of %s: %s", INDEX, spec.hf_id, exc)
+        return params, None
+
+
+def hub_listing(info: Any) -> Dict[str, Optional[int]]:
+    """Every file of a model_info(files_metadata=True) answer: its path -> size."""
+    return {getattr(s, "rfilename", ""): getattr(s, "size", None) for s in (getattr(info, "siblings", None) or [])}
 
 
 def snapshot_revision(spec: ModelSpec, cache_dir: Union[str, Path, None] = None) -> Optional[str]:

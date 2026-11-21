@@ -85,6 +85,52 @@ def test_the_size_is_never_saved_in_a_profile():
     assert "checkpoint_bytes" not in arch.model_dump() and "checkpoint_bytes" not in arch.model_dump_json()
 
 
+def _gpt_oss_info():
+    siblings = [SimpleNamespace(rfilename=n, size=s, lfs=None) for n, s in GPT_OSS.items()]
+    siblings.append(SimpleNamespace(rfilename=INDEX, size=36355, lfs=None))
+    return SimpleNamespace(sha="b" * 40, gated=False, siblings=siblings, safetensors=SimpleNamespace(total=1))
+
+
+def _gpt_oss_files(tmp_path):
+    """A downloader for the gpt-oss listing: its index, and a minimal config."""
+    def download(repo, filename, **kw):
+        f = tmp_path / filename
+        body = {"weight_map": {f"t{i}": n for i, n in enumerate(GPT_OSS_INDEX)}} if filename == INDEX else {}
+        f.write_text(json.dumps(body))
+        return str(f)
+    return download
+
+
+def test_a_draft_or_head_repository_is_sized_by_its_index(monkeypatch, tmp_path):
+    from rigtune import speculative
+    monkeypatch.setattr(huggingface_hub, "HfApi", lambda token=None: SimpleNamespace(
+        model_info=lambda *a, **k: _gpt_oss_info()))
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", _gpt_oss_files(tmp_path))
+    assert speculative.repo_bytes("openai/gpt-oss-20b") == 13761316904
+
+
+def test_a_prequantized_repository_is_sized_by_its_index(monkeypatch, tmp_path):
+    from rigtune import quantized
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", _gpt_oss_files(tmp_path))
+    api = SimpleNamespace(model_info=lambda *a, **k: _gpt_oss_info())
+    assert quantized._repo_size(api, "openai/gpt-oss-20b") == 13761316904
+
+
+def test_a_pair_is_sized_by_its_index_and_an_unreadable_index_is_unread(tmp_path):
+    from rigtune import pairing
+    files = pairing.read_files("openai/gpt-oss-20b", info_fetcher=lambda *a, **k: _gpt_oss_info(),
+                               file_fetcher=_gpt_oss_files(tmp_path))
+    assert files.size_bytes == 13761316904
+
+    def no_index(repo, filename, **kw):
+        if filename == INDEX:
+            raise PermissionError("gated")
+        return _gpt_oss_files(tmp_path)(repo, filename, **kw)
+    files = pairing.read_files("openai/gpt-oss-20b", info_fetcher=lambda *a, **k: _gpt_oss_info(),
+                               file_fetcher=no_index)
+    assert files.size_bytes is None and files.sha == "b" * 40  # the read stands; only its size is unread
+
+
 def _weights(params, stored, wanted=("bf16", "fp8")):
     return hf_weight_options(ModelSpec(hf_id="m"), params, list(wanted),
                              lambda p: 1 if p == "fp8" else 2, stored)[0]

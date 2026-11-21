@@ -186,14 +186,16 @@ def _fetch_config(repo: str, token: Optional[str] = None) -> Dict[str, Any]:
 
 
 def repo_bytes(repo: str, token: Optional[str] = None) -> Optional[int]:
-    """Total size of a repository's safetensors files; None when it has none. Raises when the Hub cannot say."""
-    from huggingface_hub import HfApi
+    """Size of the safetensors files an engine loads from a repository (hfconfig.loaded_bytes); None when it has
+    none or one has no size. Raises when the Hub cannot say."""
+    from huggingface_hub import HfApi, hf_hub_download
+
+    from rigtune.hfconfig import INDEX, hub_listing, listed_bytes
 
     info = HfApi(token=token).model_info(repo, files_metadata=True)
-    sizes = [getattr(s, "size", None) for s in (getattr(info, "siblings", None) or [])
-             if getattr(s, "rfilename", "").endswith(".safetensors")]
-    sizes = [s for s in sizes if s]
-    return int(sum(sizes)) if sizes else None
+    sha = getattr(info, "sha", None)
+    return listed_bytes(hub_listing(info), lambda: hf_hub_download(
+        repo, INDEX, revision=sha if isinstance(sha, str) else None, token=token))
 
 
 def find_eagle3_head(
