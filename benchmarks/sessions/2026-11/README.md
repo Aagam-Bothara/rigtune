@@ -1,12 +1,13 @@
 # GPU sessions, November 2026
 
-Raw results of the three head-to-head comparisons on 2026 models and current engines (vLLM 0.33.0, SGLang 0.5.23). The method, the numbers and the limits are in [docs/benchmarks.md](../../../docs/benchmarks.md#2026-models-on-current-engines).
+Raw results of the head-to-head comparisons on 2026 models and current engines (vLLM 0.33.0, SGLang 0.5.23). The method, the numbers and the limits are in [docs/benchmarks.md](../../../docs/benchmarks.md#2026-models-on-current-engines).
 
 | Folder | Card | Model | rigtune at commit | Answers graded by |
 |---|---|---|---|---|
 | [a40-qwen3.5-9b](a40-qwen3.5-9b/) | A40 48 GB | Qwen/Qwen3.5-9B | main during the session of 16–18 Nov, before the answer-check fix | the script in `answer-check/`, outside the comparison |
 | [a40-gemma-4-12b](a40-gemma-4-12b/) | A40 48 GB | google/gemma-4-12B-it | same | the script in `answer-check/`, outside the comparison |
 | [a100-qwen3.5-9b](a100-qwen3.5-9b/) | A100 SXM4 80 GB | Qwen/Qwen3.5-9B | 7bbab8a (18 Nov) | the comparison itself (`--check-answers gsm8k --check-items 0`) |
+| [h200-qwen3.5-35b-a3b](h200-qwen3.5-35b-a3b/) | H200 141 GB (Modal), vLLM only | Qwen/Qwen3.5-35B-A3B | 7ea5e20 (20 Nov) | the comparison itself (`--check-answers gsm8k --check-items 300`) |
 
 Each folder holds what `rigtune compare --verdict` wrote:
 
