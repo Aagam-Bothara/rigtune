@@ -1,0 +1,66 @@
+{
+ "config": {
+  "_torchspec_version": "0.1.0",
+  "architectures": [
+   "K3DSparkModel"
+  ],
+  "bos_token_id": 163584,
+  "confidence_head_with_markov": true,
+  "draft_vocab_size": 163840,
+  "enable_confidence_head": true,
+  "eos_token_id": 163586,
+  "hidden_size": 7168,
+  "intermediate_size": 14336,
+  "kv_lora_rank": 512,
+  "markov_head_type": "vanilla",
+  "markov_rank": 256,
+  "mask_token_id": 163837,
+  "max_position_embeddings": 1048576,
+  "mla_use_nope": false,
+  "mla_use_output_gate": false,
+  "model_type": "k3_dspark",
+  "num_attention_heads": 64,
+  "num_hidden_layers": 5,
+  "num_key_value_heads": 64,
+  "num_target_layers": 5,
+  "pad_token_id": 163839,
+  "q_lora_rank": 1536,
+  "qk_nope_head_dim": 128,
+  "qk_rope_head_dim": 64,
+  "rms_norm_eps": 1e-05,
+  "rope_parameters": {
+   "beta_fast": 32,
+   "beta_slow": 1,
+   "factor": 32.0,
+   "mscale": 1.0,
+   "mscale_all_dim": 1.0,
+   "original_max_position_embeddings": 32768,
+   "rope_theta": 50000.0,
+   "rope_type": "yarn"
+  },
+  "rope_theta": 50000.0,
+  "target_hidden_size": 7168,
+  "target_layer_ids": [
+   2,
+   23,
+   47,
+   71,
+   89
+  ],
+  "target_num_hidden_layers": 93,
+  "tie_word_embeddings": false,
+  "torch_dtype": "bfloat16",
+  "v_head_dim": 128,
+  "vocab_size": 163840
+ },
+ "files": [
+  ".gitattributes",
+  "LICENSE",
+  "README.md",
+  "config.json",
+  "model.safetensors"
+ ],
+ "read": "2026-11-21",
+ "repo": "Inferact/Kimi-K3-DSpark",
+ "revision": "cf6b8244620e7ea4b0651d214f28e89eac75bed6"
+}

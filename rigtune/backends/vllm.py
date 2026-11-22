@@ -931,7 +931,7 @@ class VllmBackend(BaseBackend):
         notes: List[str] = []
         if speculative.vllm_supports_eagle3() and speculative.eagle3_heads_for(prepared.spec.hf_id):
             try:
-                found = speculative.find_eagle3_head(prepared.spec, prepared.arch)
+                found = speculative.find_eagle3_head(prepared.spec, prepared.arch, engine=self.name)
             except Exception as exc:
                 found = None
                 notes.append(f"vllm: no EAGLE3 head tried, the Hub could not be asked ({exc})")

@@ -1,0 +1,72 @@
+{
+ "config": {
+  "architectures": [
+   "LlamaForCausalLMEagle3"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "bos_token_id": 199998,
+  "draft_vocab_size": 201088,
+  "eagle_aux_hidden_state_layer_ids": [
+   24,
+   30,
+   36
+  ],
+  "eagle_config": {
+   "eagle_aux_hidden_state_layer_ids": [
+    24,
+    30,
+    36
+   ],
+   "next_layer_regular": true,
+   "norm_before_fc": true,
+   "parallel_draft_heads_num_layers": 1,
+   "parallel_draft_step": 1,
+   "use_aux_hidden_state": true,
+   "use_input_layernorm_in_first_layer": true,
+   "use_last_layernorm": true,
+   "use_mtp_layernorm": false
+  },
+  "eos_token_id": 200002,
+  "head_dim": 64,
+  "hidden_act": "silu",
+  "hidden_size": 2880,
+  "initializer_range": 0.02,
+  "intermediate_size": 16384,
+  "max_position_embeddings": 131072,
+  "mlp_bias": false,
+  "model_type": "llama",
+  "norm_before_fc": true,
+  "num_attention_heads": 64,
+  "num_hidden_layers": 1,
+  "num_key_value_heads": 8,
+  "pad_token_id": 199999,
+  "pretraining_tp": null,
+  "rms_norm_eps": 1e-05,
+  "rope_scaling": {
+   "beta_fast": 32.0,
+   "beta_slow": 1.0,
+   "factor": 32.0,
+   "original_max_position_embeddings": 4096,
+   "rope_type": "yarn",
+   "truncate": false
+  },
+  "rope_theta": 500000.0,
+  "tie_word_embeddings": false,
+  "torch_dtype": "bfloat16",
+  "transformers_version": "4.57.6",
+  "use_cache": true,
+  "vocab_size": 201088
+ },
+ "files": [
+  ".gitattributes",
+  "README.md",
+  "assets/eagle3_phase1_dataset_blend_with_subsets.png",
+  "assets/eagle3_phase2_dataset_blend_with_subsets.png",
+  "config.json",
+  "model.safetensors"
+ ],
+ "read": "2026-11-21",
+ "repo": "nvidia/gpt-oss-120b-Eagle3-v3",
+ "revision": "975baaffe27cc031ba21ae370602735d8e3df052"
+}

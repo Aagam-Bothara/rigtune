@@ -612,7 +612,7 @@ class SglangBackend(BaseBackend):
         notes: List[str] = []
         if "eagle3" in methods:
             try:
-                found = speculative.find_eagle3_head(prepared.spec, prepared.arch)
+                found = speculative.find_eagle3_head(prepared.spec, prepared.arch, engine=self.name)
             except Exception as exc:
                 found = None
                 notes.append(f"sglang: no EAGLE3 head tried, the Hub could not be asked ({exc})")

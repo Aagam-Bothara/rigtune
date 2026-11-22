@@ -326,7 +326,7 @@ def test_second_models_are_looked_up_only_under_all_and_failures_are_noted(monke
 
     monkeypatch.setattr(sg, "load_arch", lambda spec, token=None: llama8b.arch)
     monkeypatch.setattr(sg, "hf_weight_options", lambda *a, **k: (dict(llama8b.weights_bytes), {}))
-    monkeypatch.setattr(speculative, "find_eagle3_head", lambda spec, arch: (HEAD, HEAD_BYTES))
+    monkeypatch.setattr(speculative, "find_eagle3_head", lambda spec, arch, **kw: (HEAD, HEAD_BYTES))
     monkeypatch.setattr(speculative, "repo_bytes", {DRAFT: DRAFT_BYTES}.get)
     reg = registry()
     plan = prepare_and_plan(hw_rtx4090, llama8b.spec, ["sglang"], reg, speculative_all=True)

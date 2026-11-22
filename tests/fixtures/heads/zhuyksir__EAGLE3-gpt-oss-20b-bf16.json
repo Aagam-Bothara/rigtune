@@ -1,0 +1,49 @@
+{
+ "config": {
+  "architectures": [
+   "LlamaForCausalLMEagle3"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "bos_token_id": 1,
+  "draft_vocab_size": 32000,
+  "eagle_config": {
+   "eagle_aux_hidden_state_layer_ids": [
+    1,
+    11,
+    21
+   ]
+  },
+  "eos_token_id": 200002,
+  "head_dim": 128,
+  "hidden_act": "silu",
+  "hidden_size": 2880,
+  "initializer_range": 0.02,
+  "intermediate_size": 16384,
+  "max_position_embeddings": 4096,
+  "mlp_bias": false,
+  "model_type": "llama",
+  "num_attention_heads": 32,
+  "num_hidden_layers": 1,
+  "num_key_value_heads": 8,
+  "pad_token_id": 199999,
+  "pretraining_tp": 1,
+  "rms_norm_eps": 1e-05,
+  "rope_scaling": null,
+  "rope_theta": 150000,
+  "tie_word_embeddings": false,
+  "torch_dtype": "bfloat16",
+  "transformers_version": "4.55.0",
+  "use_cache": true,
+  "vocab_size": 201088
+ },
+ "files": [
+  ".gitattributes",
+  "config.json",
+  "model.safetensors",
+  "training_state.pt"
+ ],
+ "read": "2026-11-21",
+ "repo": "zhuyksir/EAGLE3-gpt-oss-20b-bf16",
+ "revision": "0f48def8c7b633b5459745c4b11581bcdd8a4b51"
+}

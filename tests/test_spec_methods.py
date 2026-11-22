@@ -51,7 +51,8 @@ def test_vllm_offers_what_the_installed_release_supports(monkeypatch, prepared_v
 LMSYS_LLAMA31_8B = {"architectures": ["LlamaForCausalLMEagle3"], "vocab_size": 128256, "hidden_size": 4096,
                     "num_hidden_layers": 1, "draft_vocab_size": 32000}
 ANGELSLIM_QWEN3_8B = {"architectures": ["LlamaForCausalLMEagle3"], "vocab_size": 151936, "hidden_size": 4096}
-YUHUILI_LLAMA31_8B = {"architectures": ["LlamaForCausalLM"], "vocab_size": 128256, "hidden_size": 4096}
+YUHUILI_LLAMA31_8B = {"architectures": ["LlamaForCausalLM"], "vocab_size": 128256, "hidden_size": 4096,
+                      "num_hidden_layers": 1, "draft_vocab_size": 32000}
 
 
 def _arch(vocab: int, hidden: int = 4096):
@@ -74,13 +75,18 @@ def test_an_eagle3_spec_names_its_head_and_becomes_a_vllm_config():
 
 def test_a_head_is_used_only_when_its_config_shows_an_eagle3_head_that_fits():
     llama, qwen3 = _arch(128256), _arch(151936)
-    assert speculative.verified_eagle3_head(LMSYS_LLAMA31_8B, llama)
-    assert speculative.verified_eagle3_head(ANGELSLIM_QWEN3_8B, qwen3)
-    assert not speculative.verified_eagle3_head(YUHUILI_LLAMA31_8B, llama)  # plain LlamaForCausalLM
-    assert not speculative.verified_eagle3_head({**ANGELSLIM_QWEN3_8B}, _arch(152064))  # another vocabulary
-    assert not speculative.verified_eagle3_head(LMSYS_LLAMA31_8B, _arch(128256, hidden=3072))
-    assert not speculative.verified_eagle3_head({**LMSYS_LLAMA31_8B, "architectures": ["Eagle3Speculator"]}, llama)
-    assert not speculative.verified_eagle3_head(None, llama) and not speculative.verified_eagle3_head({}, llama)
+    for engine in ("vllm", "sglang"):
+        assert speculative.verified_eagle3_head(LMSYS_LLAMA31_8B, llama, engine)
+        assert speculative.verified_eagle3_head(ANGELSLIM_QWEN3_8B, qwen3, engine)
+        assert not speculative.verified_eagle3_head({**ANGELSLIM_QWEN3_8B}, _arch(152064), engine)  # another vocabulary
+        assert not speculative.verified_eagle3_head(LMSYS_LLAMA31_8B, _arch(128256, hidden=3072), engine)
+        assert not speculative.verified_eagle3_head({**LMSYS_LLAMA31_8B, "architectures": ["Eagle3Speculator"]}, llama,
+                                                    engine)
+        assert not speculative.verified_eagle3_head(None, llama, engine)
+        assert not speculative.verified_eagle3_head({}, llama, engine)
+    # Plain LlamaForCausalLM: vLLM 0.33 renames it into its Eagle3 model; SGLang 0.5.23 would load a full Llama.
+    assert speculative.verified_eagle3_head(YUHUILI_LLAMA31_8B, llama, "vllm")
+    assert not speculative.verified_eagle3_head(YUHUILI_LLAMA31_8B, llama, "sglang")
 
 
 def test_finding_a_head_reads_only_the_listed_repositories():
@@ -94,15 +100,17 @@ def test_finding_a_head_reads_only_the_listed_repositories():
 
     sizes = {"lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B": 850_000_000}.get
     for hf_id in ("unsloth/Meta-Llama-3.1-8B-Instruct", "meta-llama/Llama-3.1-8B-Instruct"):
-        assert speculative.find_eagle3_head(ModelSpec(hf_id=hf_id), _arch(128256), fetch_config=fetch,
-                                            sizes=sizes) == ("lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B", 850_000_000)
+        assert speculative.find_eagle3_head(ModelSpec(hf_id=hf_id), _arch(128256), engine="sglang",
+                                            fetch_config=fetch, sizes=sizes) == (
+            "lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B", 850_000_000)
     assert speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen2.5-7B-Instruct"), _arch(152064),
-                                        fetch_config=fetch, sizes=sizes) is None  # not listed: nothing asked
+                                        engine="sglang", fetch_config=fetch,
+                                        sizes=sizes) is None  # not listed: nothing asked
     assert asked == ["lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B"] * 2
     # A listed head whose config no longer fits is not used.
-    assert speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen3-8B"), _arch(151936),
+    assert speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen3-8B"), _arch(151936), engine="sglang",
                                         fetch_config=lambda r: YUHUILI_LLAMA31_8B, sizes=sizes) is None
-    assert speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen3-8B"), _arch(151936),
+    assert speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen3-8B"), _arch(151936), engine="sglang",
                                         fetch_config=lambda r: ANGELSLIM_QWEN3_8B,
                                         sizes=lambda r: None) == ("AngelSlim/Qwen3-8B_eagle3", None)
 
@@ -114,14 +122,14 @@ def test_a_hub_that_cannot_be_asked_is_told_apart_from_no_head_fitting():
         raise OSError("no network")
 
     with pytest.raises(speculative.HubLookupError, match="no network"):
-        speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen3-8B"), _arch(151936), fetch_config=offline,
-                                     sizes=lambda r: 1)
+        speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen3-8B"), _arch(151936), engine="sglang",
+                                     fetch_config=offline, sizes=lambda r: 1)
 
     def no_size(repo):
         raise OSError("rate limited")
 
     # the head fits but its size cannot be read: found, size unknown
-    assert speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen3-8B"), _arch(151936),
+    assert speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen3-8B"), _arch(151936), engine="sglang",
                                         fetch_config=lambda r: ANGELSLIM_QWEN3_8B,
                                         sizes=no_size) == ("AngelSlim/Qwen3-8B_eagle3", None)
     assert speculative.eagle3_heads_for("meta-llama/Llama-3.3-70B-Instruct") == ()  # no head whose config was read
@@ -192,7 +200,7 @@ def test_vllm_looks_the_head_up_only_under_all_and_notes_an_unreachable_hub(monk
     asked = []
     monkeypatch.setattr(speculative, "_vllm_version", lambda: "0.29.0")
     monkeypatch.setattr(vl, "hf_weight_options", lambda *a, **k: ({"bf16": 1, "fp8": 1}, {}))
-    monkeypatch.setattr(speculative, "find_eagle3_head", lambda spec, arch: asked.append(spec.hf_id) or (HEAD, None))
+    monkeypatch.setattr(speculative, "find_eagle3_head", lambda spec, arch, **kw: asked.append(spec.hf_id) or (HEAD, None))
     reg, llama = registry(), ModelSpec(hf_id="unsloth/Meta-Llama-3.1-8B-Instruct")
     assert prepare_and_plan(hw_rtx4090, llama, ["vllm"], reg).prepared["vllm"].spec_repos == {}
     assert asked == []  # --speculative on: no lookup

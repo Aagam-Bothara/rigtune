@@ -155,19 +155,19 @@ def eagle3_heads_for(hf_id: str) -> Tuple[str, ...]:
     return ()
 
 
-def verified_eagle3_head(cfg: Optional[Dict[str, Any]], target: ArchInfo) -> bool:
-    """Whether a head's config.json shows an EAGLE3 head that can draft for `target`.
+def verified_eagle3_head(cfg: Optional[Dict[str, Any]], target: ArchInfo, engine: str,
+                         files: Optional[List[str]] = None) -> bool:
+    """Whether a head's config.json shows an EAGLE3 head that `engine` loads as one and that can draft for `target`
+    (rigtune.heads.check_head: the engine's own rules for which architectures are heads, and the vocabulary, hidden
+    size and layers the head reads from the target). A repository's name is not evidence: yuhuili's EAGLE3 head for
+    Llama 3.1 8B declares plain LlamaForCausalLM, which vLLM 0.33 renames into its Eagle3 model and SGLang 0.5.23
+    would load as a full Llama."""
+    from rigtune.heads import check_head
 
-    A repository's name is not evidence, as with pre-quantized checkpoints: yuhuili's EAGLE3 head for Llama 3.1 8B
-    declares plain LlamaForCausalLM, and the speculators format names classes of its own. The engines choose the
-    head's code by its architecture (vLLM 0.29 maps LlamaForCausalLMEagle3 to its Eagle3 model), the head reads
-    the target's hidden states, and it proposes tokens of the target's vocabulary, so all three must match."""
     if not cfg:
         return False
-    archs = cfg.get("architectures") or []
-    if not archs or not str(archs[0]).endswith("Eagle3"):
-        return False
-    return cfg.get("vocab_size") == target.vocab_size and cfg.get("hidden_size") == target.hidden_size
+    verdict = check_head(target, cfg, engine, files=files)
+    return verdict.status == "ok" and verdict.evidence.get("kind") == "eagle3"
 
 
 class HubLookupError(RuntimeError):
@@ -204,10 +204,12 @@ def find_eagle3_head(
     fetch_config: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
     sizes: Optional[Callable[[str], Optional[int]]] = None,
     token: Optional[str] = None,
+    *,
+    engine: str,
 ) -> Optional[Tuple[str, Optional[int]]]:
-    """(repo, size in bytes or None) of the first listed EAGLE3 head whose config passes the check, or None when
-    no listed head fits. Raises HubLookupError when no head was found and a listed one could not be read, so the
-    caller can tell "none fits" from "could not ask".
+    """(repo, size in bytes or None) of the first listed EAGLE3 head whose config passes the check for `engine`, or
+    None when no listed head fits. Raises HubLookupError when no head was found and a listed one could not be read, so
+    the caller can tell "none fits" from "could not ask".
 
     Reads only the listed repositories' config.json and file sizes; it never searches the Hub, and makes no
     request at all for a model EAGLE3_HEADS does not list."""
@@ -223,8 +225,8 @@ def find_eagle3_head(
         except Exception as exc:
             errors.append(f"{repo}: {exc}")
             continue
-        if not verified_eagle3_head(cfg, target):
-            logger.info("not using EAGLE3 head %s: its config does not fit %s", repo, spec.hf_id)
+        if not verified_eagle3_head(cfg, target, engine):
+            logger.info("not using EAGLE3 head %s on %s: its config does not fit %s", repo, engine, spec.hf_id)
             continue
         try:
             size = size_of(repo)

@@ -1,0 +1,39 @@
+{
+ "config": {
+  "architectures": [
+   "LlamaForCausalLM"
+  ],
+  "bos_token_id": 128000,
+  "draft_vocab_size": 32000,
+  "eos_token_id": 128001,
+  "hidden_act": "silu",
+  "hidden_size": 4096,
+  "initializer_range": 0.02,
+  "intermediate_size": 14336,
+  "max_position_embeddings": 2048,
+  "model_type": "llama",
+  "num_attention_heads": 32,
+  "num_hidden_layers": 1,
+  "num_key_value_heads": 8,
+  "pad_token_id": 0,
+  "rms_norm_eps": 1e-05,
+  "tie_word_embeddings": false,
+  "torch_dtype": "float16",
+  "transformers_version": "4.28.1",
+  "use_cache": true,
+  "vocab_size": 128256
+ },
+ "files": [
+  ".gitattributes",
+  "LICENSE",
+  "README.md",
+  "config.json",
+  "figs/e3.gif",
+  "figs/eagle3r.jpg",
+  "figs/logo.png",
+  "pytorch_model.bin"
+ ],
+ "read": "2026-11-21",
+ "repo": "yuhuili/EAGLE3-LLaMA3.1-Instruct-8B",
+ "revision": "ada412b672e293d682423de84a095447bf38a637"
+}
