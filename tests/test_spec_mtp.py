@@ -423,15 +423,17 @@ def test_the_head_is_looked_up_only_under_all_and_only_for_an_architecture_that_
     monkeypatch.setattr(vl, "load_arch", lambda spec, token=None: arch)
     monkeypatch.setattr(vl, "vllm_registry_archs", lambda: None)
     monkeypatch.setattr(vl, "hf_weight_options", lambda *a, **k: (dict(WEIGHTS), {}))
-    monkeypatch.setattr(speculative, "find_eagle3_head", lambda *a, **k: pytest.fail("no EAGLE3 head is listed"))
+    heads = []  # every model is searched for an EAGLE3 head under all; this search finds none
+    monkeypatch.setattr(speculative, "find_eagle3_head", lambda spec, *a, **k: heads.append(spec.hf_id))
     spec = ModelSpec(hf_id="Qwen/Qwen3.5-9B")
     with installed("vllm", "0.33.0", tmp_path):
         assert prepare_and_plan(hw_rtx4090, spec, ["vllm"], registry()).prepared["vllm"].spec_repos == {}
-        assert asked == []  # --speculative on: no lookup
+        assert asked == [] and heads == []  # --speculative on: no lookup
         plan = prepare_and_plan(hw_rtx4090, spec, ["vllm"], registry(), speculative_all=True)
         assert plan.prepared["vllm"].spec_repos == {"mtp": "Qwen/Qwen3.5-9B"} and plan.notes == []
         assert plan.prepared["vllm"].spec_bytes == {"mtp": HEAD_BYTES, "mtp_shared": SHARED_BYTES}
         assert asked == [("Qwen/Qwen3.5-9B", ("mtp",))]  # the head alone: config and safetensors headers
+        assert heads == ["Qwen/Qwen3.5-9B"]
         dense = qwen25().arch
         monkeypatch.setattr(vl, "load_arch", lambda spec, token=None: dense)
         monkeypatch.setattr(vl, "_own_head", lambda model, revision: own_head.Verdict(False, "no MTP draft"))
@@ -444,7 +446,7 @@ def test_the_head_is_looked_up_only_under_all_and_only_for_an_architecture_that_
 def test_sglang_notes_a_head_whose_size_is_unknown(monkeypatch, tmp_path, tmp_home):
     sizeless = introspect.MtpHead(layers=1, config_key="mtp_num_hidden_layers", tensors=15, bytes=None)
     monkeypatch.setattr(introspect, "inspect_model", lambda spec, **kw: _facts(sizeless))
-    pm = qwen35("sglang", dict(WEIGHTS))  # no EAGLE3 head or draft model is listed for it: nothing else is asked
+    pm = qwen35("sglang", dict(WEIGHTS))  # no draft model is listed and the head search finds none
     with installed("sglang", "0.5.23", tmp_path):
         notes = SglangBackend().find_second_models(pm)
     assert notes == ["sglang: MTP head of Qwen/Qwen3.5-9B not tried, its size could not be read"]

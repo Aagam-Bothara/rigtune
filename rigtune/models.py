@@ -199,6 +199,9 @@ class PreparedModel(BaseModel):
     # Only verified mode populates pairs. Paths stay private; records use portable aliases.
     spec_pairs: List[Dict[str, Any]] = Field(default_factory=list)
     drafts_mode: str = "table"
+    # --hub off (or HF_HUB_OFFLINE) for this calibration: second models are looked for in what was kept, never on the
+    # Hub. Set by the pipeline; not saved.
+    hub_off: bool = Field(default=False, exclude=True, repr=False)
 
     @model_serializer(mode="wrap")
     def _omit_unverified_drafts(self, handler) -> Dict[str, Any]:

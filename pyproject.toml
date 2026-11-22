@@ -69,6 +69,9 @@ rigtune = ["data/*.jsonl", "data/*.txt", "data/*.json", "data/conformance/*.json
 testpaths = ["tests"]
 addopts = "-q"
 asyncio_mode = "auto"
+markers = [
+    "real_head_search: run rigtune.headsearch itself, not the empty search every other test sees",
+]
 
 [tool.ruff]
 line-length = 110

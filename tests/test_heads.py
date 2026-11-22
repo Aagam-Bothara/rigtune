@@ -202,16 +202,6 @@ def test_vllm_renames_into_dflash_nothing_a_full_model_could_declare():
     assert head_kind(full, "vllm") is None
 
 
-def test_vllm_finds_a_listed_head_too():
-    from rigtune import speculative
-    from rigtune.models import ModelSpec
-
-    cfg, _ = _head("lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B")
-    found = speculative.find_eagle3_head(ModelSpec(hf_id="unsloth/Meta-Llama-3.1-8B-Instruct"), LLAMA31_8B,
-                                         engine="vllm", fetch_config=lambda r: cfg, sizes=lambda r: 850_000_000)
-    assert found == ("lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B", 850_000_000)
-
-
 def test_the_order_a_head_lists_its_layers_in_does_not_matter():
     cfg = {"architectures": ["LlamaForCausalLMEagle3"], "num_hidden_layers": 1, "vocab_size": 128256,
            "hidden_size": 4096, "draft_vocab_size": 32000,

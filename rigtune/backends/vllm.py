@@ -920,8 +920,10 @@ class VllmBackend(BaseBackend):
         return None
 
     def find_second_models(self, prepared: PreparedModel) -> List[str]:
-        """Under --speculative all: the verified EAGLE3 head for this model, the one SGLang gets, so the two engines
-        are compared on one proposer. vLLM plans no memory for it, so its size is recorded but not needed. And the
+        """Under --speculative all: the best EAGLE3 head the Hub has for this model that vLLM loads and that fits it
+        (speculative.find_eagle3_head): rigtune's listed head first, then the most downloaded; SGLang gets its own
+        best, the same one where it loads it. vLLM plans no memory for it, so its size is recorded but not needed. And
+        the
         checkpoint's own MTP head, when the checkpoint holds one (rigtune.introspect) and vLLM, asked (_own_head), did
         not answer that it builds no draft from it: both must say yes, since vLLM's rules go by architecture and
         config, not by the weights. One it could not be asked about is tried, with a note; a start that fails costs
@@ -929,9 +931,10 @@ class VllmBackend(BaseBackend):
         total (vLLM skips them without MTP). For a local directory the parameter count is estimated from the config
         and leaves them out."""
         notes: List[str] = []
-        if speculative.vllm_supports_eagle3() and speculative.eagle3_heads_for(prepared.spec.hf_id):
+        if speculative.vllm_supports_eagle3():
             try:
-                found = speculative.find_eagle3_head(prepared.spec, prepared.arch, engine=self.name)
+                found = speculative.find_eagle3_head(prepared.spec, prepared.arch, engine=self.name,
+                                                         hub_off=prepared.hub_off)
             except Exception as exc:
                 found = None
                 notes.append(f"vllm: no EAGLE3 head tried, the Hub could not be asked ({exc})")
@@ -939,6 +942,7 @@ class VllmBackend(BaseBackend):
                 prepared.spec_repos["eagle3"] = found[0]
                 if found[1]:
                     prepared.spec_bytes[found[0]] = int(found[1])
+                notes += speculative.found_head_notes(self.name, prepared.spec, prepared.arch, found[0])
         notes += self._own_head_notes(prepared)
         for n in notes:
             logger.warning(n)

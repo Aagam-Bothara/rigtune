@@ -311,6 +311,7 @@ class Conformance:
             model = self.models[role]
             model.drafts_mode = "verified" if self.drafts == "verified" or self.draft else "table"
             from rigtune.pairing import hub_off, immutable_revision, is_local
+            model.hub_off = hub_off(self.hub)  # the head search honours --hub off, as calibration's does
             notes = ([] if model.drafts_mode == "verified" and hub_off(self.hub)
                      else self.backend.find_second_models(model))
             base = self.base(role)

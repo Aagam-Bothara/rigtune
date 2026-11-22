@@ -170,6 +170,24 @@ def _isolated_pair_records(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_head_searches(tmp_path, monkeypatch):
+    monkeypatch.setenv("RIGTUNE_HEADS", str(tmp_path / "heads"))
+
+
+@pytest.fixture(autouse=True)
+def _no_head_search(request, monkeypatch):
+    """Under --speculative all every model is searched for drafters on the Hub (rigtune.headsearch), which tests never
+    reach: every test sees a search that found nothing, as a model rigtune lists no head for saw before the search
+    existed. Tests of the search itself are marked real_head_search and pass a fake Hub."""
+    if request.node.get_closest_marker("real_head_search"):
+        return
+    import rigtune.headsearch as hs
+
+    monkeypatch.setattr(hs, "kept_or_search", lambda target_id, revision, seeds=(), **kw: (
+        hs.Search(target=target_id, revision=revision, day="test"), []))
+
+
+@pytest.fixture(autouse=True)
 def _isolated_kernel_cache(tmp_path, monkeypatch):
     """A vLLM launch sets TRITON_CACHE_DIR under rigtune's kernel cache: never the developer's own, in a test."""
     monkeypatch.setenv("RIGTUNE_KERNEL_CACHE", str(tmp_path / "kernel-cache"))
@@ -178,7 +196,7 @@ def _isolated_kernel_cache(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_hf_token(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")  # whatever the shell says: a test never reaches the Hub
 
 
 @pytest.fixture(autouse=True)

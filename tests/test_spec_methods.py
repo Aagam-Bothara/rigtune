@@ -89,52 +89,6 @@ def test_a_head_is_used_only_when_its_config_shows_an_eagle3_head_that_fits():
     assert not speculative.verified_eagle3_head(YUHUILI_LLAMA31_8B, llama, "sglang")
 
 
-def test_finding_a_head_reads_only_the_listed_repositories():
-    from rigtune.models import ModelSpec
-
-    asked = []
-
-    def fetch(repo):
-        asked.append(repo)
-        return {"lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B": LMSYS_LLAMA31_8B}.get(repo)
-
-    sizes = {"lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B": 850_000_000}.get
-    for hf_id in ("unsloth/Meta-Llama-3.1-8B-Instruct", "meta-llama/Llama-3.1-8B-Instruct"):
-        assert speculative.find_eagle3_head(ModelSpec(hf_id=hf_id), _arch(128256), engine="sglang",
-                                            fetch_config=fetch, sizes=sizes) == (
-            "lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B", 850_000_000)
-    assert speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen2.5-7B-Instruct"), _arch(152064),
-                                        engine="sglang", fetch_config=fetch,
-                                        sizes=sizes) is None  # not listed: nothing asked
-    assert asked == ["lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B"] * 2
-    # A listed head whose config no longer fits is not used.
-    assert speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen3-8B"), _arch(151936), engine="sglang",
-                                        fetch_config=lambda r: YUHUILI_LLAMA31_8B, sizes=sizes) is None
-    assert speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen3-8B"), _arch(151936), engine="sglang",
-                                        fetch_config=lambda r: ANGELSLIM_QWEN3_8B,
-                                        sizes=lambda r: None) == ("AngelSlim/Qwen3-8B_eagle3", None)
-
-
-def test_a_hub_that_cannot_be_asked_is_told_apart_from_no_head_fitting():
-    from rigtune.models import ModelSpec
-
-    def offline(repo):
-        raise OSError("no network")
-
-    with pytest.raises(speculative.HubLookupError, match="no network"):
-        speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen3-8B"), _arch(151936), engine="sglang",
-                                     fetch_config=offline, sizes=lambda r: 1)
-
-    def no_size(repo):
-        raise OSError("rate limited")
-
-    # the head fits but its size cannot be read: found, size unknown
-    assert speculative.find_eagle3_head(ModelSpec(hf_id="Qwen/Qwen3-8B"), _arch(151936), engine="sglang",
-                                        fetch_config=lambda r: ANGELSLIM_QWEN3_8B,
-                                        sizes=no_size) == ("AngelSlim/Qwen3-8B_eagle3", None)
-    assert speculative.eagle3_heads_for("meta-llama/Llama-3.3-70B-Instruct") == ()  # no head whose config was read
-
-
 HEAD = "lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B"
 
 
@@ -190,7 +144,24 @@ def test_eagle3_is_kept_off_the_fp8_cache_that_broke_the_draft_model_on_ampere(m
     assert not fits(lead.model_copy(update={"kv_dtype": AMPERE_FP8_KV})) and fits(lead)
 
 
-def test_vllm_looks_the_head_up_only_under_all_and_notes_an_unreachable_hub(monkeypatch, hw_rtx4090, llama3b_arch,
+def test_hub_off_reaches_the_head_search(monkeypatch, hw_rtx4090, no_network):
+    import rigtune.backends.vllm as vl
+    from rigtune.backends import registry
+    from rigtune.models import ModelSpec
+    from rigtune.pipeline import prepare_and_plan
+
+    seen = []
+    monkeypatch.setattr(speculative, "_vllm_version", lambda: "0.29.0")
+    monkeypatch.setattr(vl, "hf_weight_options", lambda *a, **k: ({"bf16": 1, "fp8": 1}, {}))
+    monkeypatch.setattr(speculative, "find_eagle3_head", lambda spec, arch, **kw: seen.append(kw["hub_off"]))
+    spec = ModelSpec(hf_id="unsloth/Meta-Llama-3.1-8B-Instruct")
+    prepare_and_plan(hw_rtx4090, spec, ["vllm"], registry(), speculative_all=True, hub="off")
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    prepare_and_plan(hw_rtx4090, spec, ["vllm"], registry(), speculative_all=True, hub="on")
+    assert seen == [True, False]
+
+
+def test_vllm_looks_for_a_head_only_under_all_and_notes_an_unreachable_hub(monkeypatch, hw_rtx4090, llama3b_arch,
                                                                              no_network):
     import rigtune.backends.vllm as vl
     from rigtune.backends import registry
@@ -206,9 +177,8 @@ def test_vllm_looks_the_head_up_only_under_all_and_notes_an_unreachable_hub(monk
     assert asked == []  # --speculative on: no lookup
     plan = prepare_and_plan(hw_rtx4090, llama, ["vllm"], reg, speculative_all=True)
     assert plan.prepared["vllm"].spec_repos == {"eagle3": HEAD} and plan.notes == []
-    assert prepare_and_plan(hw_rtx4090, ModelSpec(hf_id="Qwen/Qwen2.5-3B-Instruct"), ["vllm"], reg,
-                            speculative_all=True).prepared["vllm"].spec_repos == {}
-    assert asked == [llama.hf_id]  # a model with no listed head asks nothing
+    prepare_and_plan(hw_rtx4090, ModelSpec(hf_id="Qwen/Qwen2.5-3B-Instruct"), ["vllm"], reg, speculative_all=True)
+    assert asked == [llama.hf_id, "Qwen/Qwen2.5-3B-Instruct"]  # every model is searched for, listed or not
 
     def offline(*a, **k):
         raise speculative.HubLookupError("could not read: no network")

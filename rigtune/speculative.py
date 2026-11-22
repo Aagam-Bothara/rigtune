@@ -15,8 +15,9 @@ Proposers:
     the model's earlier outputs in a suffix tree and adapts how many tokens it proposes per request.
   * a draft model: a small model of the same family, sharing the tokenizer.
   * an EAGLE3 head: one decoder layer trained on the target's own hidden states, which proposes from them
-    rather than from tokens alone. Heads are published per target model, so EAGLE3_HEADS lists them by
-    target, and a head is used only when its config.json shows it is one and fits the target.
+    rather than from tokens alone. Heads are published per target model, so they are searched for on the Hub
+    (rigtune.headsearch, with EAGLE3_HEADS' entries first), and a head is used only when its config.json shows that
+    the engine loads it as one and that it fits the target (rigtune.heads).
   * the checkpoint's own MTP (multi-token-prediction) head: Qwen3.5-family checkpoints ship one beside the model,
     trained with it, so no second repository is needed (rigtune.introspect finds it). Offered only under
     --speculative all, and only where the config declares the head and the weights hold it.
@@ -52,9 +53,9 @@ DRAFTS = [
     (r"^(meta-llama|unsloth)/Llama-3\.3-70B-Instruct$", r"\1/Llama-3.2-1B-Instruct"),
 ]
 
-# (target pattern, EAGLE3 heads to try in order). Each one's config.json was read on the Hub; a head is still used
-# only when its config passes verified_eagle3_head, so a repository that changes or disappears costs a lookup, not
-# a trial.
+# (target pattern, EAGLE3 heads ranked first in the Hub search, rigtune.headsearch). Each one's config.json was read
+# on the Hub; a head is still used only when its config passes rigtune.heads.check_head, so a repository that changes
+# or disappears costs a lookup, not a trial.
 #   lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B: architectures ["LlamaForCausalLMEagle3"], vocab_size 128256,
 #     hidden_size 4096, one layer, draft_vocab_size 32000, about 850 MB.
 #   AngelSlim/Qwen3-8B_eagle3: ["LlamaForCausalLMEagle3"], vocab_size 151936, hidden_size 4096.
@@ -147,7 +148,7 @@ def draft_for(hf_id: str) -> Optional[str]:
 
 
 def eagle3_heads_for(hf_id: str) -> Tuple[str, ...]:
-    """The EAGLE3 heads EAGLE3_HEADS lists for `hf_id`, in the order to try them."""
+    """The EAGLE3 heads EAGLE3_HEADS lists for `hf_id`, ranked first in the Hub search."""
     for pattern, heads in EAGLE3_HEADS:
         m = re.match(pattern, hf_id)
         if m:
@@ -174,20 +175,9 @@ class HubLookupError(RuntimeError):
     """The Hub could not be asked: offline, rate-limited, or a gated repository without a token."""
 
 
-def _fetch_config(repo: str, token: Optional[str] = None) -> Dict[str, Any]:
-    """A repository's config.json; raises when the Hub cannot be reached, unlike quantized._default_fetch_config,
-    so an offline calibration can say what it skipped."""
-    import json
-
-    from huggingface_hub import hf_hub_download
-
-    with open(hf_hub_download(repo, "config.json", token=token), "r", encoding="utf-8") as fh:
-        return json.load(fh)
-
-
 def repo_bytes(repo: str, token: Optional[str] = None) -> Optional[int]:
-    """Size of the safetensors files an engine loads from a repository (hfconfig.loaded_bytes); None when it has
-    none or one has no size. Raises when the Hub cannot say."""
+    """Size of the weight files an engine loads from a repository (hfconfig.listed_bytes: its safetensors, else its
+    .bin files); None when it has none or one has no size. Raises when the Hub cannot say."""
     from huggingface_hub import HfApi, hf_hub_download
 
     from rigtune.hfconfig import INDEX, hub_listing, listed_bytes
@@ -198,45 +188,62 @@ def repo_bytes(repo: str, token: Optional[str] = None) -> Optional[int]:
         repo, INDEX, revision=sha if isinstance(sha, str) else None, token=token))
 
 
-def find_eagle3_head(
-    spec: ModelSpec,
-    target: ArchInfo,
-    fetch_config: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
-    sizes: Optional[Callable[[str], Optional[int]]] = None,
-    token: Optional[str] = None,
-    *,
-    engine: str,
-) -> Optional[Tuple[str, Optional[int]]]:
-    """(repo, size in bytes or None) of the first listed EAGLE3 head whose config passes the check for `engine`, or
-    None when no listed head fits. Raises HubLookupError when no head was found and a listed one could not be read, so
-    the caller can tell "none fits" from "could not ask".
+def _best_head(found: Any, target: ArchInfo, engine: str) -> Any:
+    """The best EAGLE3 head of a search for `engine`: the first that fits, one whose size is known first (SGLang offers
+    no second model of unknown size), else None."""
+    from rigtune import headsearch
 
-    Reads only the listed repositories' config.json and file sizes; it never searches the Hub, and makes no
-    request at all for a model EAGLE3_HEADS does not list."""
-    heads = eagle3_heads_for(spec.hf_id)
-    if not heads:
+    heads = headsearch.heads_for(found, target, engine, "eagle3")
+    return sorted(heads, key=lambda c: c.size_bytes is None)[0] if heads else None
+
+
+def found_head_notes(engine: str, spec: ModelSpec, target: ArchInfo, repo: str) -> List[str]:
+    """The profile's notes for the head `engine` got: where it came from when rigtune does not list it, and the other
+    engine's best head when it is another, so a comparison between the engines (when both are calibrated) is read
+    knowing they would draft with different heads. Read from the search kept for this target (no request)."""
+    from rigtune import headsearch
+
+    notes = []
+    if repo not in eagle3_heads_for(spec.hf_id):
+        notes.append(f"{engine}: EAGLE3 head {repo} found by a Hub search; its config fits {spec.hf_id} on {engine} "
+                     "(rigtune.heads); it has not been run by rigtune before")
+    other = "sglang" if engine == "vllm" else "vllm"
+    try:
+        found, _ = headsearch.kept_or_search(spec.hf_id, spec.revision, hub_off=True)
+        theirs = _best_head(found, target, other) if found is not None else None
+    except Exception:
+        theirs = None
+    if theirs is not None and theirs.repo != repo:
+        notes.append(f"{engine}: drafts with EAGLE3 head {repo}; {other}'s best head for this model is "
+                     f"{theirs.repo}, which {engine} does not load or ranks lower")
+    return notes
+
+
+def find_eagle3_head(spec: ModelSpec, target: ArchInfo, *, engine: str, hub: Any = None,
+                     hub_off: Optional[bool] = None) -> Optional[Tuple[str, Optional[int]]]:
+    """(repo, size in bytes or None) of the best EAGLE3 head for `spec` that `engine` loads and that fits `target`, or
+    None when none does. The heads come from a Hub search (rigtune.headsearch: by name and base model, the best of
+    each kind read and judged by rigtune.heads.check_head per engine), kept for the day; EAGLE3_HEADS' entries rank
+    first, then downloads, and one whose size is known comes before one whose is not. Each engine gets its own best.
+    With the Hub off (`hub_off`, or HF_HUB_OFFLINE) what was kept is used. Raises HubLookupError when no search could
+    be made or kept, or when an incomplete one found none, so the caller can tell "none fits" from "could not ask".
+    Never searches for a local directory."""
+    from rigtune import headsearch
+    from rigtune.pairing import hub_off as offline, is_local
+
+    if is_local(spec.hf_id):
         return None
-    fetch = fetch_config or (lambda rid: _fetch_config(rid, token))
-    size_of = sizes or (lambda rid: repo_bytes(rid, token))
-    errors = []
-    for repo in heads:
-        try:
-            cfg = fetch(repo)
-        except Exception as exc:
-            errors.append(f"{repo}: {exc}")
-            continue
-        if not verified_eagle3_head(cfg, target, engine):
-            logger.info("not using EAGLE3 head %s on %s: its config does not fit %s", repo, engine, spec.hf_id)
-            continue
-        try:
-            size = size_of(repo)
-        except Exception as exc:
-            logger.warning("could not read the size of EAGLE3 head %s: %s", repo, exc)
-            size = None
-        return repo, size
-    if errors:
-        raise HubLookupError("could not read " + "; ".join(errors))
-    return None
+    try:
+        found, notes = headsearch.kept_or_search(spec.hf_id, spec.revision, eagle3_heads_for(spec.hf_id),
+                                                 hub_off=bool(hub_off) or offline(), hub=hub)
+    except Exception as exc:
+        raise HubLookupError(f"could not search the Hub ({type(exc).__name__}: {exc})") from None
+    if found is None:
+        raise HubLookupError("; ".join(notes))
+    best = _best_head(found, target, engine)
+    if best is None and not found.complete:
+        raise HubLookupError("the search was incomplete and found no head: " + "; ".join(found.notes))
+    return (best.repo, best.size_bytes) if best is not None else None
 
 
 def look_for_mtp_head(spec: ModelSpec, engine: str, inspect: Optional[Callable[[ModelSpec], Any]] = None):

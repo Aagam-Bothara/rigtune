@@ -899,6 +899,7 @@ def prepare_and_plan(
                                     "was tried")
             prepared.drafts_mode = "verified" if verified else "table"
             from rigtune.pairing import hub_off
+            prepared.hub_off = hub_off(hub)
             if speculative_all and not (prepared.drafts_mode == "verified" and hub_off(hub)):
                 result.notes += backend.find_second_models(prepared)
             elif speculative_all and prepared.drafts_mode == "verified":

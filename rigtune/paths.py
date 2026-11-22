@@ -33,6 +33,11 @@ def pairs_dir() -> Path:
     return Path(env("PAIRS")) if env("PAIRS") else home() / "pairs"
 
 
+def heads_dir() -> Path:
+    """Drafter searches on the Hub (rigtune.headsearch), one per target commit, kept for the day."""
+    return Path(env("HEADS")) if env("HEADS") else home() / "heads"
+
+
 _OFF = ("off", "0", "false", "no", "none", "disabled")  # as RIGTUNE_LEDGER reads them, in any case
 
 
