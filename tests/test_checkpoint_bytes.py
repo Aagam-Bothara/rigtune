@@ -109,6 +109,90 @@ def test_a_draft_or_head_repository_is_sized_by_its_index(monkeypatch, tmp_path)
     assert speculative.repo_bytes("openai/gpt-oss-20b") == 13761316904
 
 
+# The two EAGLE3 heads rigtune lists ship a pytorch_model.bin only (listings read 21 Nov 2026).
+LMSYS_HEAD = {".gitattributes": 1519, "README.md": 31, "config.json": 599, "pytorch_model.bin": 849768795}
+ANGELSLIM_HEAD = {".gitattributes": 1519, "License_AngelSlim_model_and_dataset.txt": 42641, "README.md": 42865,
+                  "config.json": 763, "pytorch_model.bin": 799493246}
+
+
+def test_a_checkpoint_of_bin_files_only_is_sized_from_them_as_the_engines_load_them():
+    from rigtune.hfconfig import listed_bytes
+
+    def no_index():
+        raise AssertionError("a .bin checkpoint has no safetensors index to read")
+    assert listed_bytes(LMSYS_HEAD, no_index) == 849768795  # was None: SGLang never offered the head
+    assert listed_bytes(ANGELSLIM_HEAD, no_index) == 799493246
+    shards = {"pytorch_model-00001-of-00002.bin": 10, "pytorch_model-00002-of-00002.bin": 20,
+              "training_args.bin": 5, "optimizer.bin": 7, "sub/pytorch_model.bin": 9}  # training files: not loaded
+    assert listed_bytes(shards, no_index) == 30
+    # Safetensors beside .bin files win, as both engines take the first pattern that matches.
+    assert listed_bytes({**LMSYS_HEAD, "model.safetensors": 849000000}, no_index) == 849000000
+
+
+def test_some_bin_shards_of_several_are_unknown_not_a_partial_sum(tmp_path):
+    from rigtune.hfconfig import listed_bytes
+
+    assert listed_bytes({"pytorch_model-00001-of-00002.bin": 10}, lambda: None) is None
+    (tmp_path / "pytorch_model-00001-of-00002.bin").write_bytes(b"x" * 10)
+    assert local_checkpoint_bytes(tmp_path) is None  # a shard still downloading
+    (tmp_path / "pytorch_model-00002-of-00002.bin").write_bytes(b"x" * 20)
+    (tmp_path / "training_args.bin").write_bytes(b"x" * 3)
+    assert local_checkpoint_bytes(tmp_path) == 30
+
+
+def test_whole_shard_sets_are_recognised_however_they_are_numbered():
+    from rigtune.hfconfig import bin_complete
+
+    assert bin_complete([f"m-{i}-of-10.bin" for i in range(1, 11)])  # unpadded
+    assert bin_complete([f"pytorch_model-{i:05d}-of-00003.bin" for i in range(1, 4)] + ["pytorch_model.bin"])
+    assert not bin_complete([f"m-{i}-of-10.bin" for i in range(1, 10)])
+    assert not bin_complete(["a.bin"], index_files=["a.bin", "b.bin"])  # its index names a file still downloading
+
+
+def test_a_local_bin_checkpoint_is_whole_only_when_its_index_s_files_are_there(tmp_path):
+    (tmp_path / "weights-a.bin").write_bytes(b"x" * 10)
+    (tmp_path / "pytorch_model.bin.index.json").write_text(json.dumps(
+        {"weight_map": {"w1": "weights-a.bin", "w2": "weights-b.bin"}}))
+    assert local_checkpoint_bytes(tmp_path) is None
+    (tmp_path / "weights-b.bin").write_bytes(b"x" * 20)
+    (tmp_path / "x_training_args.bin").write_bytes(b"x" * 5)  # the engines drop names that end so, too
+    assert local_checkpoint_bytes(tmp_path) == 30
+    (tmp_path / "model.safetensors").write_bytes(b"x" * 7)  # safetensors win, as in both engines
+    assert local_checkpoint_bytes(tmp_path) == 7
+
+
+def test_a_local_bin_checkpoint_never_counts_fewer_parameters_than_its_config_says(monkeypatch, tmp_path):
+    """.bin files carry no header to count from: fp16 files under a float32 config would halve a count taken from their
+    size over the config's dtype, and the planned weights with it."""
+    from rigtune.hfconfig import arch_from_config
+
+    estimate = arch_from_config(LLAMA_3B_CONFIG).num_params
+    (tmp_path / "config.json").write_text(json.dumps({**LLAMA_3B_CONFIG, "torch_dtype": "float32"}))
+    (tmp_path / "pytorch_model.bin").write_bytes(b"x" * 1000)
+    arch = load_arch(ModelSpec(hf_id=str(tmp_path)))
+    assert arch.checkpoint_bytes == 1000 and arch.num_params == estimate
+
+
+def test_a_local_bin_draft_is_identified_by_its_weights(tmp_path):
+    from rigtune.pairing import read_files
+
+    (tmp_path / "config.json").write_text(json.dumps(LLAMA_3B_CONFIG))
+    (tmp_path / "pytorch_model.bin").write_bytes(b"a" * 100)
+    first = read_files(str(tmp_path))
+    assert first.size_bytes == 100
+    (tmp_path / "pytorch_model.bin").write_bytes(b"b" * 100)  # edited in place
+    assert read_files(str(tmp_path)).sha != first.sha
+
+
+def test_an_eagle3_head_shipped_as_a_bin_is_sized_for_sglang(monkeypatch):
+    from rigtune import speculative
+
+    info = SimpleNamespace(sha="2" * 40,
+                           siblings=[SimpleNamespace(rfilename=n, size=s) for n, s in LMSYS_HEAD.items()])
+    monkeypatch.setattr(huggingface_hub, "HfApi", lambda token=None: SimpleNamespace(model_info=lambda *a, **k: info))
+    assert speculative.repo_bytes("lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B") == 849768795
+
+
 def test_a_prequantized_repository_is_sized_by_its_index(monkeypatch, tmp_path):
     from rigtune import quantized
     monkeypatch.setattr(huggingface_hub, "hf_hub_download", _gpt_oss_files(tmp_path))

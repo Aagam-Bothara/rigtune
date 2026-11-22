@@ -295,9 +295,51 @@ def _index_files(path: Union[str, Path]) -> list:
         return sorted(set((json.load(fh).get("weight_map") or {}).values()))
 
 
+# What the engines leave out of a checkpoint's .bin files, by the end of the name: transformers' training files
+# (filter_files_not_needed_for_inference in model_loader/weight_utils.py, vLLM v0.33.0 lines 619-634 and SGLang
+# v0.5.23 lines 868-884).
+NOT_WEIGHTS = ("training_args.bin", "optimizer.bin")
+BIN_INDEX = "pytorch_model.bin.index.json"
+
+
+def bin_complete(bins: Iterable[str], index_files: Optional[Iterable[str]] = None) -> bool:
+    """Whether a set of .bin files is whole: every shard its names count (prefix-00001-of-00003.bin, padded or not,
+    numbered from 1) and every file its index maps a tensor to is there. A cache snapshot keeps what was downloaded."""
+    names = set(bins)
+    if index_files is not None and not set(index_files) <= names:
+        return False
+    shards: Dict[Tuple[str, int], set] = {}
+    for name in names:
+        shard = re.search(r"-(\d+)-of-(\d+)\.bin$", name)
+        if shard:
+            shards.setdefault((name[:shard.start()], int(shard[2])), set()).add(int(shard[1]))
+    return all(found == set(range(1, total + 1)) for (_, total), found in shards.items())
+
+
+def _bin_sizes(sizes: Dict[str, Optional[int]], index_files: Optional[Iterable[str]] = None
+               ) -> Dict[str, Optional[int]]:
+    """The .bin files the engines load from a checkpoint with no safetensors at its top level. Both take a format
+    pattern by pattern, "*.safetensors" first, then "*.bin", from the top folder (vLLM model_loader/default_loader.py
+    _prepare_weights lines 185-234; SGLang model_loader/loader.py lines 500-552), with no index for .bin:
+    lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B and AngelSlim/Qwen3-8B_eagle3 ship a pytorch_model.bin only. A set
+    that is not whole (bin_complete; its index, when given, read for that only) gives a size of None, not a partial
+    sum."""
+    if any(n.endswith(".safetensors") and "/" not in n for n in sizes):
+        return {}
+    bins = {n: s for n, s in sizes.items() if n.endswith(".bin") and "/" not in n and not n.endswith(NOT_WEIGHTS)}
+    if bins and not bin_complete(bins, index_files):
+        return {next(iter(bins)): None}
+    return bins
+
+
 def listed_bytes(listing: Dict[str, Optional[int]], fetch_index: Callable[[], Union[str, Path]]) -> Optional[int]:
     """loaded_bytes for a Hub repository's file listing (every file's path -> size), fetching its index through
-    `fetch_index` (a local path back) when the listing has one. Raises whatever fetch_index raises."""
+    `fetch_index` (a local path back) when the listing has one; a checkpoint of .bin files only is sized from them
+    (_bin_sizes). Raises whatever fetch_index raises."""
+    if INDEX not in listing:
+        bins = _bin_sizes(listing)
+        if bins:
+            return loaded_bytes(bins, None)
     sizes = {name: size for name, size in listing.items() if name.endswith(".safetensors")}
     return loaded_bytes(sizes, _index_files(fetch_index()) if INDEX in listing else None)
 
@@ -308,6 +350,12 @@ def local_checkpoint_bytes(root: Union[str, Path]) -> Optional[int]:
     try:
         sizes: Dict[str, Optional[int]] = {f.name: f.stat().st_size for f in root.glob("*.safetensors")}
         index = root / INDEX
+        if not sizes and not index.is_file():
+            bin_index = root / BIN_INDEX  # a local copy may be partial: its index says which shards it needs
+            bins = _bin_sizes({f.name: f.stat().st_size for f in root.glob("*.bin")},
+                              _index_files(bin_index) if bin_index.is_file() else None)
+            if bins:
+                return loaded_bytes(bins, None)
         files = _index_files(index) if index.is_file() else None
         for name in files or []:
             if name not in sizes and (root / name).is_file():
@@ -420,11 +468,15 @@ def load_arch(spec: ModelSpec, token: Optional[str] = None) -> ArchInfo:
             # experts and an MTP head: exact from the headers, else the files' size over the config's dtype.
             from rigtune.pairing import _local_params
 
-            counted = _local_params(root, sorted(root.glob("*.safetensors")))
+            safetensors = sorted(root.glob("*.safetensors"))
+            counted = _local_params(root, safetensors)
             if counted:
                 arch.num_params = counted
             elif arch.checkpoint_bytes:
-                arch.num_params = arch.checkpoint_bytes // dtype_bytes(arch.torch_dtype)
+                by_size = arch.checkpoint_bytes // dtype_bytes(arch.torch_dtype)
+                # .bin files have no header to count from, and their dtype need not be the config's: fp16 files under
+                # a float32 config would halve the count, and the planned weights with it. Never below the estimate.
+                arch.num_params = by_size if safetensors else max(arch.num_params or 0, by_size)
         return arch
     exact, arch.checkpoint_bytes, listing = hub_weights(spec, token=token)
     if exact:

@@ -320,8 +320,10 @@ def _from_directory(root: Path, repo: Optional[str] = None, sha: Optional[str] =
     ts = tokenizer.stat().st_size if tokenizer.is_file() else None
     digest = _hash_file(tokenizer) if ts and ts <= TOKENIZER_LIMIT else None
     if source == "local":
-        # Content, including the weights, identifies a mutable local directory.
-        entries = sorted({*weights, *(f for f in root.iterdir() if f.suffix in (".json", ".jinja"))})
+        # Content, including the weights, identifies a mutable local directory: its .bin files when it has no
+        # safetensors, which is when the engines load them (hfconfig._bin_sizes).
+        loaded = weights or sorted(root.glob("*.bin"))
+        entries = sorted({*loaded, *(f for f in root.iterdir() if f.suffix in (".json", ".jinja"))})
         sha = hashlib.sha256(json.dumps([(f.name, _hash_file(f)) for f in entries]).encode()).hexdigest()
         repo = local_alias(str(root), sha)
     params = _local_params(root, weights) if not text_config(config).get("quantization_config") else None
