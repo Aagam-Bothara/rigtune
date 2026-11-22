@@ -199,6 +199,10 @@ class PreparedModel(BaseModel):
     # Only verified mode populates pairs. Paths stay private; records use portable aliases.
     spec_pairs: List[Dict[str, Any]] = Field(default_factory=list)
     drafts_mode: str = "table"
+    # What was read of each DFlash or DSpark drafter recorded in spec_repos, by repository: "k" and "lookahead"
+    # (speculative.drafter_tokens) and "kv_elements" per token (speculative.drafter_kv_elements). Not saved: a profile's
+    # spec string carries k, and the plan is made at calibration.
+    spec_facts: Dict[str, Dict[str, Any]] = Field(default_factory=dict, exclude=True, repr=False)
     # --hub off (or HF_HUB_OFFLINE) for this calibration: second models are looked for in what was kept, never on the
     # Hub. Set by the pipeline; not saved.
     hub_off: bool = Field(default=False, exclude=True, repr=False)

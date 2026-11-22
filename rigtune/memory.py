@@ -123,7 +123,8 @@ class MemoryModel:
                  hybrid_fn: Optional[Callable[[Config, ArchInfo], HybridKV]] = None,
                  full_kv_fn: Optional[Callable[[ArchInfo], Optional[str]]] = None,
                  extra_weights_fn: Optional[Callable[[Config, PreparedModel], int]] = None,
-                 extra_fn: Optional[Callable[[Config], int]] = None):
+                 extra_fn: Optional[Callable[[Config], int]] = None,
+                 extra_layers_fn: Optional[Callable[[Config, PreparedModel], int]] = None):
         self.runtime_workspace = runtime_workspace
         self.kv_tokens_fn = kv_tokens_fn  # Config -> int tokens resident in KV cache
         self.device = device  # "gpu" | "cpu"
@@ -141,6 +142,10 @@ class MemoryModel:
         # SGLang's CUDA graphs above its default capture size (Config.kernels cgmax). None, or 0 for a config
         # without such a setting, leaves every plan as it was.
         self.extra_fn = extra_fn
+        # (Config, PreparedModel) -> attention layers a setting adds to the KV pool, each planned as one of the
+        # target's full-attention layers: vLLM's DFlash and DSpark drafters, whose layers take their own KV specs in
+        # the target's pool. 0 or None leaves every plan as it was.
+        self.extra_layers_fn = extra_layers_fn
 
     def full_kv_reason(self, arch: ArchInfo) -> Optional[str]:
         return self.full_kv_fn(arch) if (self.full_kv_fn is not None and arch.is_hybrid) else None
@@ -161,6 +166,14 @@ def estimate(
     weights = model.weights_for(cfg.quant)
     if mm.extra_weights_fn is not None:
         weights += int(mm.extra_weights_fn(cfg, model))
+    extra_layers = int(mm.extra_layers_fn(cfg, model)) if mm.extra_layers_fn is not None else 0
+    if extra_layers > 0:  # planned as the target's own full-attention layers, which the engine's groups pad alike
+        arch = model.arch
+        grown = arch.model_copy(update={
+            "num_layers": arch.num_layers + extra_layers,
+            "full_attention_layers": (arch.full_attention_layers + extra_layers
+                                      if arch.full_attention_layers is not None else None)})
+        model = model.model_copy(update={"arch": grown})
     kv = kv_cache_bytes(model, cfg, mm.kv_tokens_fn(cfg), mm.hybrid_for(cfg, model.arch))
 
     # Partial GPU offload (llama.cpp): only the offloaded fraction lands on the device.

@@ -206,6 +206,36 @@ def vllm_hybrid_kv_any_depth(cfg: Config, arch: ArchInfo, default_batched_tokens
                                state_bytes=most("state_bytes"), min_bytes=most("min_bytes"))
 
 
+def block_drafter(cfg: Config, model: PreparedModel) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """(repository, its spec_facts) when `cfg` drafts with a DFlash or DSpark drafter recorded in `model`, else None."""
+    if not cfg.spec_decode:
+        return None
+    kind, repo, _ = speculative.parse(cfg.spec_decode)
+    if kind not in speculative.BLOCK_DRAFTERS or not repo:
+        return None
+    return repo, model.spec_facts.get(repo, {})
+
+
+def vllm_drafter_layers(cfg: Config, model: PreparedModel) -> int:
+    """Attention layers a DFlash or DSpark drafter adds to vLLM's KV pool, counted as the target's full-attention
+    layers (memory.MemoryModel.extra_layers_fn): its KV elements per token over one target layer's, rounded up. vLLM
+    gives each drafter layer a KV spec of its own in the target's pool (v1/worker/gpu/attn_utils.py lines 136-152,
+    is_draft). On a dense target they join its one group (is_draft is compare=False: kv_cache_interface.py line 215),
+    exactly as planned. On a hybrid one vLLM groups layers by their spec, so a drafter's layers of another head size
+    form groups of their own and pad nothing (z-lab's Qwen3.5-9B drafter: five sliding and one full layer of 8 x 128
+    beside the target's 4 x 256); planned as the target's full layers they pad its other groups instead, more than
+    vLLM holds for Qwen3.5-9B and Gemma 4 12B, but group padding is not monotonic, so this is an estimate there, not a
+    bound (planning the drafter's groups apart is left to do). Its sliding layers are counted as full. A drafter whose
+    size per token is unknown plans none, and is not offered (_drafter_variants)."""
+    found = block_drafter(cfg, model)
+    if found is None:
+        return 0
+    elements = found[1].get("kv_elements")
+    arch = model.arch
+    per_layer = 2 * (arch.full_kv_heads or arch.num_kv_heads) * (arch.full_head_dim or arch.head_dim)
+    return _cdiv(elements, per_layer) if elements and per_layer else 0
+
+
 def vllm_mtp_extra_weights(cfg: Config, model: PreparedModel) -> int:
     """Weight bytes an MTP setting adds to the plan's. None when the target's weights were sized from the checkpoint's
     files or the Hub's safetensors total, which hold the mtp.* tensors already (vLLM skips them without MTP). Only
@@ -217,6 +247,9 @@ def vllm_mtp_extra_weights(cfg: Config, model: PreparedModel) -> int:
     if (speculative.own_head(cfg.spec_decode) and os.path.isdir(model.spec.hf_id)
             and model.arch.checkpoint_bytes is None):
         return int(model.spec_bytes.get(speculative.MTP_KEY) or 0)
+    found = block_drafter(cfg, model)
+    if found is not None:  # loaded inside the target's load_model, before the KV pool is sized (gpu_worker.py)
+        return int(model.spec_bytes.get(found[0]) or 0)
     from rigtune.pairing import extra_weights
     return extra_weights(cfg, model)
 
@@ -787,7 +820,8 @@ class VllmBackend(BaseBackend):
             specs.append(speculative.eagle3(head, speculative.EAGLE3_TOKENS))
         out = [cfg.model_copy(update={"spec_decode": s, "spec_head_quant": None}) for s in specs if s != cfg.spec_decode]
         out = [v for v in out if self.known_failure(v) is None]
-        return out + self._mtp_variants(cfg, model, hw, all_methods, min_batch)[0]
+        return (out + self._mtp_variants(cfg, model, hw, all_methods, min_batch)[0]
+                + self._drafter_variants(cfg, model, hw, all_methods, min_batch)[0])
 
     def spec_notes(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
                    all_methods: bool = False, min_batch: Optional[int] = None) -> List[str]:
@@ -796,6 +830,7 @@ class VllmBackend(BaseBackend):
         is not tried on a release that has it (speculative.suffix_refusal: on 14 Nov 2026 every suffix trial on an
         A40 pod failed to start with arctic-inference 0.1.1 installed, and each cost a launch)."""
         notes = self._mtp_variants(cfg, model, hw, all_methods, min_batch)[1]
+        notes += self._drafter_variants(cfg, model, hw, all_methods, min_batch)[1]
         if model.drafts_mode == "verified":
             notes += self._pair_variants(cfg, model, hw, all_methods)[1]
         if speculative.vllm_suffix_release():
@@ -870,6 +905,48 @@ class VllmBackend(BaseBackend):
         fitted, notes = self.own_head_fit(variants, model, hw, min_batch)
         return fitted, notes + head_notes
 
+    def _drafter_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor],
+                          all_methods: bool, min_batch: Optional[int]) -> Tuple[List[Config], List[str]]:
+        """The DFlash and DSpark drafters recorded for this model (find_second_models), under --speculative all and
+        with the machine known, each at the k it was trained for (speculative.drafter_tokens), with notes.
+
+        vLLM lets no more requests run than max_num_batched_tokens // lookahead (config/vllm.py lines 2378-2396,
+        with only a warning): 128 at k = 15 with the 2,048 tokens it gives a card under 70 GiB or an A100. So the batch
+        is kept and the token budget raised to batch x lookahead where it is below (never below max_num_seqs:
+        scheduler.py line 331), which the plan counts (in-flight tokens), so every user level is served, not queued;
+        config_refusal holds later stages to it. Then, like an MTP head, the largest batch the planner fits that covers
+        the workload's busiest level (own_head_fit)."""
+        if not (all_methods and hw is not None) or cfg.quant in PREQUANTIZED:
+            return [], []
+        variants, notes = [], []
+        for kind in speculative.BLOCK_DRAFTERS:
+            repo = model.spec_repos.get(kind)
+            if not repo or not speculative.vllm_supports_block_drafter(kind):
+                continue
+            facts = model.spec_facts.get(repo, {})
+            if not facts.get("kv_elements") or not model.spec_bytes.get(repo):
+                notes.append(f"vllm: {kind} drafter {repo} not tried: its size or its KV per token could not be "
+                             "read, so it cannot be planned")
+                continue
+            v = cfg.model_copy(update={"spec_decode": speculative.block_drafter(kind, repo, facts["k"]),
+                                       "spec_head_quant": None})
+            budget = cfg.prefill_budget or vllm_default_batched_tokens(hw)
+            # Always stated, so config_refusal can hold later stages (a larger batch, a smaller budget) to it.
+            v = v.model_copy(update={"prefill_budget": max(budget, v.batch * facts["lookahead"])})
+            if v.prefill_budget > budget:
+                notes.append(f"vllm: {kind} drafter {repo} tried with max_num_batched_tokens {v.prefill_budget}: vLLM "
+                             f"runs no more than that // {facts['lookahead']} requests with it, and {budget} would "
+                             f"hold batch {v.batch} to {budget // facts['lookahead']}")
+            if v.key() == cfg.key():
+                continue
+            why = self.known_failure(v) or self.config_refusal(v, model)
+            if why:
+                notes.append(f"vllm: {kind} drafter {repo} not tried: {why}")
+                continue
+            variants.append(v)
+        fitted, fit_notes = self.own_head_fit(variants, model, hw, min_batch)
+        return fitted, notes + fit_notes
+
     def _offers_mtp(self, cfg: Config, model: PreparedModel) -> bool:
         """The checkpoint's own MTP head: recorded by find_second_models (the checkpoint holds it, and vLLM did not
         say it builds no draft from it), and the launch reads the checkpoint the head was found in, not a
@@ -882,6 +959,18 @@ class VllmBackend(BaseBackend):
             return "verified pairs excluded from the measured failing fp8_e5m2 FlashInfer combination"
         if cfg.spec_head_quant and os.environ.get("VLLM_USE_V2_MODEL_RUNNER") == "0":
             return "quantized MTP output heads require Model Runner V2"
+        drafter = block_drafter(cfg, model)
+        if drafter is not None:
+            kind = speculative.parse(cfg.spec_decode)[0]
+            if os.environ.get("VLLM_USE_V2_MODEL_RUNNER") == "0" and (kind == "dspark" or drafter[1].get("needs_v2")):
+                # "Model Runner V1 does not support: dspark speculative decoding" (config/vllm.py lines 3110-3113);
+                # some DFlash drafters likewise (speculative.drafter_needs_v2), as z-lab's Qwen3.5 one.
+                return (f"this {kind} drafter requires Model Runner V2, disabled by VLLM_USE_V2_MODEL_RUNNER=0")
+            lookahead = drafter[1].get("lookahead")
+            if cfg.prefill_budget and lookahead and cfg.prefill_budget // lookahead < cfg.batch:
+                return (f"max_num_batched_tokens {cfg.prefill_budget} would let vLLM run only "
+                        f"{cfg.prefill_budget // lookahead} of batch {cfg.batch} with this drafter "
+                        f"({lookahead} tokens a request a step)")
         if cfg.kernels is not None:
             facts, settings = _engine_facts(), kernels.parse(cfg.kernels)
             return (kernels.vllm_unconfirmed(settings, facts)
@@ -917,6 +1006,14 @@ class VllmBackend(BaseBackend):
             return "EAGLE3 with the fp8 KV cache through FlashInfer (the draft model failed so on an A40)"
         if speculative.own_head(cfg.spec_decode) and cfg.kv_dtype == AMPERE_FP8_KV:
             return "MTP with the fp8 KV cache through FlashInfer (EAGLE3's proposer path, which failed so on an A40)"
+        if spec.partition(":")[0] in speculative.BLOCK_DRAFTERS:
+            if cfg.kv_dtype == AMPERE_FP8_KV:
+                return ("a DFlash or DSpark drafter with the fp8 KV cache through FlashInfer (the draft model failed so "
+                        "on an A40)")
+            if cfg.kv_dtype == INT8_KV:
+                # The drafter takes the target's cache dtype (v1/worker/gpu/spec_decode/dflash/utils.py lines 33-39);
+                # int8_per_token_head runs on Triton attention only, which lacks the drafter's non-causal attention.
+                return "a DFlash or DSpark drafter with the int8 KV cache: no attention backend has both"
         return None
 
     def find_second_models(self, prepared: PreparedModel) -> List[str]:
@@ -931,21 +1028,57 @@ class VllmBackend(BaseBackend):
         total (vLLM skips them without MTP). For a local directory the parameter count is estimated from the config
         and leaves them out."""
         notes: List[str] = []
+        unreachable = False
         if speculative.vllm_supports_eagle3():
             try:
                 found = speculative.find_eagle3_head(prepared.spec, prepared.arch, engine=self.name,
                                                          hub_off=prepared.hub_off)
             except Exception as exc:
-                found = None
+                found, unreachable = None, True
                 notes.append(f"vllm: no EAGLE3 head tried, the Hub could not be asked ({exc})")
             if found:
                 prepared.spec_repos["eagle3"] = found[0]
                 if found[1]:
                     prepared.spec_bytes[found[0]] = int(found[1])
                 notes += speculative.found_head_notes(self.name, prepared.spec, prepared.arch, found[0])
+        notes += self._block_drafter_notes(prepared, unreachable)
         notes += self._own_head_notes(prepared)
         for n in notes:
             logger.warning(n)
+        return notes
+
+    def _block_drafter_notes(self, prepared: PreparedModel, unreachable: bool) -> List[str]:
+        """Record the best DFlash and DSpark drafter the Hub search found for this model that vLLM loads and that fits
+        it (speculative.find_drafter), with what _drafter_variants plans it by: its k and lookahead (from its block
+        size), its size, and its KV per token. Notes say where it came from, or why none was recorded. When the
+        search could not be made (`unreachable`, already noted for EAGLE3), nothing more is asked or said."""
+        notes: List[str] = []
+        for kind in speculative.BLOCK_DRAFTERS:
+            if unreachable or not speculative.vllm_supports_block_drafter(kind):
+                continue
+            try:
+                cand = speculative.find_drafter(prepared.spec, prepared.arch, engine=self.name, kind=kind,
+                                                hub_off=prepared.hub_off)
+            except Exception as exc:
+                notes.append(f"vllm: no {kind} drafter tried, the Hub could not be asked ({exc})")
+                continue
+            if cand is None:
+                continue
+            tokens = speculative.drafter_tokens(cand.config, kind)
+            if tokens is None:
+                notes.append(f"vllm: {kind} drafter {cand.repo} not tried: its config states no block size, so the "
+                             "number of tokens it drafts is unknown")
+                continue
+            prepared.spec_repos[kind] = cand.repo
+            if cand.size_bytes:
+                prepared.spec_bytes[cand.repo] = int(cand.size_bytes)
+            prepared.spec_facts[cand.repo] = {"k": tokens[0], "lookahead": tokens[1],
+                                              "kv_elements": speculative.drafter_kv_elements(cand.config),
+                                              "needs_v2": speculative.drafter_needs_v2(cand.config)}
+            if cand.sha:  # launched at the commit whose config was checked
+                prepared.spec_revisions[cand.repo] = cand.sha
+            notes.append(f"vllm: {kind} drafter {cand.repo} found by a Hub search, drafting {tokens[0]} tokens a step "
+                         "(its block size); it has not been run by rigtune before")
         return notes
 
     def _own_head_notes(self, prepared: PreparedModel) -> List[str]:
@@ -987,7 +1120,8 @@ class VllmBackend(BaseBackend):
         return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "gpu",
                                       hybrid_fn=lambda cfg, arch: vllm_hybrid_kv_any_depth(
                                           cfg, arch, vllm_default_batched_tokens(hw)),
-                                      extra_weights_fn=vllm_mtp_extra_weights)
+                                      extra_weights_fn=vllm_mtp_extra_weights,
+                                      extra_layers_fn=vllm_drafter_layers)
 
     # ---- configs
 

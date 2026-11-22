@@ -290,7 +290,8 @@ class BaseBackend:
         return None
 
     def calibrated_memory(self, hw: HardwareDescriptor, kv_tokens_fn, device: str,
-                          hybrid_fn=None, full_kv_fn=None, extra_weights_fn=None) -> MemoryModel:
+                          hybrid_fn=None, full_kv_fn=None, extra_weights_fn=None,
+                          extra_layers_fn=None) -> MemoryModel:
         """MemoryModel using this machine's fitted workspace/margin when `rigtune memory-report --apply` ran.
 
         `hybrid_fn` (Config, ArchInfo) -> memory.HybridKV is given only by backends whose hybrid-attention KV
@@ -312,6 +313,7 @@ class BaseBackend:
             hybrid_fn=hybrid_fn,
             full_kv_fn=full_kv_fn,
             extra_weights_fn=extra_weights_fn,
+            extra_layers_fn=extra_layers_fn,
         )
 
     def estimate_memory(self, cfg: Config, model: PreparedModel, hw: HardwareDescriptor) -> int:

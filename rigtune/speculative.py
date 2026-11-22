@@ -96,6 +96,9 @@ VLLM_SUFFIX_MIN = (0, 29)
 # vLLM 0.29's model registry maps LlamaForCausalLMEagle3 to its Eagle3 Llama model and its SpeculativeConfig takes
 # method "eagle3"; earlier releases were not checked.
 VLLM_EAGLE3_MIN = (0, 29)
+# DFlash and DSpark drafters were read in vLLM v0.33.0 (config/speculative.py SpeculativeMethod, v1/worker/gpu/
+# spec_decode/dflash and dspark); earlier releases were not checked.
+VLLM_BLOCK_DRAFTER_MIN = (0, 33)
 
 NGRAM_TOKENS = 4
 NGRAM_TOKENS_LLAMACPP = 64  # llama.cpp's ngram-mod default
@@ -134,7 +137,10 @@ MTP_KEY = "mtp"  # PreparedModel.spec_repos / spec_bytes key of the head
 MTP_SHARED_KEY = "mtp_shared"  # spec_bytes key of the target's embedding and output head (introspect.MtpHead)
 
 LOOKUP = ("ngram", "ngram_gpu", "suffix")  # proposers that need no second model
-SECOND_MODEL = ("draft", "eagle3", "assist")  # proposers whose second set of weights the spec names
+# Drafters that read the target's hidden states and draft a block at once (rigtune.heads): DFlash, DSpark. vLLM only
+# until SGLang's launch is written (sglang_config refuses them).
+BLOCK_DRAFTERS = ("dflash", "dspark")
+SECOND_MODEL = ("draft", "eagle3", "assist", *BLOCK_DRAFTERS)  # proposers whose second set of weights the spec names
 SELF_HEAD = ("mtp",)  # proposers whose weights ship in the target's own checkpoint
 
 
@@ -188,12 +194,12 @@ def repo_bytes(repo: str, token: Optional[str] = None) -> Optional[int]:
         repo, INDEX, revision=sha if isinstance(sha, str) else None, token=token))
 
 
-def _best_head(found: Any, target: ArchInfo, engine: str) -> Any:
-    """The best EAGLE3 head of a search for `engine`: the first that fits, one whose size is known first (SGLang offers
-    no second model of unknown size), else None."""
+def _best_head(found: Any, target: ArchInfo, engine: str, kind: str = "eagle3") -> Any:
+    """The best drafter of `kind` in a search for `engine`: the first that fits, one whose size is known first (SGLang
+    offers no second model of unknown size, and vLLM's planner counts a block drafter's weights), else None."""
     from rigtune import headsearch
 
-    heads = headsearch.heads_for(found, target, engine, "eagle3")
+    heads = headsearch.heads_for(found, target, engine, kind)
     return sorted(heads, key=lambda c: c.size_bytes is None)[0] if heads else None
 
 
@@ -219,15 +225,16 @@ def found_head_notes(engine: str, spec: ModelSpec, target: ArchInfo, repo: str) 
     return notes
 
 
-def find_eagle3_head(spec: ModelSpec, target: ArchInfo, *, engine: str, hub: Any = None,
-                     hub_off: Optional[bool] = None) -> Optional[Tuple[str, Optional[int]]]:
-    """(repo, size in bytes or None) of the best EAGLE3 head for `spec` that `engine` loads and that fits `target`, or
-    None when none does. The heads come from a Hub search (rigtune.headsearch: by name and base model, the best of
-    each kind read and judged by rigtune.heads.check_head per engine), kept for the day; EAGLE3_HEADS' entries rank
-    first, then downloads, and one whose size is known comes before one whose is not. Each engine gets its own best.
-    With the Hub off (`hub_off`, or HF_HUB_OFFLINE) what was kept is used. Raises HubLookupError when no search could
-    be made or kept, or when an incomplete one found none, so the caller can tell "none fits" from "could not ask".
-    Never searches for a local directory."""
+def find_drafter(spec: ModelSpec, target: ArchInfo, *, engine: str, kind: str, hub: Any = None,
+                 hub_off: Optional[bool] = None) -> Any:
+    """The best drafter of `kind` ("eagle3", "dflash", "dspark") for `spec` that `engine` loads and that fits
+    `target` (a headsearch.Candidate: repo, size, config), or None when none does. The drafters come from a Hub
+    search (rigtune.headsearch: by name and base model, the best of each kind read and judged by
+    rigtune.heads.check_head per engine), kept for the day; EAGLE3_HEADS' entries rank first, then downloads, and one
+    whose size is known comes before one whose is not. Each engine gets its own best. With the Hub off (`hub_off`, or
+    HF_HUB_OFFLINE) what was kept is used. Raises HubLookupError when no search could be made or kept, or when an
+    incomplete one found none, so the caller can tell "none fits" from "could not ask". Never searches for a local
+    directory."""
     from rigtune import headsearch
     from rigtune.pairing import hub_off as offline, is_local
 
@@ -240,9 +247,16 @@ def find_eagle3_head(spec: ModelSpec, target: ArchInfo, *, engine: str, hub: Any
         raise HubLookupError(f"could not search the Hub ({type(exc).__name__}: {exc})") from None
     if found is None:
         raise HubLookupError("; ".join(notes))
-    best = _best_head(found, target, engine)
+    best = _best_head(found, target, engine, kind)
     if best is None and not found.complete:
         raise HubLookupError("the search was incomplete and found no head: " + "; ".join(found.notes))
+    return best
+
+
+def find_eagle3_head(spec: ModelSpec, target: ArchInfo, *, engine: str, hub: Any = None,
+                     hub_off: Optional[bool] = None) -> Optional[Tuple[str, Optional[int]]]:
+    """(repo, size in bytes or None) of the best EAGLE3 head (find_drafter), or None."""
+    best = find_drafter(spec, target, engine=engine, kind="eagle3", hub=hub, hub_off=hub_off)
     return (best.repo, best.size_bytes) if best is not None else None
 
 
@@ -318,6 +332,11 @@ def vllm_supports_draft(version: Optional[str] = None) -> bool:
 def vllm_supports_ngram_gpu(version: Optional[str] = None) -> bool:
     """Whether the installed (or given) vLLM runs n-gram lookup on the GPU."""
     return _vllm_at_least(VLLM_NGRAM_GPU_MIN, version) and _vllm_lists("ngram_gpu", version)
+
+
+def vllm_supports_block_drafter(kind: str, version: Optional[str] = None) -> bool:
+    """Whether the installed (or given) vLLM is one checked to run a DFlash or DSpark drafter of `kind`."""
+    return _vllm_at_least(VLLM_BLOCK_DRAFTER_MIN, version) and _vllm_lists(kind, version)
 
 
 def vllm_supports_eagle3(version: Optional[str] = None) -> bool:
@@ -508,6 +527,92 @@ def assist(repo: str, k: int = 1) -> str:
     return f"assist:{repo}:{k}"
 
 
+def block_drafter(kind: str, repo: str, k: int) -> str:
+    """A DFlash or DSpark drafter proposing k tokens a step (vLLM's num_speculative_tokens)."""
+    if kind not in BLOCK_DRAFTERS:
+        raise ValueError(f"not a block drafter: {kind}")
+    return f"{kind}:{repo}:{k}"
+
+
+def drafter_tokens(config: Dict[str, Any], kind: str) -> Optional[Tuple[int, int]]:
+    """(k, lookahead) a DFlash or DSpark drafter is trained for, from its config.json; None when it states no block.
+
+    DFlash drafts a block of block_size: an anchor token and block_size - 1 masks, so it proposes block_size - 1
+    (vLLM's recipes: 7 for RedHatAI's block-8 drafters, "block_size 8 minus one", recipes/models/Qwen/Qwen3.8-27B.yaml
+    line 130); vLLM requires k for it (config/speculative.py lines 1614-1618) and checks it against no block size: its
+    query is 1 + k tokens whatever the block (v1/worker/gpu/spec_decode/dflash/speculator.py line 65), and its own
+    acceptance test runs z-lab/Qwen3-8B-DFlash-b16 at 16, the anchor's position past the trained block. The block less
+    one is the trained choice, and what C10's acceptance curve is to revisit. A
+    DSpark drafter that samples from its anchor (DeepSeek's dense drafters, sample_from_anchor unset) proposes the whole
+    block (vLLM defaults k to block_size, lines 1592-1599; its test runs deepseek-ai/dspark_qwen3_8b_block7 at 7); the
+    speculators-format ones set sample_from_anchor false and propose block_size - 1. The lookahead is the query tokens
+    a request takes per step, k + 1 except for an anchor-sampling DSpark (k): vLLM caps the running requests at
+    max_num_batched_tokens // lookahead (config/vllm.py lines 2378-2396, with only a warning)."""
+    if kind not in BLOCK_DRAFTERS or not isinstance(config, dict):
+        return None
+    inner = config.get("dflash_config") if isinstance(config.get("dflash_config"), dict) else {}
+    block = inner.get("block_size") or config.get("block_size") or config.get("dspark_block_size")
+    if not isinstance(block, int) or isinstance(block, bool) or block < 2:
+        return None
+    if kind == "dspark":
+        from rigtune.heads import is_speculators
+
+        anchor = config.get("sample_from_anchor", not is_speculators(config))
+        return (block, block) if anchor else (block - 1, block)
+    return block - 1, block
+
+
+def drafter_kv_elements(config: Dict[str, Any]) -> Optional[int]:
+    """KV elements a drafter holds per token across its attention layers (2 x KV heads x head size x layers), from its
+    config.json (the speculators format keeps them under transformer_layer_config); None when it does not say. vLLM
+    gives every drafter attention layer a KV spec of its own in the target's pool (v1/worker/gpu/attn_utils.py lines
+    136-152, is_draft)."""
+    from rigtune.heads import is_speculators
+
+    if not isinstance(config, dict):
+        return None
+    layer = config.get("transformer_layer_config") if is_speculators(config) else config
+    if not isinstance(layer, dict):
+        return None
+    layers, heads = layer.get("num_hidden_layers"), layer.get("num_attention_heads")
+    kv_heads = layer.get("num_key_value_heads") or heads
+    head_dim = layer.get("head_dim") or ((layer.get("hidden_size") // heads)
+                                         if isinstance(layer.get("hidden_size"), int) and heads else None)
+    if not all(isinstance(v, int) and v > 0 for v in (layers, kv_heads, head_dim)):
+        return None
+    # Gemma 4's full layers have heads of their own (transformers configuration_gemma4.py: global_head_dim, and with
+    # attention_k_eq_v num_global_key_value_heads), which vLLM builds each DSpark layer from (gemma4_dspark.py lines
+    # 50-52, per_layer_config): deepseek-ai/dspark_gemma4_12b_block7's five full layers hold 1 x 512, not 8 x 256.
+    types = layer.get("layer_types")
+    full_dim = layer.get("global_head_dim")
+    if isinstance(types, list) and len(types) == layers and isinstance(full_dim, int) and full_dim > 0:
+        full_heads = layer.get("num_global_key_value_heads") if layer.get("attention_k_eq_v") else None
+        full = 2 * (full_heads if isinstance(full_heads, int) and full_heads > 0 else kv_heads) * full_dim
+        return sum(full if t == "full_attention" else 2 * kv_heads * head_dim for t in types)
+    return 2 * kv_heads * head_dim * layers
+
+
+# DFlash drafters vLLM v0.33.0 runs on Model Runner V2 only (config/vllm.py _is_dflash_candidate_draft, lines
+# 769-784, refused at 3133-3137).
+VLLM_V2_ONLY_DRAFTERS = frozenset({"DFlash2DraftModel", "DFlash2BeamDraftModel", "LiLiCorrDraftModel"})
+
+
+def drafter_needs_v2(config: Dict[str, Any]) -> bool:
+    """Whether vLLM runs this DFlash drafter on Model Runner V2 only: one of VLLM_V2_ONLY_DRAFTERS, or one whose layers
+    mix sliding and full attention (config/vllm.py lines 3129-3131), as z-lab's Qwen3.5-9B one (five sliding, one
+    full). vLLM reads layer_types after converting the config, which for the speculators format keeps them under
+    transformer_layer_config."""
+    from rigtune.heads import is_speculators
+
+    if not isinstance(config, dict):
+        return False
+    if any(a in VLLM_V2_ONLY_DRAFTERS for a in config.get("architectures") or []):
+        return True
+    layer = config.get("transformer_layer_config") if is_speculators(config) else config
+    types = layer.get("layer_types") if isinstance(layer, dict) else None
+    return isinstance(types, list) and "full_attention" in types and any(t != "full_attention" for t in types)
+
+
 def mtp(k: int) -> str:
     """The checkpoint's own MTP head proposing k tokens (vLLM's num_speculative_tokens, SGLang's steps)."""
     return f"mtp:{k}"
@@ -554,6 +659,11 @@ def vllm_config(spec: str, revision: Optional[str] = None, head_quant: Optional[
         return out
     if kind == "eagle3":  # vLLM 0.29 reads the head's architecture from its config
         return {"method": "eagle3", "model": model_id, "num_speculative_tokens": k}
+    if kind in BLOCK_DRAFTERS:  # the method is named, never left to vLLM's guess from the repository's name
+        out = {"method": kind, "model": model_id, "num_speculative_tokens": k}
+        if revision:  # the commit whose config was checked (rigtune.heads), not the default branch
+            out["revision"] = revision
+        return out
     out = {"method": "mtp" if kind == "assist" else "draft_model", "model": model_id, "num_speculative_tokens": k}
     if revision:
         out["revision"] = revision
@@ -593,6 +703,8 @@ def sglang_config(spec: str, model_path: Optional[str] = None, revision: Optiona
             out += ["--speculative-draft-model-revision", revision]
         return out + ["--speculative-num-steps", str(k), "--speculative-eagle-topk", "1",
                       "--speculative-num-draft-tokens", str(k + 1)]
+    if kind in BLOCK_DRAFTERS:
+        raise ValueError(f"SGLang's {kind} launch is not written yet")
     if kind in SECOND_MODEL:
         out = ["--speculative-algorithm", "NEXTN" if kind == "assist" else "EAGLE3" if kind == "eagle3" else "STANDALONE",
                "--speculative-draft-model-path", draft_path or str(model_id), "--speculative-num-steps", str(k),
