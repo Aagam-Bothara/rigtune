@@ -1019,7 +1019,9 @@
    "--speculative-num-draft-tokens",
    "4"
   ],
-  "env": {},
+  "env": {
+   "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN": "1"
+  },
   "key": "sglang/bf16/ctx4096/b256/gmu0.88/sd=eagle3:lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B:3"
  },
  "spec-lookup": {

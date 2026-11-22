@@ -38,7 +38,8 @@ def test_dense_arch_is_unchanged_field_for_field():
     """A dense config yields exactly the ArchInfo it did before hybrid fields existed."""
     arch = arch_from_config(load(QWEN25))
     before = {"architecture", "num_layers", "hidden_size", "num_attention_heads", "num_kv_heads", "head_dim",
-              "vocab_size", "max_position_embeddings", "num_params", "torch_dtype"}
+              "vocab_size", "max_position_embeddings", "num_params", "torch_dtype",
+              "sglang_context"}  # read from every config, like max_position_embeddings; not a hybrid field
     assert ArchInfo(**{k: getattr(arch, k) for k in before}) == arch
 
 

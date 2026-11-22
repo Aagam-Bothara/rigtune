@@ -116,6 +116,9 @@ class ArchInfo(BaseModel):
     head_dim: int
     vocab_size: int = 32000
     max_position_embeddings: int = 4096
+    # The context length SGLang derives from the config (hfconfig.sglang_context_length); None when unread. Not saved,
+    # like checkpoint_bytes: a profile reloaded from disk falls back to max_position_embeddings.
+    sglang_context: Optional[int] = Field(default=None, exclude=True)
     num_params: Optional[int] = None
     torch_dtype: str = "bfloat16"
     # Hybrid attention layouts, read from the config's `layer_types` by rigtune.hfconfig. All defaulted, so

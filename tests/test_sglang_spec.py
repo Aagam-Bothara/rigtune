@@ -187,6 +187,74 @@ def test_launch_flags_for_each_method(llama8b):
     assert "--speculative-algorithm" not in be.launch_spec(_sgl(), llama8b, 1).args
 
 
+LONGER = "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN"  # configs/model_config.py line 1303 at v0.5.23
+
+
+def test_an_eagle3_head_runs_at_the_targets_context(llama8b):
+    """lmsys's Llama 3.1 head declares 2048 positions; SGLang refuses any draft shorter than --context-length unless
+    SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN is set, so without it the head never started at rigtune's 8192."""
+    be = sg.SglangBackend()
+    assert be.launch_spec(_sgl(spec_decode=f"eagle3:{HEAD}:3"), llama8b, 1).env == {LONGER: "1"}
+    for spec in ("ngram:12", f"draft:{DRAFT}:3", None):  # a draft model's own limit stays pairing's refusal
+        assert LONGER not in be.launch_spec(_sgl(spec_decode=spec), llama8b, 1).env
+    # The variable lifts the target's own check too: never set where it would let the target run past its limit.
+    short = llama8b.model_copy(update={"arch": llama8b.arch.model_copy(update={"max_position_embeddings": 4096})})
+    assert LONGER not in be.launch_spec(_sgl(spec_decode=f"eagle3:{HEAD}:3"), short, 1).env
+    assert be.launch_spec(_sgl(spec_decode=f"eagle3:{HEAD}:3", ctx=4096), short, 1).env == {LONGER: "1"}
+
+
+def test_a_row_naming_the_head_in_its_own_flags_gets_the_same_environment(llama8b):
+    """The sglang-expert-eagle3 comparison row passes the head as extra flags, not as a speculation setting."""
+    be = sg.SglangBackend()
+    row = _sgl(extra={"speculative_algorithm": "EAGLE3", "speculative_draft_model_path": HEAD})
+    assert be.launch_spec(row, llama8b, 1).env == {LONGER: "1"}
+    nextn = _sgl(extra={"speculative_algorithm": "NEXTN"})  # the target's own head: its own context
+    assert be.launch_spec(nextn, llama8b, 1).env == {}
+    lower = _sgl(extra={"speculative_algorithm": "eagle3", "speculative_draft_model_path": HEAD})  # SGLang upper-cases
+    assert be.launch_spec(lower, llama8b, 1).env == {LONGER: "1"}
+
+
+def test_the_guard_uses_the_context_sglang_derives_for_the_target(llama8b):
+    """Qwen/Qwen-7B-Chat declares seq_length 8192 beside max_position_embeddings 32768: SGLang takes 8192, so the
+    variable at 16384 would let the target itself run past its limit."""
+    be = sg.SglangBackend()
+    arch = llama8b.arch.model_copy(update={"max_position_embeddings": 32768, "sglang_context": 8192})
+    model = llama8b.model_copy(update={"arch": arch})
+    assert LONGER not in be.launch_spec(_sgl(spec_decode=f"eagle3:{HEAD}:3", ctx=16384), model, 1).env
+    assert be.launch_spec(_sgl(spec_decode=f"eagle3:{HEAD}:3", ctx=8192), model, 1).env == {LONGER: "1"}
+
+
+def test_a_kv_tier_and_the_head_keep_both_variables(tmp_home, llama8b, monkeypatch):
+    monkeypatch.setattr(sg.kvtier, "refusal", lambda: None)
+    env = sg.SglangBackend().launch_spec(_sgl(spec_decode=f"eagle3:{HEAD}:3", kv_tier="host:8+disk:64"), llama8b,
+                                         1).env
+    assert env[LONGER] == "1" and sg.FILE_DIR_VAR in env and sg.FILE_CAP_VAR in env
+
+
+@pytest.mark.parametrize("cfg, derived", [
+    ({"max_position_embeddings": 2048}, 2048),  # lmsys's Llama 3.1 EAGLE3 head
+    ({"seq_length": 8192, "max_position_embeddings": 32768}, 8192),  # Qwen/Qwen-7B-Chat: the first key wins
+    ({"max_position_embeddings": 32768, "rope_scaling": {"type": "yarn", "factor": 4.0}}, 131072),
+    ({"max_position_embeddings": 131072, "rope_scaling": {"rope_type": "llama3", "factor": 8.0}}, 131072),
+    ({"max_position_embeddings": 262144,
+      "rope_scaling": {"factor": 4.0, "original_max_position_embeddings": 65536}}, 262144),
+    ({}, 2048),
+])
+def test_the_context_sglang_derives_from_a_config(cfg, derived):
+    from rigtune.hfconfig import sglang_context_length
+
+    assert sglang_context_length(cfg) == derived
+
+
+def test_the_derived_context_is_read_from_the_text_config():
+    from rigtune.hfconfig import arch_from_config
+
+    arch = arch_from_config({"architectures": ["X"], "max_position_embeddings": 4096,
+                             "text_config": {"max_position_embeddings": 262144}})
+    assert (arch.max_position_embeddings, arch.sglang_context) == (262144, 262144)
+    assert "sglang_context" not in arch.model_dump()  # not saved in profiles
+
+
 def test_a_combination_cannot_raise_the_fraction_back_or_load_a_model_of_unknown_size(tmp_home, hw_rtx4090,
                                                                                          hw_a100, llama8b):
     from rigtune.backends import registry

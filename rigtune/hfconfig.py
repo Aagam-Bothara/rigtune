@@ -53,6 +53,32 @@ def _first(cfg: Dict[str, Any], *keys: str, default: Any = None) -> Any:
     return default
 
 
+# The keys SGLang reads a model's context length from, first present wins (utils/hf_transformers/common.py
+# CONTEXT_LENGTH_KEYS and get_context_length: lines 558-584 at v0.5.19, 668-694 at v0.5.23, identical).
+SGLANG_CONTEXT_KEYS = ("max_sequence_length", "seq_length", "max_seq_len", "model_max_length",
+                       "max_position_embeddings")
+
+
+def sglang_context_length(cfg: Dict[str, Any]) -> int:
+    """The context length SGLang derives from a (text) config: the first of SGLANG_CONTEXT_KEYS it has, times the
+    rope scaling factor unless the scaling names original_max_position_embeddings or is llama3's, else 2048. It can be
+    smaller than max_position_embeddings: Qwen/Qwen-7B-Chat declares seq_length 8192 beside 32768. SGLang reads the
+    transformers config object, whose class may default a key the file leaves out; read from the file, a missing key
+    gives 2048 here, never more than SGLang would see."""
+    rope = cfg.get("rope_scaling")
+    factor = 1
+    if isinstance(rope, dict) and rope:
+        factor = rope.get("factor", 1)
+        if (not isinstance(factor, (int, float)) or "original_max_position_embeddings" in rope
+                or rope.get("rope_type") == "llama3"):
+            factor = 1
+    for key in SGLANG_CONTEXT_KEYS:
+        value = cfg.get(key)
+        if value is not None:
+            return int(factor * value)
+    return 2048
+
+
 def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
     """Build ArchInfo from a raw config.json dict. Handles nested text_config (multimodal)."""
     from rigtune.introspect import mtp_layers, quantization
@@ -85,6 +111,7 @@ def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
         head_dim=head_dim,
         vocab_size=vocab,
         max_position_embeddings=max_pos,
+        sglang_context=sglang_context_length(cfg),
         num_params=params,
         torch_dtype=dtype,
         has_mm_config=mm,

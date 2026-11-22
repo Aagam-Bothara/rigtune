@@ -53,6 +53,17 @@ SGLANG_EXTRA_BUFFER_ARCHS = frozenset({
 # num_nextn_predict_layers = 1 (line 772 at v0.5.19, 1180 at v0.5.23) and models/qwen3_5_mtp.py
 # Qwen3_5ForCausalLMMTP.__init__ builds its model with num_hidden_layers = 1 (both tags).
 SGLANG_MTP_DRAFT_LAYERS = 1
+# A draft runs at the target's context length (speculative/eagle_worker_v2.py line 182 at v0.5.19, 229 at v0.5.23),
+# and configs/model_config.py ModelConfig._derive_context_length (lines 863-888 / 1291-1316) refuses a draft whose
+# config derives a shorter one ("Target model's context_length (8192) is greater than the derived context_length
+# (2048) ... set the env var SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1"), taking 2048 when the config names none
+# (get_context_length, utils/hf_transformers/common.py at v0.5.23). lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B declares
+# max_position_embeddings 2048 (read on the Hub, 21 Nov 2026), so above 2048 tokens it never started. With the
+# variable set SGLang raises the draft's max_position_embeddings to the target's, as vLLM does for an EAGLE head
+# unasked (config/speculative.py lines 1503-1511 at v0.33.0). Set only for these algorithms: a head reads the
+# target's positions, while a draft model's own context limit is pairing's to check (context_too_short).
+LONGER_CONTEXT_VAR = "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN"  # environ.py 308 / 320, an EnvBool: "1" is true
+HEAD_ALGORITHMS = frozenset({"EAGLE3"})
 
 
 # SGLang 0.5.23 raised the default prefill chunk of cards with 20 to 35 GiB (an RTX 4090, an L4) from 2048 to
@@ -517,6 +528,18 @@ def sglang_tier_launch(cfg: Config, port: int) -> Tuple[List[str], dict]:
     return args, env
 
 
+def head_context_env(args: List[str], ctx: int, target_ctx: int) -> Dict[str, str]:
+    """The environment that lets a head launched by `args` run at the target's context `ctx` (LONGER_CONTEXT_VAR),
+    read from the launch arguments, so a comparison row that names the head in its own flags gets it too. Empty
+    unless the algorithm is a head's, and unless `ctx` is within the target's own limit as SGLang derives it
+    (`target_ctx`: ArchInfo.sglang_context, else max_position_embeddings): the variable lifts the target's check as
+    well, and must only ever lift the head's."""
+    algorithms = [args[i + 1].upper() for i, a in enumerate(args[:-1]) if a == "--speculative-algorithm"]
+    if not algorithms or algorithms[-1] not in HEAD_ALGORITHMS or ctx > target_ctx:
+        return {}
+    return {LONGER_CONTEXT_VAR: "1"}
+
+
 def sglang_graph_bytes(cfg: Config, vram_bytes: int, version: Optional[str]) -> int:
     """CUDA-graph memory `cfg` adds by raising SGLang's decode cap (kernels.sglang_graph_extra_bytes); 0 for every
     config without that setting, before anything else is looked at."""
@@ -777,6 +800,7 @@ class SglangBackend(BaseBackend):
             tier_args, tier_env = sglang_tier_launch(cfg, port)
             args += tier_args
             env.update(tier_env)
+        env.update(head_context_env(args, cfg.ctx, model.arch.sglang_context or model.arch.max_position_embeddings))
         return LaunchSpec(args=args, env=env)
 
     # ---- KV-cache tier
