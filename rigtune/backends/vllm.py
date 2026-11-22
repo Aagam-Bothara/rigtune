@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from rigtune import kernels, paths, speculative
+from rigtune.spec_length import probe_tokens
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from rigtune.hfconfig import dtype_bytes, kv_element_bytes, load_arch
 from rigtune.memory import HybridKV, MemoryModel, estimate
@@ -810,14 +811,17 @@ class VllmBackend(BaseBackend):
         if speculative.vllm_supports_suffix():
             specs.append(speculative.suffix())
         if model.drafts_mode == "verified":
-            specs += [v.spec_decode for v in self._pair_variants(cfg, model, hw, all_methods)[0]]
+            specs += [v.spec_decode for v in self._pair_variants(cfg, model, hw, all_methods, min_batch)[0]]
         else:
             draft = speculative.draft_for(model.spec.hf_id)
             if draft and speculative.vllm_supports_draft():
-                specs.append(speculative.draft(draft, speculative.DRAFT_TOKENS_VLLM))
+                specs.append(speculative.draft(draft, self._probe("draft", cfg, hw, min_batch) if all_methods
+                                               else speculative.DRAFT_TOKENS_VLLM))
         head = model.spec_repos.get("eagle3")
-        if all_methods and head and speculative.vllm_supports_eagle3():  # the head and tokens SGLang is offered
-            specs.append(speculative.eagle3(head, speculative.EAGLE3_TOKENS))
+        if all_methods and head and speculative.vllm_supports_eagle3():
+            # Drafting more tokens than SGLang's chain, whose engine logs no curve: from the curve this trial leaves,
+            # the search measures the length it predicts best (rigtune.spec_length).
+            specs.append(speculative.eagle3(head, self._probe("eagle3", cfg, hw, min_batch)))
         out = [cfg.model_copy(update={"spec_decode": s, "spec_head_quant": None}) for s in specs if s != cfg.spec_decode]
         out = [v for v in out if self.known_failure(v) is None]
         return (out + self._mtp_variants(cfg, model, hw, all_methods, min_batch)[0]
@@ -832,7 +836,7 @@ class VllmBackend(BaseBackend):
         notes = self._mtp_variants(cfg, model, hw, all_methods, min_batch)[1]
         notes += self._drafter_variants(cfg, model, hw, all_methods, min_batch)[1]
         if model.drafts_mode == "verified":
-            notes += self._pair_variants(cfg, model, hw, all_methods)[1]
+            notes += self._pair_variants(cfg, model, hw, all_methods, min_batch)[1]
         if speculative.vllm_suffix_release():
             if not speculative.vllm_supports_suffix():
                 notes.append(f"vllm: suffix decoding not tried: {speculative.vllm_suffix_refusal()}")
@@ -850,7 +854,14 @@ class VllmBackend(BaseBackend):
         return discover(prepared, self.name, ctx, draft=draft, hub=hub,
                         version=self.version(hw) if hw else None)
 
-    def _pair_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor], all_methods=False):
+    def _probe(self, kind: str, cfg: Config, hw: Optional[HardwareDescriptor], users: Optional[int]) -> int:
+        """Tokens a chain drafter first drafts under --speculative all (rigtune.spec_length.probe_tokens), for the
+        workload's busiest level of users, else the batch."""
+        budget = cfg.prefill_budget or (vllm_default_batched_tokens(hw) if hw is not None else 2048)
+        return probe_tokens(kind, users or cfg.batch, budget)
+
+    def _pair_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor], all_methods=False,
+                       min_batch: Optional[int] = None):
         from rigtune.pairing import eligible_pairs
         if hw is None or cfg.quant in PREQUANTIZED:
             return [], []
@@ -862,8 +873,11 @@ class VllmBackend(BaseBackend):
         if all_methods and _vllm_version() >= (0, 29) and _probe_lists("spec_methods", "mtp"):
             pairs += eligible_pairs(model, "assistant", cfg.ctx)
         for pair in pairs:
-            spec = (speculative.assist(pair["repo"], 1) if pair["kind"] == "assistant"
-                    else speculative.draft(pair["repo"], speculative.DRAFT_TOKENS_VLLM))
+            if pair["kind"] == "assistant":  # only under --speculative all (above): its curve picks the length
+                spec = speculative.assist(pair["repo"], self._probe("assist", cfg, hw, min_batch))
+            else:
+                spec = speculative.draft(pair["repo"], self._probe("draft", cfg, hw, min_batch) if all_methods
+                                         else speculative.DRAFT_TOKENS_VLLM)
             v = cfg.model_copy(update={"spec_decode": spec, "spec_head_quant": None})
             if estimate(hw, model, v, self.memory_model(hw)).feasible:
                 out.append(v)

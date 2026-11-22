@@ -840,6 +840,11 @@ class StagedSearch:
     power_points: List[PowerSetting] = field(default_factory=list)
     # Stage 3b: configs differing from the leader only in the prefill knob. None = stage off.
     prefill_variants: Optional[Callable[[Config], List[Config]]] = None
+    # After a speculation stage: (the trials it ran, every trial so far by key) -> [(a length to measure or None, what
+    # to say)], from each chain drafter's acceptance curve (rigtune.spec_length.refine). None = off; set only under
+    # --speculative all.
+    spec_refine: Optional[Callable[[List[TrialResult], Dict[str, TrialResult]],
+                                   List[Tuple[Optional[Config], str]]]] = None
     # Stages 3c-3e: (name, variants of the current leader), run in order after the prefill stage.
     variant_stages: List[Tuple[str, Callable[[Config], List[Config]]]] = field(default_factory=list)
     # Stage 3f: combinations. Stages 3b-3e change one dimension at a time, which misses strategies that
@@ -1655,9 +1660,36 @@ class StagedSearch:
         except Exception as exc:
             logger.warning("no %s variants for %s: %s", name, leader.config.key(), exc)
             return
+        ran = []
         for v in variants:
-            self._run(v, name)
+            ran.append(self._run(v, name))
             self._variant_log.append((name, leader.config, v))
+        if name == "spec" and self.spec_refine is not None:
+            self._refine_lengths(leader, ran)
+
+    def _note_once(self, note: str) -> None:
+        if note not in self.notes:  # a budgeted calibration runs the speculation stage twice
+            self.notes.append(note)
+
+    def _refine_lengths(self, leader: TrialResult, ran: List[TrialResult]) -> None:
+        """Measure the draft length each chain drafter's curve predicts best, once (rigtune.spec_length): the
+        objective then keeps the faster of it and the length the stage tried. Each note says what was measured, from
+        the trial's result. A refinement that fails costs its trial only."""
+        try:
+            todo = self.spec_refine([r for r in ran if r is not None], dict(self._done))
+        except Exception as exc:
+            logger.warning("draft lengths not refined: %s", exc)
+            return
+        for v, why in todo:
+            if v is None:
+                self._note_once(why)
+                continue
+            res = self._run(v, "spec")
+            if res is not None and res.ok:
+                self._note_once(f"{why}: measured {res.metrics.tok_s:.0f} tok/s")
+            elif res is not None:
+                self._note_once(f"{why}: did not run ({(res.error or 'failed')[:120]})")
+            self._variant_log.append(("spec", leader.config, v))
 
     def stage_tier(self, backend: str) -> None:
         """Stage 3e+: a KV-cache tier on the engine's leader, once per engine. tier_variants decides from the

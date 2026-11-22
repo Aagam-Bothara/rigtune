@@ -65,6 +65,29 @@ def test_assistant_is_offered_only_with_all(backend, monkeypatch, prepared_vllm,
     assert any(v.spec_decode.startswith("assist:") for v in be.spec_variants(cfg, pm, hw_a100, True))
 
 
+def test_vllm_pairs_draft_long_enough_to_choose_a_length_only_under_all(monkeypatch, prepared_vllm, hw_a100):
+    """Under --speculative all an assistant and a verified draft model first draft 6 tokens (spec_length.probe_tokens),
+    fewer where the workload's users would push a step past vLLM's CUDA graphs; --speculative on drafts 4 as before."""
+    monkeypatch.setattr(vl, "_vllm_version", lambda: (0, 33))
+    monkeypatch.setattr(vl.speculative, "_vllm_version", lambda: "0.33.0")  # what gates a draft model
+    pm = prepared_vllm
+    pm.drafts_mode = "verified"
+    pm.spec_pairs = [{"kind": "assistant", "repo": "org/assistant", "params": 10_000, "size_bytes": 20_000},
+                     {"kind": "draft", "repo": "org/draft", "params": 10_000, "size_bytes": 20_000, "context": 131072}]
+    for repo in ("org/assistant", "org/draft"):
+        pm.spec_revisions[repo] = "a" * 40
+        pm.spec_bytes[repo] = 20_000
+    cfg = Config(backend="vllm", quant="bf16", batch=16, gpu_memory_utilization=.9)
+    be = vl.VllmBackend()
+
+    def pairs(*args, **kw):
+        return sorted(v.spec_decode for v in be._pair_variants(cfg, pm, hw_a100, *args, **kw)[0])
+
+    assert pairs() == ["draft:org/draft:4"]
+    assert pairs(True) == ["assist:org/assistant:6", "draft:org/draft:6"]
+    assert pairs(True, min_batch=128) == ["assist:org/assistant:3", "draft:org/draft:4"]  # 512 // 128 - 1 = 3
+
+
 def test_conformance_can_request_verified_pairs(prepared_vllm, hw_a100, tmp_path, monkeypatch):
     from rigtune.conformance import Conformance, CheckResult
     prepared_vllm.spec.revision = "a" * 40

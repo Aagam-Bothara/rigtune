@@ -99,7 +99,9 @@ def llama31(prepared_vllm):
         "spec_repos": {"eagle3": HEAD}})
 
 
-def test_vllm_is_offered_the_same_eagle3_head_under_all(monkeypatch, llama31):
+def test_vllm_is_offered_the_eagle3_head_under_all_drafting_long_enough_to_choose_a_length(monkeypatch, llama31):
+    """Under --speculative all a chain drafter first drafts 6 tokens (rigtune.spec_length.PROBE_TOKENS), so the curve
+    its trial leaves covers the lengths the search then chooses between; --speculative on is unchanged."""
     from rigtune.backends import get_backend
     from rigtune.models import Config
 
@@ -110,11 +112,12 @@ def test_vllm_is_offered_the_same_eagle3_head_under_all(monkeypatch, llama31):
     before = ["ngram_gpu:4", "draft:unsloth/Llama-3.2-1B-Instruct:4"]
     assert [c.spec_decode for c in be.spec_variants(cfg, llama31)] == before  # --speculative on: unchanged
     out = be.spec_variants(cfg, llama31, None, True)
-    assert [c.spec_decode for c in out] == before + [f"eagle3:{HEAD}:3"]
+    assert [c.spec_decode for c in out] == ["ngram_gpu:4", "draft:unsloth/Llama-3.2-1B-Instruct:6",
+                                            f"eagle3:{HEAD}:6"]
     assert {c.gpu_memory_utilization for c in out} == {0.95}  # vLLM's planner is unchanged
     args = be.launch_spec(out[-1], llama31, 1).args
     assert json.loads(args[args.index("--speculative-config") + 1]) == {
-        "method": "eagle3", "model": HEAD, "num_speculative_tokens": 3}
+        "method": "eagle3", "model": HEAD, "num_speculative_tokens": 6}
     monkeypatch.setattr(speculative, "_vllm_version", lambda: "0.28.1")  # not checked before 0.29
     assert not any((c.spec_decode or "").startswith("eagle3") for c in be.spec_variants(cfg, llama31, None, True))
     assert speculative.vllm_supports_eagle3("0.29.0") and not speculative.vllm_supports_eagle3("0.28.1")

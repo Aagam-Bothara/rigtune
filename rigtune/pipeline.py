@@ -332,9 +332,10 @@ def idle_tail_for(objective: str, opts: SearchOptions) -> float:
 
 
 def spec_state_notes_for(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult", cfg: Config,
-                         opts: SearchOptions) -> List[str]:
+                         opts: SearchOptions, workload: Optional[Workload] = None) -> List[str]:
     """Notes for the speculation settings a hybrid model's recurrent state keeps from the pick's batch
-    (rigtune.memory.spec_state_notes). Empty for models without linear-attention layers."""
+    (rigtune.memory.spec_state_notes), drafting the lengths the speculation stage tried for the workload's busiest
+    level (spec_stage_fn). Empty for models without linear-attention layers."""
     pm = plan.prepared.get(cfg.backend)
     if not opts.speculative or pm is None or not pm.arch.linear_layers:
         return []
@@ -345,7 +346,8 @@ def spec_state_notes_for(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], pl
     base = cfg.model_copy(update={"spec_decode": None, "spec_head_quant": None,
                                   "gpu_memory_utilization": gmu, "gmu_before_spec": None})
     try:
-        variants = be.spec_variants(base, pm, hw, opts.speculative_all)
+        busiest = (max(workload.concurrencies, default=0) or None) if workload is not None else None
+        variants = be.spec_variants(base, pm, hw, opts.speculative_all, min_batch=busiest)
         return spec_state_notes(hw, pm, be.memory_model(hw), base, variants)
     except Exception as exc:
         logger.debug("no speculation state notes for %s: %s", cfg.key(), exc)
@@ -1114,6 +1116,7 @@ def calibrate(
     if ledger is not None:
         runner = LedgerRunner(runner, ledger)
     from rigtune.predict import Predictor
+    from rigtune.spec_length import refine as refine_lengths
 
     search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress,
                           block_failed_pairs=opts.drafts == "verified" or bool(opts.draft),
@@ -1130,6 +1133,8 @@ def calibrate(
                                             if phase_tuning and opts.phase_tuning else None),
                           tier_variants=tier_fn, startup_failure=startup_failure_fn(hw, reg, plan),
                           kernel_variants=kernel_variants_fn(hw, reg, plan, opts.kernel) if opts.kernel else None,
+                          spec_refine=((lambda trials, done: refine_lengths(trials, done, plan.prepared))
+                                       if opts.speculative_all else None),
                           on_skip=ledger.trial if ledger is not None else None)
     t0 = time.monotonic()
     try:
@@ -1142,7 +1147,7 @@ def calibrate(
     elapsed = time.monotonic() - t0
     notes = (power_notes + version_notes + list(plan.notes) + tier_notes + client_notes + gate_notes + notes
              + spec_notes)
-    notes += spec_state_notes_for(hw, reg, plan, winner.config, opts)
+    notes += spec_state_notes_for(hw, reg, plan, winner.config, opts, workload)
     if winner.config.text_only:
         notes.append(TEXT_ONLY_NOTE)
     trials =sum(1 for r in search.results if not r.metrics.open_loop)  # the rate check is a check, not a trial
