@@ -147,6 +147,27 @@ def test_a_drafter_keeps_its_batch_with_the_token_budget_vllm_needs_for_it(found
     assert args[args.index("--max-num-batched-tokens") + 1] == "4096"
 
 
+@pytest.mark.parametrize("batch", [64, 256])  # 2,048, vLLM's default on an A100, stated; and 4,096 for DFlash
+def test_a_drafter_s_budget_is_not_carried_into_the_other_settings_once_it_leads(found_on_the_hub, hw_a100, batch):
+    """The A100 run of 22 Nov 2026: once DSpark led, the speculation stage offered n-gram, the draft model and the
+    EAGLE3 head again at DSpark's stated budget, three trials that measured what the first pass had. Offered from a
+    leader drafting with either drafter, every setting is one the first pass offered."""
+    pm = _qwen3_8b()
+    be = VllmBackend()
+    be.find_second_models(pm)
+    plain = Config(backend="vllm", quant="bf16", ctx=4096, batch=batch, gpu_memory_utilization=0.9)
+    first = {v.key() for v in be.spec_variants(plain, pm, hw_a100, all_methods=True, min_batch=8)}
+    drafters = [v for v in be.spec_variants(plain, pm, hw_a100, all_methods=True, min_batch=8)
+                if v.spec_decode.startswith(("dflash", "dspark"))]
+    assert len(drafters) == 2 and all(d.prefill_budget for d in drafters)
+    for leader in drafters:
+        again = {v.key() for v in be.spec_variants(leader, pm, hw_a100, all_methods=True, min_batch=8)}
+        assert leader.key() not in again and again <= first, again - first
+    # A budget the prefill stage chose is the leader's own: the other settings are offered at it.
+    chosen = drafters[0].model_copy(update={"prefill_budget": 16384})
+    assert {v.prefill_budget for v in be.spec_variants(chosen, pm, hw_a100, all_methods=True, min_batch=8)} == {16384}
+
+
 def test_what_would_never_start_is_not_offered(found_on_the_hub, hw_a100, monkeypatch):
     pm = _qwen3_8b()
     be = VllmBackend()

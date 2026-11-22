@@ -806,6 +806,7 @@ class VllmBackend(BaseBackend):
 
     def spec_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
                       all_methods: bool = False, min_batch: Optional[int] = None) -> List[Config]:
+        leader, cfg = cfg.key(), self._before_block_drafter(cfg, model, hw)
         # n-gram lookup on the GPU where vLLM has it, since the CPU proposer turns async scheduling off.
         specs = [speculative.ngram_gpu() if speculative.vllm_supports_ngram_gpu() else speculative.ngram()]
         if speculative.vllm_supports_suffix():
@@ -824,15 +825,18 @@ class VllmBackend(BaseBackend):
             specs.append(speculative.eagle3(head, self._probe("eagle3", cfg, hw, min_batch)))
         out = [cfg.model_copy(update={"spec_decode": s, "spec_head_quant": None}) for s in specs if s != cfg.spec_decode]
         out = [v for v in out if self.known_failure(v) is None]
-        return (out + self._mtp_variants(cfg, model, hw, all_methods, min_batch)[0]
+        out += (self._mtp_variants(cfg, model, hw, all_methods, min_batch)[0]
                 + self._drafter_variants(cfg, model, hw, all_methods, min_batch)[0])
+        return [v for v in out if v.key() != leader]  # a block drafter leading is re-derived at its own budget
 
     def spec_notes(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
                    all_methods: bool = False, min_batch: Optional[int] = None) -> List[str]:
         """What the search should say about the MTP settings for `cfg` (see _mtp_variants); where this card's
         search has the fp8_e5m2 KV cache, that MTP is never paired with it (known_failure); and why suffix decoding
         is not tried on a release that has it (speculative.suffix_refusal: on 14 Nov 2026 every suffix trial on an
-        A40 pod failed to start with arctic-inference 0.1.1 installed, and each cost a launch)."""
+        A40 pod failed to start with arctic-inference 0.1.1 installed, and each cost a launch). From the same
+        configuration spec_variants offers from (_before_block_drafter)."""
+        cfg = self._before_block_drafter(cfg, model, hw)
         notes = self._mtp_variants(cfg, model, hw, all_methods, min_batch)[1]
         notes += self._drafter_variants(cfg, model, hw, all_methods, min_batch)[1]
         if model.drafts_mode == "verified":
@@ -853,6 +857,19 @@ class VllmBackend(BaseBackend):
         from rigtune.pairing import discover
         return discover(prepared, self.name, ctx, draft=draft, hub=hub,
                         version=self.version(hw) if hw else None)
+
+    def _before_block_drafter(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor]) -> Config:
+        """A leader drafting with a DFlash or DSpark drafter, with the token budget _drafter_variants stated for it
+        from an unstated one (vLLM's default, or batch x lookahead where that is more) unstated again, so the other
+        speculation settings are offered as they were measured before, not as new trials at a budget only that
+        drafter needs: on an A100 a budgeted Qwen3-8B calibration ran n-gram, a draft model and an EAGLE3 head a
+        second time at an explicit 2,048, vLLM's default, once DSpark led (22 Nov 2026). A budget the prefill stage
+        chose otherwise is kept."""
+        drafter = block_drafter(cfg, model) if hw is not None and cfg.prefill_budget is not None else None
+        lookahead = drafter[1].get("lookahead") if drafter is not None else None
+        if lookahead and cfg.prefill_budget == max(vllm_default_batched_tokens(hw), cfg.batch * lookahead):
+            return cfg.model_copy(update={"prefill_budget": None})
+        return cfg
 
     def _probe(self, kind: str, cfg: Config, hw: Optional[HardwareDescriptor], users: Optional[int]) -> int:
         """Tokens a chain drafter first drafts under --speculative all (rigtune.spec_length.probe_tokens), for the
