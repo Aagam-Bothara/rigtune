@@ -1047,7 +1047,7 @@ class VllmBackend(BaseBackend):
                 return "a DFlash or DSpark drafter with the int8 KV cache: no attention backend has both"
         return None
 
-    def find_second_models(self, prepared: PreparedModel) -> List[str]:
+    def find_second_models(self, prepared: PreparedModel, hw: Optional[HardwareDescriptor] = None) -> List[str]:
         """Under --speculative all: the best EAGLE3 head the Hub has for this model that vLLM loads and that fits it
         (speculative.find_eagle3_head): rigtune's listed head first, then the most downloaded; SGLang gets its own
         best, the same one where it loads it. vLLM plans no memory for it, so its size is recorded but not needed. And
@@ -1063,7 +1063,8 @@ class VllmBackend(BaseBackend):
         if speculative.vllm_supports_eagle3():
             try:
                 found = speculative.find_eagle3_head(prepared.spec, prepared.arch, engine=self.name,
-                                                         hub_off=prepared.hub_off)
+                                                         hub_off=prepared.hub_off, release=self.release(hw),
+                                                         notes=notes)
             except Exception as exc:
                 found, unreachable = None, True
                 notes.append(f"vllm: no EAGLE3 head tried, the Hub could not be asked ({exc})")
@@ -1072,13 +1073,14 @@ class VllmBackend(BaseBackend):
                 if found[1]:
                     prepared.spec_bytes[found[0]] = int(found[1])
                 notes += speculative.found_head_notes(self.name, prepared.spec, prepared.arch, found[0])
-        notes += self._block_drafter_notes(prepared, unreachable)
+        notes += self._block_drafter_notes(prepared, unreachable, self.release(hw))
         notes += self._own_head_notes(prepared)
         for n in notes:
             logger.warning(n)
         return notes
 
-    def _block_drafter_notes(self, prepared: PreparedModel, unreachable: bool) -> List[str]:
+    def _block_drafter_notes(self, prepared: PreparedModel, unreachable: bool,
+                             release: Optional[str] = None) -> List[str]:
         """Record the best DFlash and DSpark drafter the Hub search found for this model that vLLM loads and that fits
         it (speculative.find_drafter), with what _drafter_variants plans it by: its k and lookahead (from its block
         size), its size, and its KV per token. Notes say where it came from, or why none was recorded. When the
@@ -1089,7 +1091,7 @@ class VllmBackend(BaseBackend):
                 continue
             try:
                 cand = speculative.find_drafter(prepared.spec, prepared.arch, engine=self.name, kind=kind,
-                                                hub_off=prepared.hub_off)
+                                                hub_off=prepared.hub_off, release=release, notes=notes)
             except Exception as exc:
                 notes.append(f"vllm: no {kind} drafter tried, the Hub could not be asked ({exc})")
                 continue

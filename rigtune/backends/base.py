@@ -464,10 +464,17 @@ class BaseBackend:
         .tier_details_field), or None: the engine's /metrics counters, if any, are all a tier trial gets."""
         return None
 
-    def find_second_models(self, prepared: PreparedModel) -> List[str]:
+    def find_second_models(self, prepared: PreparedModel, hw: Optional[HardwareDescriptor] = None) -> List[str]:
         """Under --speculative all: look up second models (EAGLE3 heads, drafts) on the Hub and record them in
-        `prepared`. Returns notes for the profile, such as a lookup the Hub could not answer. Default: none."""
+        `prepared`; with the machine known (`hw`), passing over one this engine release refused before
+        (headsearch.refuse). Returns notes for the profile, such as a lookup the Hub could not answer. Default:
+        none."""
         return []
+
+    def release(self, hw: Optional[HardwareDescriptor]) -> Optional[str]:
+        """This engine's release as refusals are recorded under it ("vllm 0.33.0"), or None when not known."""
+        version = self.version(hw) if hw is not None else None
+        return f"{self.name} {version}" if version else None
 
     def find_pairs(self, prepared: PreparedModel, ctx: int = 4096, *, draft: Optional[str] = None,
                    hub: str = "on", hw: Optional[HardwareDescriptor] = None) -> List[str]:

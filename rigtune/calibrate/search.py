@@ -136,9 +136,11 @@ STARTUP_CAUSES = (MM_PROFILING_FAILED, LOAD_FAILED, SUFFIX_FAILED, ARCTIC_PLUGIN
 #   skipped_blocked    not launched: its speculation method failed to start earlier in the calibration
 #   kernel_refused     the engine exited at start-up naming a kernel setting of the config (Config.kernels)
 #   quant_refused      the engine's own check refused the checkpoint's quantization on this GPU (QUANT_REFUSED)
+#   drafter_refused    the engine refused an EAGLE3 head or a DFlash or DSpark drafter at start-up, or the method for
+#                      the model (DRAFTER_REFUSED, METHOD_REFUSED: drafter_startup_refusal)
 FAILURE_KINDS = ("oom_startup", "mm_profiling", "load_failure", "suffix_unusable", "arctic_plugin", "startup_other",
                  "power_unavailable", "request_failures", "crashed", "skipped_budget", "skipped_blocked",
-                 "draft_refused", "draft_unavailable", "kernel_refused", "quant_refused")
+                 "draft_refused", "draft_unavailable", "kernel_refused", "quant_refused", "drafter_refused")
 _CAUSE_KINDS = {MM_PROFILING_FAILED: "mm_profiling", LOAD_FAILED: "load_failure", SUFFIX_FAILED: "suffix_unusable",
                 ARCTIC_PLUGIN_FAILED: "arctic_plugin", SUFFIX_TRIAL_ERROR: "startup_other",
                 QUANT_REFUSED: "quant_refused"}
@@ -379,6 +381,8 @@ def failure_kind(res: TrialResult) -> Optional[str]:
         return "oom_startup"
     if error.startswith(KERNEL_REFUSED):
         return "kernel_refused"
+    if error.startswith((DRAFTER_REFUSED, METHOD_REFUSED)):
+        return "drafter_refused"
     cause = startup_cause(error)[0]
     if cause is not None:
         return _CAUSE_KINDS[cause]
@@ -441,6 +445,96 @@ def _draft_access_error(log: str, repo: str) -> bool:
         if "huggingface.co/" not in line and any(_names_repo(after, repo) for after in lines[i + 1:i + 3]):
             return True
     return False
+
+
+DRAFTER_REFUSED = "the engine refused this drafter at start-up"
+METHOD_REFUSED = "the engine refuses this speculation method for the model at start-up"
+# How each engine refuses an EAGLE3 head or a DFlash or DSpark drafter it will not run, as (phrase, the kinds it is
+# about): lowercase, whitespace collapsed, read in vLLM v0.33.0 and SGLang v0.5.23. A refusal of the drafter itself
+# (its target_layer_ids past the target's layers, its features of another width, a vocabulary it cannot map) blocks it
+# and is remembered for the release (headsearch.refuse); one of the target (no layers to capture for the method)
+# blocks the method on that engine for the calibration, since every drafter of it would fail the same way. Left out,
+# as they also fire for the target or for an MTP head: the registry's "are not supported for now", SGLang's draft
+# context check (C1 sets SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN for drafters instead), and the generic torch shape
+# errors an EAGLE3 head of another hidden size or vocabulary raises.
+_DRAFTER_REFUSALS = {
+    "vllm": (
+        ("for eagle3 speculator", ("eagle3",)),  # transformers_utils/configs/speculators/algos.py:45
+        ("concatenated aux hidden features but received", ("dflash",)),  # model_executor/models/qwen3_dflash.py:841
+        ("shares the target lm_head and requires", ("dflash",)),  # laguna_dflash.py:253
+        # config/speculative.py:181, 217, 223, 339, 351, 375, 390: the drafter's own; not 200 (rigtune's k) or 207.
+        ("qwen3-omni dspark requires a standalone draft checkpoint", ("dspark",)),
+        ("qwen3-omni dspark draft target_hidden_size must match", ("dspark",)),
+        ("qwen3-omni dspark draft hidden_size must match", ("dspark",)),
+        ("qwen3-omni dspark input vocab_size must be a positive integer", ("dspark",)),
+        ("qwen3-omni dspark draft_vocab_size must be a positive integer", ("dspark",)),
+        ("qwen3-omni dspark requires a valid mask/noise token id", ("dspark",)),
+        ("qwen3-omni dspark draft checkpoints must use logical 1-d rope", ("dspark",)),
+        ("input vocab_size is larger than the target vocabulary", ("dspark",)),  # qwen3_dspark.py:345
+        ("reduced-vocabulary qwen3 dspark checkpoints must include", ("dspark",)),  # qwen3_dspark.py:350, 356
+    ),
+    "sglang": (
+        ("eagle3 is not supported for this draft architecture", ("eagle3",)),  # arg_groups/speculative_hook.py:103
+        ("target_layer_ids contains an out-of-range layer id", ("dflash", "dspark")),  # speculative/dflash_utils.py:582
+        ("target_hidden feature dim mismatch", ("dflash", "dspark")),  # models/dflash.py:835
+        ("fc.weight shape mismatch", ("dflash", "dspark")),  # models/dflash.py:969
+        ("is outside the target vocab size", ("dflash", "dspark")),  # dflash_worker_v2.py:1404, dspark_config.py:126
+        ("mask_token_id conflicts with tokenizer vocab id", ("dflash",)),  # dflash_worker_v2.py:1418
+        ("requires markov_rank > 0", ("dspark",)),  # spec_aux_hidden_state.py:270, dspark_config.py:95
+        ("dspark requires mask_token_id to be set", ("dspark",)),  # dspark_config.py:121
+        ("unsupported dspark markov_head_type", ("dspark",)),  # dspark_config.py:273
+    ),
+}
+_METHOD_REFUSALS = {
+    # Every one of the three reads the target's hidden states through the EAGLE3 interface
+    # (v1/worker/gpu/spec_decode/eagle/eagle3_utils.py:15-29; gpu_model_runner.py:5175 on Model Runner V1).
+    "vllm": (("does not support eagle3 interface", ("eagle3", "dflash", "dspark")),),
+    "sglang": (  # model_executor/model_runner_components/attention_backend_setup.py:57, 63-72
+        ("does not implement set_eagle3_layers_to_capture", ("eagle3",)),
+        # Raised for a DFlash trial when the target lacks the DFlash capture, whatever its DSpark one (DeepSeek V4
+        # has only that); a DSpark trial raises it only when the target has neither.
+        ("implements neither set_dspark_layers_to_capture nor set_dflash_layers_to_capture", ("dflash", "dspark")),
+    ),
+}
+REFUSABLE_DRAFTERS = ("eagle3", "dflash", "dspark")
+
+
+def drafter_startup_refusal(cfg: Config, log: str) -> Optional[str]:
+    """The cause to give a trial whose engine refused its EAGLE3 head or DFlash or DSpark drafter at start-up:
+    DRAFTER_REFUSED or METHOD_REFUSED (with the kinds the method refusal covers), and the engine's line; else None."""
+    from rigtune.speculative import parse
+
+    if not cfg.spec_decode:
+        return None
+    kind = parse(cfg.spec_decode)[0]
+    if kind not in REFUSABLE_DRAFTERS:
+        return None
+    engine = "sglang" if cfg.backend.startswith("sglang") else "vllm"
+    lines = [" ".join(line.lower().split()) for line in log.splitlines()]
+    for table, label in ((_DRAFTER_REFUSALS, DRAFTER_REFUSED), (_METHOD_REFUSALS, METHOD_REFUSED)):
+        for phrase, kinds in table[engine]:
+            if kind not in kinds:
+                continue
+            line = next((raw.strip() for raw, low in zip(log.splitlines(), lines) if phrase in low), None)
+            if line is not None:
+                if label == METHOD_REFUSED and engine == "sglang" and kind == "dflash":
+                    kinds = ("dflash",)
+                scope = f": {', '.join(kinds)}" if label == METHOD_REFUSED else ""
+                return f"{label}{scope} ({line[:240]})"
+    return None
+
+
+_REFUSAL = re.compile(rf"^({re.escape(DRAFTER_REFUSED)}|{re.escape(METHOD_REFUSED)})(?:: ([a-z0-9, ]+))? \((.*?)\); "
+                      r"(?=later calibrations on |failed to start)", re.S)
+
+
+def refusal_parts(error: Optional[str]) -> Optional[Tuple[str, Tuple[str, ...], str]]:
+    """(DRAFTER_REFUSED or METHOD_REFUSED, the kinds a method refusal covers, the engine's line) from a trial's
+    error, or None when it is no such refusal."""
+    m = _REFUSAL.match(error or "")
+    if m is None:
+        return None
+    return m.group(1), tuple(k.strip() for k in (m.group(2) or "").split(",") if k.strip()), m.group(3)
 
 
 def draft_startup_failure(cfg: Config, log: str) -> Optional[str]:
@@ -531,6 +625,28 @@ class SubprocessTrialRunner:
         self.idle_tail_s = idle_tail_s  # seconds of idle measured after each trial's last level (0 = none)
         self.answers = answers  # record each level's AnswerStats (compare --verdict); off for calibration
         self.on_level = on_level  # given each level's requests as measured (compare --verdict keeps them)
+        self._drafters_started: set = set()  # (engine, spec kind, repo) of drafters that started in this calibration
+
+    @staticmethod
+    def _drafter_key(cfg: Config) -> tuple:
+        from rigtune.speculative import parse
+
+        kind, repo, _ = parse(cfg.spec_decode)
+        return (cfg.backend, kind, repo)
+
+    def _remember_refusal(self, cfg: Config, model: PreparedModel, backend: BaseBackend, cause: str) -> Optional[str]:
+        """Record the engine refusing this drafter for this model (headsearch.refuse), so later calibrations on the
+        release take the next one the search found. Not for a drafter that started in this calibration: the
+        refusal then came with this trial's other settings, not the pair. Returns the release when recorded."""
+        from rigtune.headsearch import refuse
+
+        key = self._drafter_key(cfg)
+        release = backend.release(self.hw)
+        if not key[2] or not release or key in self._drafters_started:
+            return None
+        recorded = refuse(key[2], model.spec_revisions.get(key[2]), release, cause, model.spec.hf_id,
+                          model.spec.revision)
+        return release if recorded else None
 
     def _apply_power(self, cfg: Config) -> Optional[str]:
         """Apply cfg's power setting to the GPU. Returns an error message if it cannot be applied."""
@@ -612,6 +728,9 @@ class SubprocessTrialRunner:
                 cause = (f"{pair_failure}; " if pair_failure else
                          "out of memory at start-up; " if mentions_oom(log) else "")
                 why = pair_failure or ("oom_startup" if cause else "startup_other")
+                drafter = None if pair_failure else drafter_startup_refusal(cfg, log)
+                if drafter:  # named whatever else the log holds, as a vocabulary refusal is
+                    cause, why = f"{drafter}; ", "drafter_refused"
                 # A kernel setting the engine named in refusing to start is that, whatever else the log holds; an
                 # out-of-memory on such a trial stays one, and its error says which setting it ran with.
                 refused = kernel_startup_refusal(cfg, log)
@@ -619,6 +738,10 @@ class SubprocessTrialRunner:
                     cause, why = f"{KERNEL_REFUSED} ({refused}); ", "kernel_refused"
                 elif cfg.kernels is not None and why == "oom_startup":
                     cause += f"kernel settings {cfg.kernels}; "
+                if why == "drafter_refused" and drafter.startswith(DRAFTER_REFUSED) and model is not None:
+                    release = self._remember_refusal(cfg, model, backend, drafter)
+                    if release:
+                        cause += f"later calibrations on {release} take the next drafter the search found; "
                 if pair_failure == "draft_refused" and model is not None:
                     from rigtune.pairing import refute
                     if refute(model, cfg.spec_decode, cfg.backend, backend.version(self.hw) if self.hw else None):
@@ -642,6 +765,8 @@ class SubprocessTrialRunner:
             if perr:
                 return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=perr, memory=observation,
                                    failure_kind="power_unavailable")
+            if cfg.spec_decode and cfg.spec_decode.partition(":")[0] in REFUSABLE_DRAFTERS:
+                self._drafters_started.add(self._drafter_key(cfg))
             # Speculation's acceptance over the workload alone: counters and log read either side of it, before the
             # gate and the quality probe send their own prompts to the same engine.
             spec_window = None
@@ -947,6 +1072,7 @@ class StagedSearch:
     # (SUFFIX_FAILED); kind -> the configurations that were not launched for it.
     _spec_blocked: Dict[str, List[str]] = field(default_factory=dict)
     _pair_blocked: set = field(default_factory=set)
+    _method_blocked: set = field(default_factory=set)  # (engine, kind) refused for the model (METHOD_REFUSED)
     # (engine, kind, second model) that started in this calibration: a later start-up failure of the pair is put
     # down to that trial's other settings, not the second model, and blocks nothing.
     _pair_started: set = field(default_factory=set)
@@ -1088,13 +1214,19 @@ class StagedSearch:
                 error=f"skipped: the engine refused {cfg.quant} on this GPU earlier in this calibration",
                 failure_kind="skipped_blocked"))
         spec_kind = (cfg.spec_decode or "").partition(":")[0]
-        pair_key = None
-        if spec_kind in ("draft", "assist"):
+        pair_key = drafter_key = None
+        if spec_kind in ("draft", "assist") + REFUSABLE_DRAFTERS:
             from rigtune.speculative import parse
-            pair_key = (cfg.backend, spec_kind, parse(cfg.spec_decode)[1])
+            second = (cfg.backend, spec_kind, parse(cfg.spec_decode)[1])
+            pair_key, drafter_key = (second, None) if spec_kind in ("draft", "assist") else (None, second)
         if pair_key in self._pair_blocked:
             return self._skip(TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
                                           error="skipped: this second model failed to start on this engine",
+                                          failure_kind="skipped_blocked"))
+        if drafter_key in self._pair_blocked or (cfg.backend, spec_kind) in self._method_blocked:
+            what = "this drafter" if drafter_key in self._pair_blocked else f"{spec_kind} decoding for this model"
+            return self._skip(TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
+                                          error=f"skipped: the engine refused {what} earlier in this calibration",
                                           failure_kind="skipped_blocked"))
         if spec_kind in self._spec_blocked:  # its start-up failure would only repeat
             self._spec_blocked[spec_kind].append(key)
@@ -1121,6 +1253,8 @@ class StagedSearch:
         self._done[key] = res
         if pair_key is not None and res.launched:
             self._pair_started.add(pair_key)
+        if drafter_key is not None and res.launched:
+            self._pair_started.add(drafter_key)
         if head_key is not None and res.launched:
             self._head_started.add(head_key)
         if not res.launched and spec_kind and startup_cause(res.error)[0] == SUFFIX_FAILED:
@@ -1162,6 +1296,22 @@ class StagedSearch:
                 self._pair_blocked.add(pair_key)
                 self.notes.append(f"{cfg.backend}: {pair_key[2]} failed to start ({failure_kind(res)}); "
                                   "only this candidate is blocked on this engine for this calibration")
+        refused = refusal_parts(res.error) if drafter_key is not None and not res.launched else None
+        if refused is not None:
+            label, kinds, line = refused
+            if label == DRAFTER_REFUSED and drafter_key in self._pair_started:
+                self._note_once(f"{cfg.backend} refused the {spec_kind} drafter {drafter_key[2]} with {key} ({line}), "
+                                "but it started earlier in this calibration; the refusal is put down to that trial's "
+                                "other settings and nothing is blocked")
+            elif label == DRAFTER_REFUSED:
+                self._pair_blocked.add(drafter_key)
+                self.notes.append(f"{cfg.backend} refused the {spec_kind} drafter {drafter_key[2]} at start-up "
+                                  f"({line}); it is not launched again in this calibration")
+            else:
+                kinds = kinds or (spec_kind,)
+                self._method_blocked.update((cfg.backend, k) for k in kinds)
+                self.notes.append(f"{cfg.backend} refuses {', '.join(kinds)} decoding for this model ({line}); "
+                                  "none is launched again in this calibration")
         if head_key is not None and key not in self._headroom_retried and self._head_failed(cfg, res):
             setting = self._head_setting(cfg)
             if head_key in self._head_started:

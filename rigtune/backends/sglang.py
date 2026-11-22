@@ -603,7 +603,7 @@ class SglangBackend(BaseBackend):
         return PreparedModel(spec=model, backend=self.name, arch=arch, hf_path=model.hf_id, hf_paths=paths,
                              weights_bytes=weights)
 
-    def find_second_models(self, prepared: PreparedModel) -> List[str]:
+    def find_second_models(self, prepared: PreparedModel, hw: Optional[HardwareDescriptor] = None) -> List[str]:
         """Under --speculative all: record the EAGLE3 head, the draft model and the checkpoint's own MTP head this
         SGLang could load, with their sizes, since the memory left outside the reservation depends on them
         (spec_fraction). One whose size is unknown is not offered. Returns notes for the profile when the Hub could
@@ -613,7 +613,8 @@ class SglangBackend(BaseBackend):
         if "eagle3" in methods:
             try:
                 found = speculative.find_eagle3_head(prepared.spec, prepared.arch, engine=self.name,
-                                                         hub_off=prepared.hub_off)
+                                                         hub_off=prepared.hub_off, release=self.release(hw),
+                                                         notes=notes)
             except Exception as exc:
                 found = None
                 notes.append(f"sglang: no EAGLE3 head tried, the Hub could not be asked ({exc})")

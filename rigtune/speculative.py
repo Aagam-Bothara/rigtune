@@ -194,12 +194,14 @@ def repo_bytes(repo: str, token: Optional[str] = None) -> Optional[int]:
         repo, INDEX, revision=sha if isinstance(sha, str) else None, token=token))
 
 
-def _best_head(found: Any, target: ArchInfo, engine: str, kind: str = "eagle3") -> Any:
+def _best_head(found: Any, target: ArchInfo, engine: str, kind: str = "eagle3", release: Optional[str] = None,
+               notes: Optional[List[str]] = None) -> Any:
     """The best drafter of `kind` in a search for `engine`: the first that fits, one whose size is known first (SGLang
-    offers no second model of unknown size, and vLLM's planner counts a block drafter's weights), else None."""
+    offers no second model of unknown size, and vLLM's planner counts a block drafter's weights), else None. One the
+    engine's `release` refused before is passed over (headsearch.heads_for), said in `notes`."""
     from rigtune import headsearch
 
-    heads = headsearch.heads_for(found, target, engine, kind)
+    heads = headsearch.heads_for(found, target, engine, kind, release=release, notes=notes)
     return sorted(heads, key=lambda c: c.size_bytes is None)[0] if heads else None
 
 
@@ -221,18 +223,20 @@ def found_head_notes(engine: str, spec: ModelSpec, target: ArchInfo, repo: str) 
         theirs = None
     if theirs is not None and theirs.repo != repo:
         notes.append(f"{engine}: drafts with EAGLE3 head {repo}; {other}'s best head for this model is "
-                     f"{theirs.repo}, which {engine} does not load or ranks lower")
+                     f"{theirs.repo}, which {engine} does not load, ranks lower, or refused before")
     return notes
 
 
 def find_drafter(spec: ModelSpec, target: ArchInfo, *, engine: str, kind: str, hub: Any = None,
-                 hub_off: Optional[bool] = None) -> Any:
+                 hub_off: Optional[bool] = None, release: Optional[str] = None,
+                 notes: Optional[List[str]] = None) -> Any:
     """The best drafter of `kind` ("eagle3", "dflash", "dspark") for `spec` that `engine` loads and that fits
     `target` (a headsearch.Candidate: repo, size, config), or None when none does. The drafters come from a Hub
     search (rigtune.headsearch: by name and base model, the best of each kind read and judged by
     rigtune.heads.check_head per engine), kept for the day; EAGLE3_HEADS' entries rank first, then downloads, and one
     whose size is known comes before one whose is not. Each engine gets its own best. With the Hub off (`hub_off`, or
-    HF_HUB_OFFLINE) what was kept is used. Raises HubLookupError when no search could be made or kept, or when an
+    HF_HUB_OFFLINE) what was kept is used. A drafter the engine's `release` ("vllm 0.33.0") refused to start with in
+    an earlier calibration is passed over for the next (headsearch.refuse), said in `notes`. Raises HubLookupError when no search could be made or kept, or when an
     incomplete one found none, so the caller can tell "none fits" from "could not ask". Never searches for a local
     directory."""
     from rigtune import headsearch
@@ -241,22 +245,27 @@ def find_drafter(spec: ModelSpec, target: ArchInfo, *, engine: str, kind: str, h
     if is_local(spec.hf_id):
         return None
     try:
-        found, notes = headsearch.kept_or_search(spec.hf_id, spec.revision, eagle3_heads_for(spec.hf_id),
+        found, said = headsearch.kept_or_search(spec.hf_id, spec.revision, eagle3_heads_for(spec.hf_id),
                                                  hub_off=bool(hub_off) or offline(), hub=hub)
     except Exception as exc:
         raise HubLookupError(f"could not search the Hub ({type(exc).__name__}: {exc})") from None
     if found is None:
-        raise HubLookupError("; ".join(notes))
-    best = _best_head(found, target, engine, kind)
-    if best is None and not found.complete:
+        raise HubLookupError("; ".join(said))
+    passed_over: List[str] = []
+    best = _best_head(found, target, engine, kind, release, passed_over)
+    if notes is not None:
+        notes += passed_over
+    if best is None and not found.complete and not passed_over:  # a refused drafter is no failed lookup
         raise HubLookupError("the search was incomplete and found no head: " + "; ".join(found.notes))
     return best
 
 
 def find_eagle3_head(spec: ModelSpec, target: ArchInfo, *, engine: str, hub: Any = None,
-                     hub_off: Optional[bool] = None) -> Optional[Tuple[str, Optional[int]]]:
+                     hub_off: Optional[bool] = None, release: Optional[str] = None,
+                     notes: Optional[List[str]] = None) -> Optional[Tuple[str, Optional[int]]]:
     """(repo, size in bytes or None) of the best EAGLE3 head (find_drafter), or None."""
-    best = find_drafter(spec, target, engine=engine, kind="eagle3", hub=hub, hub_off=hub_off)
+    best = find_drafter(spec, target, engine=engine, kind="eagle3", hub=hub, hub_off=hub_off, release=release,
+                        notes=notes)
     return (best.repo, best.size_bytes) if best is not None else None
 
 

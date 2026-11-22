@@ -313,7 +313,7 @@ class Conformance:
             from rigtune.pairing import hub_off, immutable_revision, is_local
             model.hub_off = hub_off(self.hub)  # the head search honours --hub off, as calibration's does
             notes = ([] if model.drafts_mode == "verified" and hub_off(self.hub)
-                     else self.backend.find_second_models(model))
+                     else self.backend.find_second_models(model, self.hw))
             base = self.base(role)
             if model.drafts_mode == "verified":
                 if is_local(model.spec.hf_id) or immutable_revision(model.spec.revision):

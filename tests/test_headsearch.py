@@ -140,6 +140,39 @@ def test_a_listed_head_comes_first_and_both_engines_get_it(tmp_path):
     assert dflash == ["z-lab/Qwen3-8B-DFlash-b16"]  # found and kept for the DFlash launch to come
 
 
+def test_a_drafter_an_engine_release_refused_gives_way_to_the_next_on_that_release_only(tmp_path):
+    hub = FakeHub(tmp_path, QWEN3_8B_LISTINGS)
+    spec = ModelSpec(hf_id="Qwen/Qwen3-8B")
+    head = "AngelSlim/Qwen3-8B_eagle3"
+    assert speculative.find_eagle3_head(spec, QWEN3_8B, engine="vllm", hub=hub, hub_off=False)[0] == head
+    assert headsearch.refuse(head, None, "vllm 0.33.0", "an EAGLE3 refusal line", "Qwen/Qwen3-8B", today="2026-11-22")
+    assert not headsearch.refuse(head, None, "vllm 0.33.0", "again", "Qwen/Qwen3-8B")  # recorded once
+    notes = []
+    got = speculative.find_eagle3_head(spec, QWEN3_8B, engine="vllm", hub=hub, hub_off=True, release="vllm 0.33.0",
+                                       notes=notes)
+    assert got[0] != head and got[0] in {"RedHatAI/Qwen3-8B-speculator.eagle3", "nm-testing/Speculator-Qwen3-8B-Eagle3"}
+    assert notes == [f"vllm: eagle3 drafter {head} not offered: vllm 0.33.0 refused to start with it on 2026-11-22 "
+                     "(an EAGLE3 refusal line)"]
+    for engine, release in (("vllm", "vllm 0.34.0"), ("sglang", "sglang 0.5.23"), ("vllm", None)):
+        assert speculative.find_eagle3_head(spec, QWEN3_8B, engine=engine, hub=hub, hub_off=True,
+                                            release=release)[0] == head  # another release, engine, or none known
+
+
+def test_a_refusal_holds_for_its_model_and_commits_only():
+    dflash, qwen = "z-lab/Qwen3-8B-DFlash-b16", "Qwen/Qwen3-8B"
+    assert headsearch.refuse(dflash, "a" * 40, "vllm 0.33.0", "refused", "org/Qwen3-8B-finetune", "f" * 40)
+    assert headsearch.refusal(dflash, "a" * 40, "vllm 0.33.0", "org/Qwen3-8B-finetune", "f" * 40) is not None
+    # The drafter still serves the model it was trained for, and the fine-tune at another commit is asked again.
+    assert headsearch.refusal(dflash, "a" * 40, "vllm 0.33.0", qwen) is None
+    assert headsearch.refusal(dflash, "a" * 40, "vllm 0.33.0", "org/Qwen3-8B-finetune", "g" * 40) is None
+    assert headsearch.refuse(dflash, "a" * 40, "vllm 0.33.0", "refused", qwen)  # no revision pinned: any
+    assert headsearch.refusal(dflash, "a" * 40, "vllm 0.33.0", qwen, "h" * 40) is not None
+    assert headsearch.refusal(dflash, "b" * 40, "vllm 0.33.0", qwen) is None  # its authors may have fixed it since
+    assert headsearch.refusal(dflash, "a" * 40, None, qwen) is None
+    headsearch._refused_path().write_text("not json", encoding="utf-8")
+    assert headsearch.refusal(dflash, "a" * 40, "vllm 0.33.0", qwen) is None  # unreadable: nothing held against it
+
+
 def test_a_head_nobody_listed_is_found_and_said_so(tmp_path):
     hub = FakeHub(tmp_path, {"gpt-oss-20b eagle": ["zhuyksir/EAGLE3-gpt-oss-20b-bf16"]})
     spec = ModelSpec(hf_id="openai/gpt-oss-20b")
@@ -288,7 +321,7 @@ def test_the_engines_drafting_with_different_heads_is_said(tmp_path, monkeypatch
     assert (vllm, sglang) == ("RedHatAI/Qwen3-8B-speculator.eagle3", "AngelSlim/Qwen3-8B_eagle3")
     assert speculative.found_head_notes("vllm", spec, QWEN3_8B, vllm)[-1] == (
         "vllm: drafts with EAGLE3 head RedHatAI/Qwen3-8B-speculator.eagle3; sglang's best head for this model is "
-        "AngelSlim/Qwen3-8B_eagle3, which vllm does not load or ranks lower")
+        "AngelSlim/Qwen3-8B_eagle3, which vllm does not load, ranks lower, or refused before")
 
 
 def test_a_local_directory_is_never_searched_for(tmp_path):

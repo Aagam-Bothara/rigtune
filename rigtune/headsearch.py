@@ -369,10 +369,65 @@ def kept_or_search(target_id: str, revision: Optional[str], seeds: Iterable[str]
     return found, []
 
 
-def heads_for(found: Search, target: ArchInfo, engine: str, kind: str = "eagle3") -> List[Candidate]:
+def _refused_path() -> Path:
+    from rigtune.paths import heads_dir
+
+    return heads_dir() / "refused.json"
+
+
+def _read_refused() -> Dict[str, List[Dict[str, Any]]]:
+    try:
+        kept = json.loads(_refused_path().read_text(encoding="utf-8"))
+    except Exception:  # none yet, or unreadable: nothing is held against any drafter
+        return {}
+    return kept if isinstance(kept, dict) else {}
+
+
+def refusal(repo: str, sha: Optional[str], release: Optional[str], target: str,
+            target_revision: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """What is recorded of `release` ("vllm 0.33.0") refusing to start with drafter `repo` for `target`: at this
+    commit of each, or at any when the refused one was not known; None when nothing is. Scoped to the target, since
+    the engines word most refusals as the pair's ("incompatible draft/target pair", "outside the target vocab size"):
+    the same drafter may serve the model it was trained for and be refused for a fine-tune of it."""
+    if not release:
+        return None
+    for entry in _read_refused().get(repo, []):
+        if (isinstance(entry, dict) and entry.get("release") == release and entry.get("sha") in (None, sha)
+                and entry.get("target") == target and entry.get("target_revision") in (None, target_revision)):
+            return entry
+    return None
+
+
+def refuse(repo: str, sha: Optional[str], release: str, reason: str, target: str,
+           target_revision: Optional[str] = None, today: Optional[str] = None) -> bool:
+    """Record that `release` refused to start with drafter `repo` (at commit `sha` when known) for `target` (at
+    `target_revision` when pinned), so later calibrations of that target on that release take the next drafter the
+    search found (heads_for). Atomic, like the searches kept beside it; deleting the file forgets every refusal.
+    Returns whether it was recorded now (False when it already was, or the record could not be written)."""
+    if refusal(repo, sha, release, target, target_revision) is not None:
+        return False
+    kept = _read_refused()
+    kept.setdefault(repo, []).append({"release": release, "sha": sha, "target": target,
+                                      "target_revision": target_revision, "reason": reason[:300],
+                                      "day": today or date.today().isoformat()})
+    path = _refused_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, suffix=".tmp", delete=False) as fh:
+            json.dump(kept, fh, sort_keys=True, indent=1)
+        os.replace(fh.name, path)
+    except OSError as exc:
+        logger.warning("could not record %s refusing %s: %s", release, repo, exc)
+        return False
+    return True
+
+
+def heads_for(found: Search, target: ArchInfo, engine: str, kind: str = "eagle3", release: Optional[str] = None,
+              notes: Optional[List[str]] = None) -> List[Candidate]:
     """The read candidates `engine` loads as `kind` and that fit `target` (rigtune.heads.check_head "ok"), in the
     search's order: rigtune's listed heads, then downloads. Each engine gets its own best: calibration then chooses
-    between the engines on what each does at its best. A config the check cannot read is skipped."""
+    between the engines on what each does at its best. A config the check cannot read is skipped, and so is one the
+    engine's `release` refused to start with in an earlier calibration (refuse), said in `notes` when given."""
     out = []
     for cand in found.candidates:
         if not isinstance(cand.config, dict):
@@ -383,6 +438,13 @@ def heads_for(found: Search, target: ArchInfo, engine: str, kind: str = "eagle3"
         except Exception as exc:  # a config shaped like no other: not a drafter rigtune can judge
             logger.info("%s not judged on %s: %s", cand.repo, engine, exc)
             continue
-        if fits:
-            out.append(cand)
+        if not fits:
+            continue
+        refused = refusal(cand.repo, cand.sha, release, found.target, found.revision)
+        if refused is not None:
+            if notes is not None:
+                notes.append(f"{engine}: {kind} drafter {cand.repo} not offered: {release} refused to start with it "
+                             f"on {refused.get('day')} ({refused.get('reason')})")
+            continue
+        out.append(cand)
     return out

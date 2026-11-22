@@ -89,6 +89,22 @@ def test_vllm_records_the_drafters_it_loads_with_what_plans_them(found_on_the_hu
     assert "spec_facts" not in pm.model_dump()  # not saved in profiles
 
 
+def test_a_drafter_this_release_refused_is_not_recorded_again(found_on_the_hub, hw_a100):
+    """C8: vLLM refused z-lab's drafter at its checked commit in an earlier calibration; this one, on the same
+    release, records DSpark alone and says why, and a calibration that does not know the release is unchanged."""
+    release = f"vllm {hw_a100.backend_version('vllm')}"
+    headsearch.refuse(DFLASH, "d" * 40, release, "target_layer_ids past the target's layers", "Qwen/Qwen3-8B",
+                      today="2026-11-22")
+    pm = _qwen3_8b()
+    notes = VllmBackend().find_second_models(pm, hw_a100)
+    assert pm.spec_repos == {"dspark": DSPARK}
+    assert f"vllm: dflash drafter {DFLASH} not offered: {release} refused to start with it on 2026-11-22 " \
+           "(target_layer_ids past the target's layers)" in notes
+    unknown = _qwen3_8b()
+    VllmBackend().find_second_models(unknown)
+    assert unknown.spec_repos == {"dflash": DFLASH, "dspark": DSPARK}
+
+
 def test_the_planner_counts_a_drafter_s_weights_and_layers(found_on_the_hub, hw_a100):
     pm = _qwen3_8b()
     VllmBackend().find_second_models(pm)

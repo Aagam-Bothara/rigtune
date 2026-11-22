@@ -903,7 +903,7 @@ def prepare_and_plan(
             from rigtune.pairing import hub_off
             prepared.hub_off = hub_off(hub)
             if speculative_all and not (prepared.drafts_mode == "verified" and hub_off(hub)):
-                result.notes += backend.find_second_models(prepared)
+                result.notes += backend.find_second_models(prepared, hw)
             elif speculative_all and prepared.drafts_mode == "verified":
                 result.notes.append(f"{name}: Hub not asked for optional EAGLE3/MTP inspection; "
                                     "rigtune recalibrate with --hub on can add these methods")
