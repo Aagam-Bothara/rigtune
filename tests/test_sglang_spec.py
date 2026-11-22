@@ -187,6 +187,24 @@ def test_launch_flags_for_each_method(llama8b):
     assert "--speculative-algorithm" not in be.launch_spec(_sgl(), llama8b, 1).args
 
 
+def _draft_quant(args):
+    flag = "--speculative-draft-model-quantization"
+    return args[args.index(flag) + 1] if flag in args else None
+
+
+def test_a_second_model_is_loaded_as_stored_as_vllm_loads_it(llama8b):
+    """SGLang gives a draft the target's --quantization unless told otherwise; vLLM loads a head or draft model as its
+    checkpoint stores it. An fp8 trial ran an fp8 EAGLE3 head on SGLang and a bf16 one on vLLM."""
+    be = sg.SglangBackend()
+    # The head, a draft from the table (not a verified pair), and a Gemma 4 assistant (always a verified pair).
+    for spec in (f"eagle3:{HEAD}:3", f"draft:{DRAFT}:3", "assist:google/gemma-4-12B-it-assistant:3"):
+        for quant in ("fp8", "bf16"):
+            assert _draft_quant(be.launch_spec(_sgl(spec_decode=spec, quant=quant), llama8b, 1).args) == "unquant"
+    assert _draft_quant(be.launch_spec(_sgl(spec_decode="ngram:12"), llama8b, 1).args) is None
+    mtp = llama8b.model_copy(update={"spec_repos": {"mtp": llama8b.spec.hf_id}})
+    assert _draft_quant(be.launch_spec(_sgl(spec_decode="mtp:3"), mtp, 1).args) is None  # the target's own head: as vLLM
+
+
 LONGER = "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN"  # configs/model_config.py line 1303 at v0.5.23
 
 

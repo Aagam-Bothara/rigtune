@@ -775,10 +775,18 @@ class SglangBackend(BaseBackend):
         revision = model.spec.revision if cfg.quant not in INT4_METHODS else None
         if cfg.spec_decode:  # the path and revision are read by an MTP head only: the target's own
             kind, second, _ = speculative.parse(cfg.spec_decode)
+            # A second model (a draft, an EAGLE3 head, an assistant) is loaded as its checkpoint stores it, as vLLM
+            # loads one (config/speculative.py line 1425 at v0.33.0: the draft's quantization is the speculative
+            # config's own, None). Unasked, SGLang gives it the target's --quantization (arg_groups/serving_hook.py
+            # lines 629-633 at v0.5.19, 685-690 at v0.5.23), so an fp8 trial ran an fp8 head that vLLM ran in bf16, and
+            # a quantized draft met a method its checkpoint does not declare; "unquant" resets it to None (lines
+            # 648-653 / 704-708), and a draft with None reads its own quantization_config (configs/model_config.py
+            # ModelConfig._verify_quantization). The checkpoint's own MTP head keeps the target's, as on vLLM (lines
+            # 1265-1268 there).
             args += speculative.sglang_config(
                 cfg.spec_decode, model_path=path, revision=revision,
                 draft_revision=model.spec_revisions.get(second), draft_path=model.spec_paths.get(second),
-                draft_quantization="unquant" if second in model.spec_revisions else None)
+                draft_quantization="unquant" if kind in speculative.SECOND_MODEL else None)
         if cfg.tp > 1:
             args += ["--tp-size", str(cfg.tp)]
         if revision:
