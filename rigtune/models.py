@@ -398,6 +398,17 @@ class SpecAcceptance(BaseModel):
     accepted_tokens: Optional[int] = None  # vLLM only: SGLang logs rates, not counts
     drafted_tokens: Optional[int] = None
     lines: Optional[int] = None  # from a log: how many of its lines; None from the counters
+    # vLLM only: for each draft position, the share of drafts accepted at least that far (unconditional, so it falls
+    # with the position, and mean_length = 1 + their sum). From the change in its per-position counter over the
+    # workload, else its log's "Per-position acceptance rate"; None from SGLang, which logs no such figure, and in
+    # ledgers written before it was read.
+    per_position: Optional[List[float]] = None
+    # Whether every draft had all len(per_position) tokens (drafted tokens >= drafts x positions). vLLM counts a
+    # shorter draft (a budget trimmed it, a placeholder, dynamic k) as a draft that can never be accepted at the
+    # positions it did not draft (scheduler.py lines 1018-1021, 1310-1330), so the deeper rates then understate what a
+    # full draft would get, and 1 + the sum of the first k' rates is not the tokens a step at k' would take. None when
+    # there is no curve.
+    full_drafts: Optional[bool] = None
     # "vllm_metrics" (the change in vLLM's /metrics counters over the workload), "vllm_log" (its SpecDecoding lines,
     # where the counters could not be read) or "sglang_log" (its decode-batch lines)
     source: str

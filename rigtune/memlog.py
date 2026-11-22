@@ -396,30 +396,92 @@ def parse_startup(backend: str, text: str) -> Dict[str, object]:
 #   SGLang, each decode-batch line under speculation (0.5.23, read from the A100 session's MTP trial):
 #     "Decode batch, #running-req: 8, ..., accept len: 2.71, accept rate: 0.57, cuda graph: True, ..."
 _VLLM_SPEC = re.compile(r"SpecDecoding metrics: Mean acceptance length: (\d+(?:\.\d+)?), .*?"
-                        r"Accepted: (\d+) tokens, Drafted: (\d+) tokens")
+                        r"Accepted: (\d+) tokens, Drafted: (\d+) tokens"
+                        r"(?:, Per-position acceptance rate: ((?:\d+(?:\.\d+)?)(?:, \d+(?:\.\d+)?)*))?")
 _SGLANG_SPEC = re.compile(r"accept len: (\d+(?:\.\d+)?), accept rate: (\d+(?:\.\d+)?)")
-# vLLM's Prometheus counters (v1/spec_decode/metrics.py, v0.33.0), without their _total suffix
+# vLLM's Prometheus counters (v1/spec_decode/metrics.py, v0.33.0), without their _total suffix. The per-position one
+# carries a "position" label, 0 to k - 1, and counts the drafts accepted at least that far (metrics.py lines 41-49,
+# 247-262): over the number of drafts, the same figure its log prints.
 SPEC_DRAFTS, SPEC_DRAFT_TOKENS, SPEC_ACCEPTED = (
     "vllm:spec_decode_num_drafts", "vllm:spec_decode_num_draft_tokens", "vllm:spec_decode_num_accepted_tokens")
+SPEC_ACCEPTED_PER_POS = "vllm:spec_decode_num_accepted_tokens_per_pos"
+_POSITION = re.compile(r'(?:^|,)\s*position="(\d+)"')
 
 
-def acceptance_from_counters(drafts: float, drafted: float, accepted: float) -> Optional[Dict[str, object]]:
-    """Acceptance from the change in vLLM's counters over the workload; None when nothing was drafted."""
+def position_of(labels: str) -> Optional[int]:
+    """The position label of a per-position counter's label string, or None."""
+    m = _POSITION.search(labels or "")
+    return int(m.group(1)) if m else None
+
+
+def plausible_curve(rates: List[float], tolerance: float = 1e-3) -> bool:
+    """Rates a per-position curve can have: within [0, 1] and never rising with the position (a draft accepted at
+    position i was accepted at every one before it)."""
+    return bool(rates) and all(-tolerance <= r <= 1 + tolerance for r in rates) and all(
+        b <= a + tolerance for a, b in zip(rates, rates[1:]))
+
+
+def acceptance_from_counters(drafts: float, drafted: float, accepted: float,
+                             per_position: Optional[List[float]] = None) -> Optional[Dict[str, object]]:
+    """Acceptance from the change in vLLM's counters over the workload; None when nothing was drafted.
+    `per_position` is the change in the per-position counter, position 0 first: kept only when its counts add up to
+    the accepted tokens, an exact identity in vLLM (metrics.py lines 46-47, each accepted token counted at its
+    position), which a restart between the readings or a misread position breaks, and when the rates are a curve."""
     if drafts <= 0 or drafted <= 0 or accepted < 0:
         return None
-    return {"rate": round(accepted / drafted, 4), "mean_length": round(1 + accepted / drafts, 3),
-            "accepted_tokens": int(accepted), "drafted_tokens": int(drafted), "source": "vllm_metrics"}
+    out: Dict[str, object] = {"rate": round(accepted / drafted, 4), "mean_length": round(1 + accepted / drafts, 3),
+                              "accepted_tokens": int(accepted), "drafted_tokens": int(drafted),
+                              "source": "vllm_metrics"}
+    if per_position and abs(sum(per_position) - accepted) <= 0.5:
+        rates = [v / drafts for v in per_position]
+        if plausible_curve(rates):
+            out["per_position"] = [round(r, 4) for r in rates]
+            out["full_drafts"] = drafted >= drafts * len(rates) - 0.5
+    return out
+
+
+def _log_curve(found: List[tuple]) -> Optional[tuple]:
+    """(per-position rates, full drafts) pooled over vLLM's SpecDecoding lines, or None. Each line's drafts are its
+    accepted tokens over the sum of its rates (sum(rates) = accepted / drafts), so lines are pooled by drafts, exact
+    whatever length each draft had; a line is used only when 1 + the sum of its rates is its mean acceptance length
+    (to the 3-decimal rounding), and only lines with the same number of positions, as a trial's are."""
+    lines = []
+    for mean, accepted, drafted, positions in found:
+        if not positions:
+            continue
+        rates = [float(x) for x in positions.split(", ")]
+        total = sum(rates)
+        if total <= 0 or abs(1 + total - float(mean)) > 0.005 + 0.0005 * len(rates) or not plausible_curve(rates):
+            continue
+        # Drafts, and a lower bound on them: the printed rates are rounded to 3 decimals, so their sum may be up to
+        # 0.0005 a position over the true one, most of the draft count at low acceptance.
+        lines.append((rates, int(accepted) / total, int(drafted), int(accepted) / (total + 0.0005 * len(rates))))
+    if not lines or len({len(r) for r, _, _, _ in lines}) != 1:
+        return None
+    drafts = sum(d for _, d, _, _ in lines)
+    if drafts <= 0:
+        return None
+    k = len(lines[0][0])
+    pooled = [round(sum(r[i] * d for r, d, _, _ in lines) / drafts, 4) for i in range(k)]
+    full = sum(t for _, _, t, _ in lines) >= k * sum(low for _, _, _, low in lines) - 0.5
+    return pooled, full
 
 
 def parse_acceptance(backend: str, text: str) -> Optional[Dict[str, object]]:
     """Acceptance from the engine's log lines in `text`, or None when none were logged (or nothing was drafted)."""
     if backend == "vllm":
-        rows = [(float(m), int(a), int(d)) for m, a, d in _VLLM_SPEC.findall(text or "")]
+        found = _VLLM_SPEC.findall(text or "")
+        rows = [(float(m), int(a), int(d)) for m, a, d, _ in found]
         accepted, drafted = sum(r[1] for r in rows), sum(r[2] for r in rows)
         if not rows or drafted <= 0:
             return None
-        return {"rate": round(accepted / drafted, 4), "mean_length": round(sum(r[0] for r in rows) / len(rows), 3),
-                "accepted_tokens": accepted, "drafted_tokens": drafted, "lines": len(rows), "source": "vllm_log"}
+        out: Dict[str, object] = {
+            "rate": round(accepted / drafted, 4), "mean_length": round(sum(r[0] for r in rows) / len(rows), 3),
+            "accepted_tokens": accepted, "drafted_tokens": drafted, "lines": len(rows), "source": "vllm_log"}
+        curve = _log_curve(found)
+        if curve is not None:
+            out["per_position"], out["full_drafts"] = curve
+        return out
     if backend == "sglang":
         rows = [(float(length), float(rate)) for length, rate in _SGLANG_SPEC.findall(text or "")]
         if not rows:

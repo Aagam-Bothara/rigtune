@@ -323,20 +323,35 @@ def log_error(log: str) -> Optional[str]:
     return _short(line)
 
 
-def _acceptance(backend: str, window: Tuple[Optional[Tuple[float, float, float]], int], port: int, hooks,
+def _acceptance(backend: str, window: Tuple[Optional[Tuple[float, ...]], int], port: int, hooks,
                 proc) -> Optional[SpecAcceptance]:
     """Speculation's acceptance over one trial's workload: from the change in vLLM's counters where both readings
-    exist, else from the engine's log lines written since the workload began; None when neither says. Never fails the
-    trial: a reading that goes wrong costs the figure."""
+    exist, else from the engine's log lines written since the workload began; None when neither says. The per-position
+    curve comes from the counters, else from the log. Only whole log lines are read: a line still being written when
+    the workload ended is left out. Never fails the trial: a reading that goes wrong costs the figure."""
     try:
         before, offset = window
         found = None
+        text = None
+        if hasattr(proc, "log_since"):
+            text = proc.log_since(offset)
+            text = text[:text.rfind("\n") + 1] if text else text
         if before is not None:
             after = spec_counters(f"http://127.0.0.1:{port}", hooks)
             if after is not None:
-                found = acceptance_from_counters(*(a - b for a, b in zip(after, before)))
-        if found is None and hasattr(proc, "log_since"):
-            found = parse_acceptance(backend, proc.log_since(offset))
+                deltas = [a - b for a, b in zip(after, before)]
+                # Positions past the first three exist on both readings only when the per-position counter does,
+                # with the same number of positions (zip stops at the shorter).
+                per_position = deltas[3:] if len(after) == len(before) and len(after) > 3 else None
+                found = acceptance_from_counters(*deltas[:3], per_position=per_position)
+        if found is None and text is not None:
+            found = parse_acceptance(backend, text)
+        elif found is not None and "per_position" not in found and text:
+            logged = parse_acceptance(backend, text) or {}
+            # The counters had no positions (an older vLLM): the log's curve, when it describes the same steps (its
+            # lines cover vLLM's logging intervals, which may run past the workload's either end).
+            if "per_position" in logged and abs(1 + sum(logged["per_position"]) - found["mean_length"]) <= 0.02:
+                found["per_position"], found["full_drafts"] = logged["per_position"], logged.get("full_drafts")
         return SpecAcceptance(**found) if found else None
     except Exception as exc:
         logger.warning("speculative acceptance not read: %s", type(exc).__name__)

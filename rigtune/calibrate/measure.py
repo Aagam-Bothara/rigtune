@@ -1239,16 +1239,26 @@ def _counter_sum(counters: Counters, name: str) -> Optional[float]:
     return sum(values) if values else None
 
 
-def spec_counters(base_url: str, hooks: LlmtraceHooks) -> Optional[Tuple[float, float, float]]:
-    """vLLM's speculative-decoding counters now: (drafts, drafted tokens, accepted tokens), summed over engines, or
-    None when the endpoint or any of the three cannot be read (memlog.SPEC_* names their source)."""
-    from rigtune.memlog import SPEC_ACCEPTED, SPEC_DRAFT_TOKENS, SPEC_DRAFTS
+def spec_counters(base_url: str, hooks: LlmtraceHooks) -> Optional[Tuple[float, ...]]:
+    """vLLM's speculative-decoding counters now: (drafts, drafted tokens, accepted tokens), summed over engines, then
+    the per-position accepted counts, position 0 first, summed over engines likewise (none when it is not exposed);
+    None when the endpoint or any of the first three cannot be read (memlog.SPEC_* names their source)."""
+    from rigtune.memlog import SPEC_ACCEPTED, SPEC_ACCEPTED_PER_POS, SPEC_DRAFT_TOKENS, SPEC_DRAFTS, position_of
 
     counters = _prefix_counters(base_url, hooks)
     if counters is None:
         return None
     sums = [_counter_sum(counters, name) for name in (SPEC_DRAFTS, SPEC_DRAFT_TOKENS, SPEC_ACCEPTED)]
-    return None if any(s is None for s in sums) else (sums[0], sums[1], sums[2])
+    if any(s is None for s in sums):
+        return None
+    by_position: Dict[int, float] = {}
+    for (name, labels), value in counters.items():
+        position = position_of(labels) if name == SPEC_ACCEPTED_PER_POS else None
+        if position is not None:
+            by_position[position] = by_position.get(position, 0.0) + value
+    if sorted(by_position) != list(range(len(by_position))):  # a gap: not a reading to divide
+        by_position = {}
+    return (sums[0], sums[1], sums[2], *(by_position[i] for i in range(len(by_position))))
 
 
 def _engine_reuse(m: TrialMetrics, before: Optional[Counters], after: Optional[Counters]) -> None:
