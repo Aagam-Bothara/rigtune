@@ -578,6 +578,11 @@ class StartupCost(BaseModel):
     # The first forward's profiling/warm-up run, summed over the compiled parts: where Triton compiles and autotunes
     # its kernels when its cache is cold (74 s on Qwen3.5-9B on an A100, 0.3 s warm)
     warmup_s: Optional[float] = None
+    # SGLang only: GiB it took after sizing its KV pools, up to its last CUDA graph (graphs, logits buffer,
+    # workspaces), the largest rank's; and the GiB taken after that until the worker was up, DFlash's start-up
+    # sampling rehearsal above all (the larger of its logged need and the measured drop)
+    after_pools_gib: Optional[float] = None
+    after_capture_gib: Optional[float] = None
     rewrites: List[str] = Field(default_factory=list)  # settings the engine said it changed, "cudagraph_mode=NAME"
     parsed: List[str] = Field(default_factory=list)  # which lines were found: an empty list read nothing
 

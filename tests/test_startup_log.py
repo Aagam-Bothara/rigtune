@@ -209,6 +209,119 @@ def test_sglang_ranks_are_summed_apart_and_the_slowest_kept():
     assert (got["capture_s"], got["cudagraph_gib"], got["capture_lines"]) == (25.42, 2.28, 4)
 
 
+# Round C's SGLang 0.5.23 DFlash launches of Qwen3-8B on an A100 (22-23 Nov 2026): at 0.88, ready; at 0.93 the
+# sampling rehearsal ran out of memory after the last capture (.git/wip/gpu-roundc/sglang-engine-logs).
+DFLASH_088 = [
+    "[2026-11-23 03:15:58] Memory pool end. avail mem=15.74 GB",
+    "[2026-11-23 03:15:58] Memory pool end. avail mem=9.39 GB",
+    "[2026-11-23 03:16:17] Capture target prefill CUDA graph end. elapsed=18.06 s, mem usage=2.74 GB, avail mem=6.04 GB.",
+    "[2026-11-23 03:16:21] Capture target verify CUDA graph end. bs=[1, 2, 64], elapsed=3.94 s, mem usage=0.27 GB, "
+    "avail mem=5.77 GB.",
+    "[2026-11-23 03:16:22] Capture draft verify CUDA graph end. bs=[1, 2, 64], elapsed=1.61 s, mem usage=0.32 GB, "
+    "avail mem=5.45 GB.",
+    "[2026-11-23 03:18:01] DFLASH sampling pre-warm: borrowing=False bs=64 peak=1925591552 B headroom=2547921408 B",
+    "[2026-11-23 03:18:01] max_total_num_tokens=332504, chunked_prefill_size=8192, max_prefill_tokens=16384, "
+    "max_running_requests=64, context_len=8192, available_gpu_mem=3.07 GB",
+]
+DFLASH_093 = [
+    "[2026-11-23 03:14:52] Memory pool end. avail mem=12.29 GB",
+    "[2026-11-23 03:14:52] Memory pool end. avail mem=5.46 GB",
+    "[2026-11-23 03:15:11] Capture target prefill CUDA graph end. elapsed=18.30 s, mem usage=2.74 GB, avail mem=2.11 GB.",
+    "[2026-11-23 03:15:15] Capture target verify CUDA graph end. bs=[1, 2, 64], elapsed=4.05 s, mem usage=0.27 GB, "
+    "avail mem=1.85 GB.",
+    "[2026-11-23 03:15:17] Capture draft verify CUDA graph end. bs=[1, 2, 64], elapsed=1.99 s, mem usage=0.32 GB, "
+    "avail mem=1.52 GB.",
+    '  File "/usr/local/lib/python3.12/site-packages/sglang/srt/speculative/dflash_worker_v2.py", line 837, in '
+    "prewarm_sampling",
+    "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 594.00 MiB. GPU 0 has a total capacity of 79.28 GiB "
+    "of which 368.12 MiB is free.",
+]
+
+
+def test_sglang_memory_after_its_pools_is_read_and_is_the_same_at_any_fraction():
+    ready, failed = parse_startup("sglang", "\n".join(DFLASH_088)), parse_startup("sglang", "\n".join(DFLASH_093))
+    # 9.39 - 5.45 after the pools; after the capture the larger of 2.37 logged and 5.45 - 3.07 taken.
+    assert (ready["after_pools_gib"], ready["after_capture_gib"]) == (3.94, 2.38)
+    assert ready["parsed"] == ["capture", "pools", "after_capture"]
+    # The start that failed in the rehearsal measured the same shape, and nothing after it.
+    assert failed["after_pools_gib"] == 3.94 and "after_capture_gib" not in failed
+    assert failed["parsed"] == ["capture", "pools"]
+
+
+# SGLang main on an A40 (23 Nov 2026, .git/wip/sglang-dflash-prewarm/logs/main-default.log): its rehearsal logs one
+# matrix less than it takes (1.79 GiB logged, 3.64 - 1.32 = 2.32 taken).
+MAIN_DEFAULT = [
+    "[2026-11-23 08:51:02] Memory pool end. avail mem=9.40 GB",
+    "[2026-11-23 08:51:02] Memory pool end. avail mem=6.99 GB",
+    "[2026-11-23 08:51:19] Capture target prefill CUDA graph end. elapsed=16.54 s, mem usage=1.79 GB, avail mem=4.60 GB.",
+    "[2026-11-23 08:51:25] Capture target verify CUDA graph end. bs=[1, 64], elapsed=5.63 s, mem usage=0.63 GB, "
+    "avail mem=3.96 GB.",
+    "[2026-11-23 08:51:27] Capture draft verify CUDA graph end. bs=[1, 64], elapsed=1.68 s, mem usage=0.32 GB, "
+    "avail mem=3.64 GB.",
+    "[2026-11-23 08:51:40] DFLASH sampling pre-warm: borrowing=False bs=64 peak=1302737408 B headroom=1925067264 B",
+    "[2026-11-23 08:51:40] max_total_num_tokens=126418, chunked_prefill_size=4096, max_prefill_tokens=16384, "
+    "max_running_requests=64, context_len=8192, available_gpu_mem=1.32 GB",
+]
+
+
+def test_the_memory_taken_after_the_capture_is_the_larger_of_logged_and_measured():
+    assert parse_startup("sglang", "\n".join(MAIN_DEFAULT))["after_capture_gib"] == 2.32
+    # Logged alone (a log cut before the scheduler's line), the rehearsal's own figure.
+    assert parse_startup("sglang", "\n".join(MAIN_DEFAULT[:6]))["after_capture_gib"] == 1.79
+    # Under post-capture KV sizing the pool is allocated between the two: only the logged figure is read.
+    post = MAIN_DEFAULT[:6] + ["[2026-11-23 09:40:00] Post-capture KV sizing: KV cache allocated. #tokens: 127197"] + \
+        MAIN_DEFAULT[6:]
+    assert parse_startup("sglang", "\n".join(post))["after_capture_gib"] == 1.79
+
+
+def test_a_start_that_skipped_its_draft_graph_does_not_give_its_shape_s_memory():
+    # main-0.91 on the A40: under 1 GB free after the target's capture, so no draft graph, 3.01 against 3.35.
+    skipped = MAIN_DEFAULT[:4] + [
+        "[2026-11-23 08:30:11] Disable DFLASH draft cuda graph because only 0.93 GB GPU memory is available after "
+        "target backend initialization."] + MAIN_DEFAULT[5:]
+    got = parse_startup("sglang", "\n".join(skipped))
+    assert "after_pools_gib" not in got and got["after_capture_gib"] == 2.64  # 3.96 - 1.32, still what came after
+
+
+def test_a_token_count_before_the_capture_does_not_end_it():
+    # 0.5.23's unified memory pool logs a max_total_num_tokens during pool set-up (unified_memory_pool.py line 1821).
+    unified = "[2026-11-23 08:51:02] [unified-memory-pool]   total_bytes=1, max_total_num_tokens=9, chunked_prefill_size=1"
+    assert "after_pools_gib" not in parse_startup("sglang", "\n".join(MAIN_DEFAULT[:3] + [unified]))
+
+
+def test_each_launch_in_an_appended_log_is_read_on_its_own():
+    # The supervisor appends a restart to the same log: a finished launch, then one that failed inside a capture.
+    got = parse_startup("sglang", "\n".join(MAIN_DEFAULT + MAIN_DEFAULT[:3]))
+    assert "after_pools_gib" not in got and "after_capture_gib" not in got
+
+
+def test_sglang_memory_is_unknown_until_the_capture_is_known_to_have_finished():
+    # A start that failed inside a capture has its pools and only some of its graph sets: a partial figure, not read.
+    assert "after_pools_gib" not in parse_startup("sglang", "\n".join(DFLASH_093[:3]))
+    assert "after_pools_gib" not in parse_startup("sglang", "\n".join(DFLASH_093[:5]))  # every set, but no later line
+    # Each later line says it finished: the rehearsal's own, the worker's token count, a failure in the rehearsal.
+    for later in (DFLASH_088[5], DFLASH_088[6], DFLASH_093[5]):
+        assert parse_startup("sglang", "\n".join(DFLASH_093[:5] + [later]))["after_pools_gib"] == 3.94
+    assert "after_pools_gib" not in parse_startup("sglang", "\n".join(DFLASH_088[2:]))  # no pool line
+    assert "after_pools_gib" not in parse_startup("sglang", "\n".join(SGLANG_MTP))  # an excerpt without the pools
+    assert parse_startup("sglang", DFLASH_088[0]) == {"parsed": []}  # pools alone: nothing captured yet
+
+
+def test_sglang_memory_after_its_pools_is_the_largest_rank_s():
+    tp = [line.replace("] ", f" TP{r}] ", 1) for line in DFLASH_088[:5] for r in (0, 1)] + [DFLASH_088[6]]
+    tp[9] = tp[9].replace("avail mem=5.45", "avail mem=5.05")  # rank 1 kept 0.40 GiB more
+    got = parse_startup("sglang", "\n".join(tp))
+    assert got["after_pools_gib"] == 4.34
+
+
+def test_the_start_up_record_keeps_them():
+    from rigtune.models import StartupCost
+
+    cost = StartupCost(seconds=120.0, **parse_startup("sglang", "\n".join(DFLASH_088)))
+    assert (cost.after_pools_gib, cost.after_capture_gib) == (3.94, 2.38)
+    assert StartupCost().after_pools_gib is None and StartupCost().after_capture_gib is None
+
+
 def test_vllm_lines_in_an_sglang_log_and_other_engines_are_not_read():
     assert parse_startup("sglang", _log(CAPTURE, MISS_033)) == {"parsed": []}
     assert parse_startup("llamacpp", _log(CAPTURE, SGLANG_MTP[0])) == {"parsed": []}
@@ -237,6 +350,6 @@ def test_capture_seconds_and_gib_reach_the_ledger(tmp_path, hw_a100, spec, monke
     (record,) = [r for r in lg.read(ledger.path) if r["type"] == "trial"]
     assert record["startup"] == {
         "seconds": 60.0, "capture_s": 23.0, "cudagraph_gib": 0.71, "capture_lines": 1, "compile_s": 31.42,
-        "compile_cached": False, "warmup_s": None, "rewrites": ["cudagraph_mode=PIECEWISE"],
-        "parsed": ["capture", "compile", "rewrites"]}
+        "compile_cached": False, "warmup_s": None, "after_pools_gib": None, "after_capture_gib": None,
+        "rewrites": ["cudagraph_mode=PIECEWISE"], "parsed": ["capture", "compile", "rewrites"]}
     assert "startup" not in res.model_dump(mode="json")

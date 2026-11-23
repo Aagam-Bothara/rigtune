@@ -310,20 +310,85 @@ _SGLANG_CAPTURE = re.compile(r"Capture [A-Za-z_ ]+ CUDA graph end\. (?:bs=\[[\d,
 STARTUP_LOGS = ("vllm", "sglang")  # the engines whose start-up lines parse_startup knows
 
 
+# What SGLang takes outside --mem-fraction-static, from two figures it logs (0.5.23 and main, Nov 2026): the free
+# memory after its last KV pool (the draft's, after the target's; mem_cache/memory_pool line "Memory pool end. avail
+# mem=%.2f GB") and after its last CUDA-graph set (_SGLANG_CAPTURE's "avail mem"). The difference is every graph set,
+# the logits buffer and the workspaces between: 2.1-6.9 GiB for Qwen3-8B on one A100 by speculation, batch and prefill
+# chunk, and the same for one shape at any fraction (3.35 GiB at 0.88 and 0.841 on an A40). DFlash then rehearses its
+# sampling (speculative/dflash_worker_v2.py prewarm_sampling) and logs what it measured:
+#   "DFLASH sampling pre-warm: borrowing=%s bs=%d peak=%d B headroom=%d B"
+# On 0.5.23 that matches what it took (2,547,921,408 B logged, 2.38 GiB fewer free after it, round C, A100); on main
+# it is one matrix short (1.79 GiB logged, 2.32 taken, A40; with SGLang PR #52548 1.21 and 1.74), as main allocates
+# one for the process's life outside its measured peak. So the rehearsal is also read as the drop in free memory from
+# the last capture to the scheduler's line once the worker is up ("] max_total_num_tokens=%d, chunked_prefill_size=
+# ..., available_gpu_mem=%.2f GB", rank 0's), which keeps the cache PyTorch has not released and errs high, and the
+# larger of the two is recorded. Under post-capture KV sizing ("Post-capture KV sizing: ...") the pool is allocated in
+# between, so that drop is not the rehearsal's and is not read.
+# The capture is known to have finished only when a later line says so: that rehearsal line, the scheduler's line, or
+# a failure inside prewarm_sampling, which runs after every graph set. A start that failed inside a capture has a
+# partial figure, too small to plan by, so it is not reported. Nor is one that skipped its draft graph ("Disable
+# DFLASH draft cuda graph because only 0.93 GB ..." with under 1 GB free after the target's capture, 0.5.23
+# dflash_worker_v2.py line 734, dspark_worker_v2.py line 592): at a lower fraction the draft graph would be captured
+# (1.67 GiB for DSpark at 256 requests on the A100). A pool line starts a new launch: the supervisor appends restarts
+# to one log.
+_SGLANG_POOL = re.compile(r"Memory pool end\. avail mem=(\d+\.\d+) GB")
+_SGLANG_READY = re.compile(r"\] max_total_num_tokens=\d+, chunked_prefill_size=.*?available_gpu_mem=(\d+\.\d+) GB")
+_SGLANG_IN_REHEARSAL = re.compile(r", in prewarm_sampling\b")
+_SGLANG_DRAFT_SKIPPED = re.compile(r"Disable \w+ draft cuda graph because only")
+_SGLANG_POST_CAPTURE = re.compile(r"Post-capture KV sizing")
+_SGLANG_CAPTURE_FREE = re.compile(r"Capture [A-Za-z_ ]+ CUDA graph end\..*?avail mem=(\d+\.\d+) GB")
+_SGLANG_REHEARSAL = re.compile(r"DFLASH sampling pre-warm: .*?headroom=(\d+) B")
+
+
 def _parse_sglang_startup(text: str) -> Dict[str, object]:
-    """SGLang's graph sets, summed per rank; the slowest rank bounds the start-up."""
+    """SGLang's graph sets, summed per rank; the slowest rank bounds the start-up. Where its lines say, the memory
+    it took after its pools up to its last capture (the largest rank's) and DFlash's rehearsal after that."""
     ranks: Dict[Optional[int], List[float]] = {}
+    pool_free: Dict[Optional[int], float] = {}
+    capture_free: Dict[Optional[int], float] = {}
+    rehearsal: Optional[float] = None
+    captured = skipped = post_capture = False
     lines = 0
     for line in text.splitlines():
+        rank = _sglang_rank(line)
         if m := _SGLANG_CAPTURE.search(line):
-            seconds, gib = ranks.get(_sglang_rank(line), [0.0, 0.0])
-            ranks[_sglang_rank(line)] = [seconds + float(m.group(1)), gib + float(m.group(2))]
+            seconds, gib = ranks.get(rank, [0.0, 0.0])
+            ranks[rank] = [seconds + float(m.group(1)), gib + float(m.group(2))]
             lines += 1
+            if f := _SGLANG_CAPTURE_FREE.search(line):
+                capture_free[rank] = float(f.group(1))
+        elif m := _SGLANG_POOL.search(line):
+            pool_free[rank] = float(m.group(1))
+            capture_free.pop(rank, None)  # a capture before this pool (none in 0.5.23) is not after it
+            captured = skipped = post_capture = False
+            rehearsal = None
+        elif m := _SGLANG_REHEARSAL.search(line):
+            rehearsal = max(rehearsal or 0.0, int(m.group(1)) / (1 << 30))
+            captured = True
+        elif m := _SGLANG_READY.search(line):
+            captured = True
+            last = capture_free.get(rank, capture_free.get(None))
+            if last is not None and not post_capture:
+                rehearsal = max(rehearsal or 0.0, last - float(m.group(1)))
+        elif _SGLANG_IN_REHEARSAL.search(line):
+            captured = True
+        elif _SGLANG_DRAFT_SKIPPED.search(line):
+            skipped = True
+        elif _SGLANG_POST_CAPTURE.search(line):
+            post_capture = True
     if not ranks:
         return {"parsed": []}
     seconds, gib = max(ranks.values())
-    return {"capture_s": round(seconds, 2), "cudagraph_gib": round(gib, 2), "capture_lines": lines,
-            "parsed": ["capture"]}
+    out: Dict[str, object] = {"capture_s": round(seconds, 2), "cudagraph_gib": round(gib, 2), "capture_lines": lines,
+                              "parsed": ["capture"]}
+    after = [pool_free[r] - capture_free[r] for r in pool_free if r in capture_free]
+    if after and captured and not skipped:
+        out["after_pools_gib"] = round(max(after), 2)
+        out["parsed"].append("pools")
+    if rehearsal is not None:
+        out["after_capture_gib"] = round(rehearsal, 2)
+        out["parsed"].append("after_capture")
+    return out
 
 
 def _per_part(rx: re.Pattern, text: str) -> Dict[str, float]:
