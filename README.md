@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/Aagam-Bothara/rigtune/actions/workflows/tests.yml/badge.svg)](https://github.com/Aagam-Bothara/rigtune/actions/workflows/tests.yml)
 
-I got tired of guessing serving flags. Every guide says something different, and what's fastest on one GPU is often slower on another. So I built a tool that just measures. rigtune tries engines, weight precisions, KV-cache types and speculative decoding on your card, with your prompts, and then serves whatever won behind an OpenAI-compatible API.
+I got tired of guessing serving flags. Every guide says something different, and what's fastest on one GPU is often slower on another. So I built a tool that just measures. rigtune tries engines, weight precisions, KV-cache types and speculative decoding on your card, with your prompts, goes looking on the Hugging Face Hub for draft models built for your model, and then serves whatever won behind an OpenAI-compatible API.
 
 ```bash
 pip install rigtune "vllm==0.33.0"
@@ -22,7 +22,7 @@ In November 2026 I tested it against everything I could find: stock vLLM and SGL
 
 **What won.** On Qwen it was the model's own multi-token-prediction (MTP) head, which sits in the checkpoint and is off by default. On the H200 it added fp8 weights and an fp8 KV cache, which the Ampere runs left out. On Gemma it was suffix decoding, which reuses text from the prompt. Different model and card, different winner. That's the whole reason to measure instead of guess.
 
-**New, and not yet a head-to-head.** Most models have no MTP head, so rigtune now searches the Hugging Face Hub for drafters built for your model (EAGLE3 heads, DFlash and DSpark drafters), checks each one's config against what vLLM and SGLang will actually load, and picks how many tokens a drafter guesses from the engine's own acceptance counts. On Qwen3-8B on an A100 it found a DeepSeek DSpark drafter that no list of mine included and served **1,822 tok/s against 705 for stock vLLM (2.58×)** on Dolly prompts, at lower time-to-first-token. That's one calibration run with one measurement per trial and ungraded answers, not the comparison above ([session](benchmarks/sessions/2026-11/modal-roundc-qwen3-8b/)).
+**New, and not yet a head-to-head.** Most models have no MTP head, so rigtune now searches the Hugging Face Hub for drafters built for your model (EAGLE3 heads, DFlash and DSpark drafters), checks each one's config against what vLLM and SGLang will actually load, and picks how many tokens a drafter guesses from the engine's own acceptance counts. On Qwen3-8B on an A100 it found a DeepSeek DSpark drafter that no list of mine included and served **1,822 tok/s against 705 for stock vLLM (2.58×)** on Dolly prompts, at lower time-to-first-token. That's one calibration run with one measurement per trial and ungraded answers, not the comparison above ([session](benchmarks/sessions/2026-11/modal-roundc-qwen3-8b/)). The drafter search is on `main` and not yet in a PyPI release, so install from GitHub to try it (below). SGLang gets the same drafters, read from its source but not yet run on a GPU.
 
 **Before you get excited, here's what this doesn't show:**
 - **On Qwen, most of the gain is MTP.** You could turn it on yourself if you read the model card, and none of the expert rows did. With it on, SGLang reached 937–948 tok/s in the A100 calibration, so a careful engineer would close much of the gap by hand.
@@ -57,14 +57,14 @@ Every result, with methods, ablations, quality checks and limits: [docs/benchmar
 
 ## How is this different from auto_tune, llm-optimizer and AIConfigurator?
 
-- **vLLM's `auto_tune` and BentoML's llm-optimizer** sweep one engine's batching knobs, like the batch cap and the batched-token budget, to find the best setting under a latency target. I ran both head to head above. rigtune treats the engine itself as a variable too, alongside precision, KV-cache type and speculative decoding, and those are the dimensions that carried almost all the gain. On an RTX 4090, SGLang led the early trials and vLLM only overtook it once speculative decoding and a quantized cache were tried. Tuning the early leader alone would have thrown away the eventual winner.
+- **vLLM's `auto_tune` and BentoML's llm-optimizer** sweep one engine's batching knobs, like the batch cap and the batched-token budget, to find the best setting under a latency target. I ran both head to head above. rigtune treats the engine itself as a variable too, alongside precision, KV-cache type and speculative decoding, and those are the dimensions that carried almost all the gain. It also finds draft models the engines don't know about: neither tool looks beyond the settings you give it. On an RTX 4090, SGLang led the early trials and vLLM only overtook it once speculative decoding and a quantized cache were tried. Tuning the early leader alone would have thrown away the eventual winner.
 - **AIConfigurator** predicts a deployment from performance data it collected per GPU. It's very cheap because it launches nothing, but it can only answer for cards and model layers it has data for, which on these runs was none. rigtune measures instead. That costs 20–60 minutes per workload, but the answer is specific to your prompts. I also tried fitting my own predictor: it ranks the true winner at a median of 15th out of 25 measured configurations, so prediction is a filter here, never the decision ([why](https://github.com/Aagam-Bothara/rigtune/blob/main/docs/decisions.md)).
 - **The honest gap:** every result above is my own run. If you try rigtune, please post your card, model and what it picked in [Discussions](https://github.com/Aagam-Bothara/rigtune/discussions), good or bad, or [open an issue](https://github.com/Aagam-Bothara/rigtune/issues) if something broke.
 
 ## Quickstart
 
 ```bash
-pip install rigtune
+pip install rigtune            # 0.3.0; for the Hub drafter search: pip install "git+https://github.com/Aagam-Bothara/rigtune"
 pip install "vllm==0.33.0"     # ran on driver 595; 0.29.0 needs 580+; older drivers: "vllm==0.11.0" "transformers>=4.56,<5"
 rigtune serve Qwen/Qwen2.5-3B-Instruct --workload chat
 curl localhost:8000/v1/chat/completions -H 'content-type: application/json' \
@@ -72,6 +72,8 @@ curl localhost:8000/v1/chat/completions -H 'content-type: application/json' \
 ```
 
 The first launch calibrates and caches the result for this machine, model, objective and workload. After that it serves straight away. To tune for your own traffic, pass a sample of it with `--workload-file prompts.jsonl`, one prompt per line. Add `--speculative all` to also try a checkpoint's own MTP head, draft models, and the EAGLE3, DFlash and DSpark drafters the Hub has for it.
+
+To skip the calibration on another machine with the same GPU, carry the result over: `rigtune bundle export <model> --out pick.tar.gz` packs the profile with every compiled kernel, and `rigtune bundle import pick.tar.gz` checks it against the new machine first. On fresh Modal A100s that started the pick in 135 s instead of 297 s cold ([session](benchmarks/sessions/2026-11/modal-bundle-e2e/)).
 
 Optional extras:
 - **Suffix decoding** needs arctic-inference built for the Python that runs vLLM: `CMAKE_ARGS="-DPython_EXECUTABLE=$(python -c 'import sys; print(sys.executable)')" python -m pip install --no-cache-dir --force-reinstall arctic-inference==0.1.1` ([why each part](docs/usage.md#suffix-decoding)).
