@@ -1,0 +1,26 @@
+{
+ "split": "dev",
+ "levels": [
+  4,
+  5
+ ],
+ "limit": 0,
+ "problem_set": "9b036577c0f1c3278cf50ed1306d9ab719d1901b6103cea47c1a7080e99d532f",
+ "dataset_revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+ "methods": "direct,self-consistency:3,self-consistency:5,self-correction,adaptive:8",
+ "settings": {
+  "model": "Qwen/Qwen3-4B",
+  "max_tokens": 4096,
+  "temperature": 0.7,
+  "top_p": 0.95,
+  "thinking": false,
+  "seed": 0,
+  "top_k": null,
+  "keep_texts": true
+ },
+ "sequences": 32,
+ "order_seed": 0,
+ "server": "vllm 0.33.0 stock on NVIDIA L4: Qwen/Qwen3-4B --port 8000 --max-model-len 12288 --max-num-seqs 32 --gpu-memory-utilization 0.9",
+ "context": 12288,
+ "grader": "math-verify"
+}

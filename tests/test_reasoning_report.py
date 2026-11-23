@@ -112,3 +112,11 @@ def test_the_markdown_report_states_each_part():
     assert "self-consistency-3: +10.0%" in text and "8 repaired, 0 harmed" in text
     assert "adaptive-4: best of its answers by the reference" in text
     assert "Criterion not decided: utilisation below 80% in self-correction." in text
+
+
+def test_a_cache_the_server_does_not_report_is_unknown_not_zero():
+    run = _run("direct", right=50, wall=100.0)
+    for a in run["attempts"]:
+        a["calls"][0]["cached_tokens"] = None  # vLLM without --enable-prompt-tokens-details
+    assert rr.row(run).cached_share is None
+    assert "| 95% | — |" in rr.markdown([run], REFS)

@@ -63,7 +63,8 @@ def row(run: Dict[str, Any]) -> Row:
                completion_tokens=sum(c["completion_tokens"] for c in calls) / n if n else 0.0,
                truncated=sum(1 for c in calls if c.get("finish_reason") == "length"),
                errors=sum(1 for a in attempts if a.get("error")), utilisation=run.get("utilisation"),
-               cached_share=sum(c.get("cached_tokens", 0) for c in calls) / prompt if prompt else None,
+               cached_share=(sum(c["cached_tokens"] for c in calls) / prompt
+                             if prompt and calls and all(c.get("cached_tokens") is not None for c in calls) else None),
                joules=joules / n if joules is not None and n else None, preemptions=run.get("preemptions"))
 
 

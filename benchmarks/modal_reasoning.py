@@ -62,11 +62,12 @@ def run(name: str, model: str, args: str, max_model_len: int, sequences: int, gp
         raise ValueError(f"runs/{name} already holds runs; choose another --name")
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
-    env = {**os.environ, "HF_HOME": "/vol/hf"}
+    env = {**os.environ, "HF_HOME": "/vol/hf", "PYTHONUNBUFFERED": "1"}  # progress lines reach run.log as they come
     gpu = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True,
                          text=True).stdout.strip()
     serve = ["vllm", "serve", model, "--port", "8000", "--max-model-len", str(max_model_len),
-             "--max-num-seqs", str(sequences), "--gpu-memory-utilization", str(gpu_memory)]
+             "--max-num-seqs", str(sequences), "--gpu-memory-utilization", str(gpu_memory),
+             "--enable-prompt-tokens-details"]  # so each reply says how much of its prompt came from the cache
     server_log = open(out / "server.log", "w")
     server = None
     try:

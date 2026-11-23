@@ -179,3 +179,13 @@ def test_the_http_client_has_no_connection_cap_and_sends_only_the_engine_s_field
     run(post({"model": "m", rm.PRIORITY: 1, rm.SERVICE_SECONDS: 3.0}))
     assert sent == [{"model": "m"}]
     run(close())
+
+
+def test_cached_tokens_the_server_does_not_report_are_none():
+    class Bare(Endpoint):
+        async def __call__(self, body):
+            reply = await super().__call__(body)
+            del reply["usage"]["prompt_tokens_details"]
+            return reply
+
+    assert run(rm.direct(Bare(boxed("1")), SETTINGS, PROBLEM)).calls[0].cached_tokens is None

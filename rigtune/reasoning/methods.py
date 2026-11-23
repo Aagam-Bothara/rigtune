@@ -40,7 +40,7 @@ Post = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
 class Call:
     prompt_tokens: int
     completion_tokens: int
-    cached_tokens: int
+    cached_tokens: Optional[int]  # None when the server does not report it (vLLM: --enable-prompt-tokens-details)
     seconds: float
     finish_reason: str
     thinking_chars: int = 0
@@ -151,7 +151,8 @@ async def _ask(post: Post, settings: Settings, messages: List[Dict[str, str]], s
     thinking, text = split_thinking(choice.get("message") or {}, str(choice.get("finish_reason")), settings.thinking)
     return text, Call(prompt_tokens=int(usage.get("prompt_tokens") or 0),
                       completion_tokens=int(usage.get("completion_tokens") or 0),
-                      cached_tokens=int(details.get("cached_tokens") or 0), seconds=seconds,
+                      cached_tokens=(int(details["cached_tokens"]) if details.get("cached_tokens") is not None
+                                     else None), seconds=seconds,
                       finish_reason=str(choice.get("finish_reason")), thinking_chars=len(thinking),
                       text=text if settings.keep_texts else None,
                       thinking=thinking if settings.keep_texts else None)
