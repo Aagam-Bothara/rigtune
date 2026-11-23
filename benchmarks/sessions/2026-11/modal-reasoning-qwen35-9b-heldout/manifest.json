@@ -1,0 +1,26 @@
+{
+ "split": "heldout",
+ "levels": [
+  4,
+  5
+ ],
+ "limit": 500,
+ "problem_set": "f9160b38959e6e84574c05c77bfb67d9d52972088eb9c5d82181eda7606dcad3",
+ "dataset_revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+ "methods": "direct,self-consistency:3,self-consistency:5,self-correction",
+ "settings": {
+  "model": "Qwen/Qwen3.5-9B",
+  "max_tokens": 8192,
+  "temperature": 0.7,
+  "top_p": 0.95,
+  "thinking": false,
+  "seed": 0,
+  "top_k": null,
+  "keep_texts": true
+ },
+ "sequences": 128,
+ "order_seed": 0,
+ "server": "vllm 0.33.0 with --speculative-config.method=mtp --speculative-config.num_speculative_tokens=3 on NVIDIA A100-SXM4-80GB: Qwen/Qwen3.5-9B --port 8000 --max-model-len 20480 --max-num-seqs 128 --gpu-memory-utilization 0.9 --enable-prompt-tokens-details --speculative-config.method=mtp --speculative-config.num_speculative_tokens=3",
+ "context": 20480,
+ "grader": "math-verify"
+}

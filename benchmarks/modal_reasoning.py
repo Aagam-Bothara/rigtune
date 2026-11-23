@@ -3,6 +3,12 @@
 
   modal run benchmarks/modal_reasoning.py --name qwen3-4b-dev --model Qwen/Qwen3-4B --gpu L4 \\
       --args "--split dev --methods direct,self-consistency:3,self-consistency:5,self-correction,adaptive:8 --thinking off"
+  modal run benchmarks/modal_reasoning.py --name qwen35-9b-heldout500-off --model Qwen/Qwen3.5-9B --gpu A100-80GB \\
+      --sequences 64 --serve-args "--speculative-config.method=mtp --speculative-config.num_speculative_tokens=3" \\
+      --args "--split heldout --limit 500 --methods direct,self-consistency:3,self-consistency:5,self-correction"
+
+--serve-args goes to `vllm serve`. Spell JSON flags in vLLM's dotted form, as above: a Windows shell drops the quotes
+inside --speculative-config '{"method": ...}', and vLLM then refuses to start.
 
 rigtune with its `reason` extra (pyarrow, math-verify) is installed into vLLM's own Python, as modal_calibrate.py does.
 The server is stock vLLM with --max-num-seqs at the experiment's sequence limit and a context long enough for a
