@@ -47,13 +47,15 @@ volume = modal.Volume.from_name("rigtune-triton-cache", create_if_missing=True)
 
 
 @app.function(image=image, volumes={"/vol": volume}, gpu="L4", timeout=3 * 3600)
-def run(name: str, model: str, args: str, max_model_len: int, sequences: int, gpu_memory: float) -> dict:
+def run(name: str, model: str, args: str, max_model_len: int, sequences: int, gpu_memory: float,
+        serve_args: str = "") -> dict:
     if "--sequences" in args or "--context" in args:
         raise ValueError("pass --sequences and --max-model-len to this runner, not in --args: the server must match")
     import os
     import shlex
     import shutil
     import subprocess
+    import threading
     import time
     import urllib.request
 
@@ -67,7 +69,8 @@ def run(name: str, model: str, args: str, max_model_len: int, sequences: int, gp
                          text=True).stdout.strip()
     serve = ["vllm", "serve", model, "--port", "8000", "--max-model-len", str(max_model_len),
              "--max-num-seqs", str(sequences), "--gpu-memory-utilization", str(gpu_memory),
-             "--enable-prompt-tokens-details"]  # so each reply says how much of its prompt came from the cache
+             "--enable-prompt-tokens-details",  # so each reply says how much of its prompt came from the cache
+             *shlex.split(serve_args)]  # e.g. the checkpoint's MTP head: the same server for every method
     server_log = open(out / "server.log", "w")
     server = None
     try:
@@ -84,14 +87,25 @@ def run(name: str, model: str, args: str, max_model_len: int, sequences: int, gp
                 if time.time() > deadline:
                     raise RuntimeError("vLLM did not become ready in 30 minutes")
                 time.sleep(5)
-        label = f"vllm 0.33.0 stock on {gpu}: " + shlex.join(serve[2:])
+        label = f"vllm 0.33.0 {'with ' + serve_args if serve_args else 'stock'} on {gpu}: " + shlex.join(serve[2:])
         cmd = ["vllm-python", "-m", "rigtune.reasoning", "--base-url", "http://127.0.0.1:8000", "--model", model,
                "--server", label, "--context", str(max_model_len), "--sequences", str(sequences),
                "--cache-dir", "/vol/math", "--out", str(out), *shlex.split(args)]
+        stop = threading.Event()
+
+        def keep() -> None:  # a run cut off at --hours keeps the methods it finished (runs.jsonl is per method)
+            while not stop.wait(300):
+                try:
+                    volume.commit()
+                except Exception as exc:
+                    print("commit failed:", exc, flush=True)
+
+        threading.Thread(target=keep, daemon=True).start()
         with open(out / "run.log", "w") as log:
             log.write("$ " + shlex.join(cmd) + "\n")
             log.flush()
             code = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, env=env).returncode
+        stop.set()
     finally:
         if server is not None:
             server.terminate()
@@ -108,13 +122,13 @@ def run(name: str, model: str, args: str, max_model_len: int, sequences: int, gp
 
 @app.local_entrypoint()
 def main(name: str, model: str, args: str = "", gpu: str = "L4", hours: float = 2.0, max_model_len: int = 20480,
-         sequences: int = 32, gpu_memory: float = 0.9) -> None:
+         sequences: int = 32, gpu_memory: float = 0.9, serve_args: str = "") -> None:
     """--sequences 32 suits the 98-problem dev set (a batch must be several times the limit to keep it full); the
     held-out set of 2,440 can take the engine's own maximum."""
     import json
 
     result = run.with_options(gpu=gpu, timeout=int(hours * 3600)).remote(name, model, args, max_model_len, sequences,
-                                                                         gpu_memory)
+                                                                         gpu_memory, serve_args)
     with open(f"modal_{name}.json", "w", encoding="utf-8", newline="\n") as fh:
         json.dump(result, fh, indent=2)
     print(f"{name}: exit {result['exit']}")
