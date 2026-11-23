@@ -189,6 +189,43 @@ def mtp_layers(config: Optional[Dict[str, Any]]) -> Optional[Tuple[int, str]]:
     return None
 
 
+# Inkling 2's drafter weights: a file beside the checkpoint's, which its model.safetensors.index.json does not map
+# (vLLM main models/inkling2/nvidia/dspark.py Inkling2DSparkModel.allow_patterns_overrides, about line 447; SGLang PR
+# #51926 inkling2_mtp.py lines 105-106), about 0.64 GB in bf16 for Inkling-2-Mini ("~20 GB on disk including the
+# 0.6 GB DSpark draft", the vLLM recipe).
+OWN_DRAFTER_FILE = "mtp.safetensors"
+
+
+def own_drafter_fold_bytes(config: Optional[Dict[str, Any]]) -> int:
+    """The bf16 (vocabulary x markov_rank) matrix vLLM derives from Inkling 2's drafter at load (fold(), about 0.1 GB
+    for Inkling-2-Mini: 201,024 x 256 x 2 B); 0 when the config does not say."""
+    config = config or {}
+    mtp = config.get("mtp_config") if isinstance(config.get("mtp_config"), dict) else {}
+    text = config.get("text_config") if isinstance(config.get("text_config"), dict) else config
+    rank, vocab = mtp.get("markov_rank"), text.get("vocab_size") or config.get("vocab_size")
+    if not all(isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in (rank, vocab)):
+        return 0
+    return vocab * rank * 2
+
+
+def own_block_drafter(config: Optional[Dict[str, Any]]) -> Optional[Tuple[int, int]]:
+    """(layers, tokens) of a checkpoint's own block drafter, or None. Inkling 2 declares one in `mtp_config` with a
+    `block_size` and `num_hidden_layers` (thinkingmachines/Inkling-2-Mini: 3 layers, block 8), which vLLM main runs as
+    method "dspark" with the target as its model (config/speculative.py lines 1274-1277: Inkling2DSparkConfig.
+    from_target; 1501-1505: a missing model is the method's default) at exactly block_size - 1 tokens
+    (models/inkling2/nvidia/dspark.py lines 464-477). Only Inkling 2's: another family's mtp_config with a block was
+    not read."""
+    config = config or {}
+    arch = str((config.get("architectures") or [""])[0])
+    mtp = config.get("mtp_config")
+    if not arch.startswith("Inkling2") or not isinstance(mtp, dict):
+        return None
+    layers, block = mtp.get("num_hidden_layers"), mtp.get("block_size")
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in (layers, block)) or layers < 1 or block < 2:
+        return None
+    return layers, block - 1
+
+
 def _num_layers(config: Dict[str, Any]) -> Optional[int]:
     """The language model's decoder layers: text_config's num_hidden_layers first, as for every other text field."""
     for section in reversed(_sections(config)):

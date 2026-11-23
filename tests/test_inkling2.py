@@ -83,6 +83,153 @@ def test_a_loop_s_passes_are_counted_whatever_the_layout():
         assert arch_from_config(_text(loop_config=bad)).loop_extra_layers == 0
 
 
+# ---------------------------------------------------------------- its own DSpark drafter (F4)
+
+from rigtune import speculative as sp  # noqa: E402
+from rigtune.backends import vllm as vl  # noqa: E402
+from rigtune.backends.facts import EngineFacts  # noqa: E402
+from rigtune.introspect import own_block_drafter  # noqa: E402
+from rigtune.models import ModelSpec, PreparedModel  # noqa: E402
+
+
+DRAFTER_BYTES = 640_000_000  # mtp.safetensors, ~0.64 GB (the recipe: "~20 GB on disk including the 0.6 GB draft")
+
+
+def _prepared(**arch) -> PreparedModel:
+    a = arch_from_config(INKLING2).model_copy(update={"own_drafter_bytes": DRAFTER_BYTES, **arch})
+    return PreparedModel(spec=ModelSpec(hf_id="thinkingmachines/Inkling-2-Mini"), backend="vllm", arch=a,
+                         hf_path="thinkingmachines/Inkling-2-Mini", weights_bytes={"ckpt-nvfp4": 19_526_019_168})
+
+
+def test_its_mtp_config_declares_a_block_drafter_not_an_mtp_head():
+    assert own_block_drafter(INKLING2) == (3, 7)  # 3 layers, block 8: an anchor and 7 drafts
+    a = arch_from_config(INKLING2)
+    assert (a.own_drafter_layers, a.own_drafter_tokens, a.mtp_layers) == (3, 7, 0)
+    # Another family's mtp_config, or one without a usable block, declares none.
+    assert own_block_drafter({**INKLING2, "architectures": ["InklingForConditionalGeneration"]}) is None
+    for mtp in ({"num_hidden_layers": 3}, {"num_hidden_layers": 3, "block_size": 1}, {"block_size": 8}):
+        assert own_block_drafter({**INKLING2, "mtp_config": mtp}) is None
+
+
+def test_a_drafter_spec_without_a_repository_is_the_checkpoint_s_own():
+    assert sp.parse("dspark:7") == ("dspark", None, 7) and sp.own_drafter("dspark:7")
+    assert not sp.own_drafter("dspark:deepseek-ai/dspark_qwen3_8b_block7:7") and not sp.own_drafter("mtp:3")
+    # vLLM takes the target as the draft's model when none is given; the recipe's sampling where asked for.
+    assert sp.vllm_config("dspark:7", "abc") == {"method": "dspark", "num_speculative_tokens": 7, "revision": "abc"}
+    assert sp.vllm_config("dspark:7", sample_method="probabilistic")["draft_sample_method"] == "probabilistic"
+    with pytest.raises(ValueError, match="SGLang is not offered"):
+        sp.sglang_config("dspark:7")
+    with pytest.raises(ValueError):  # a DFlash drafter still names its repository
+        sp.parse("dflash:15")
+
+
+@pytest.fixture
+def nightly(monkeypatch):
+    """A vLLM whose source converts Inkling 2 for its drafter (main after PR #69028)."""
+    monkeypatch.setattr(vl, "_vllm_runs_own_drafter", lambda: True)
+    facts = EngineFacts(engine="vllm", version="0.35.0", spec_fields=["draft_sample_method"])
+    monkeypatch.setattr(vl, "_engine_facts", lambda: facts)
+    monkeypatch.delenv("VLLM_USE_V2_MODEL_RUNNER", raising=False)
+
+
+def _h100(hw_a100):
+    gpu = hw_a100.gpus[0].model_copy(update={"name": "NVIDIA H100 80GB HBM3", "compute_capability": (9, 0)})
+    return hw_a100.model_copy(update={"gpus": [gpu]})
+
+
+def test_vllm_offers_it_at_7_with_the_budget_for_8_tokens_a_request(nightly, hw_a100):
+    # An A100's default budget is 2,048 tokens: 512 requests at 8 tokens a step need 4,096, and 7 would give 3,584.
+    pm, be = _prepared(), vl.VllmBackend()
+    base = Config(backend="vllm", quant="ckpt-nvfp4", ctx=512, batch=512, gpu_memory_utilization=0.95)
+    assert vl.vllm_default_batched_tokens(hw_a100) == 2048
+    variants, notes = be._own_drafter_variants(base, pm, hw_a100, True, None)
+    assert [v.spec_decode for v in variants] == ["dspark:7"]
+    assert variants[0].prefill_budget == 4096 and "max_num_batched_tokens 4096" in notes[0]
+    assert vl.vllm_drafter_layers(variants[0], pm) == 3  # its layers in the KV plan
+    # Not under --speculative on.
+    assert be._own_drafter_variants(base, pm, hw_a100, False, None) == ([], [])
+
+
+def test_its_weights_fold_and_sampled_logits_are_planned(nightly, monkeypatch):
+    pm = _prepared()
+    cfg = Config(backend="vllm", quant="ckpt-nvfp4", ctx=4096, batch=64, gpu_memory_utilization=0.9,
+                 spec_decode="dspark:7")
+    fold, logits = 201024 * 256 * 2, 64 * 7 * 201024 * 2  # 103 MB; 180 MB at 64 requests
+    assert pm.arch.own_drafter_fold_bytes == fold
+    assert vl.vllm_mtp_extra_weights(cfg, pm) == DRAFTER_BYTES + fold + logits
+    # A vLLM the probe found without the field drafts greedily: no logits buffer.
+    monkeypatch.setattr(vl, "_engine_facts", lambda: EngineFacts(engine="vllm", version="0.35.0", spec_fields=[]))
+    assert vl.vllm_mtp_extra_weights(cfg, pm) == DRAFTER_BYTES + fold
+
+
+def test_a_drafter_of_unknown_size_or_a_quantized_copy_is_not_offered_it(nightly, hw_a100):
+    base = Config(backend="vllm", quant="ckpt-nvfp4", ctx=4096, batch=16, gpu_memory_utilization=0.9)
+    offered, notes = vl.VllmBackend()._own_drafter_variants(base, _prepared(own_drafter_bytes=None), hw_a100, True,
+                                                            None)
+    assert offered == [] and "mtp.safetensors" in notes[0]
+    awq = base.model_copy(update={"quant": "awq"})
+    assert vl.VllmBackend()._own_drafter_variants(awq, _prepared(), hw_a100, True, None) == ([], [])
+
+
+def test_its_budget_is_unstated_again_when_it_leads(nightly, hw_a100):
+    # Else n-gram and the rest would be offered again at an explicit budget only the drafter needs.
+    be = vl.VllmBackend()
+    leader = Config(backend="vllm", quant="ckpt-nvfp4", ctx=512, batch=512, gpu_memory_utilization=0.95,
+                    spec_decode="dspark:7", prefill_budget=4096)
+    assert be._before_block_drafter(leader, _prepared(), hw_a100).prefill_budget is None
+    chosen = leader.model_copy(update={"prefill_budget": 8192})  # a budget the prefill stage chose is kept
+    assert be._before_block_drafter(chosen, _prepared(), hw_a100).prefill_budget == 8192
+
+
+def test_sglang_says_why_it_is_not_offered_it(hw_a100):
+    from rigtune.backends.sglang import SglangBackend
+
+    cfg = Config(backend="sglang", quant="ckpt-nvfp4", ctx=4096, batch=16, gpu_memory_utilization=0.88)
+    pm = _prepared().model_copy(update={"backend": "sglang"})
+    assert any("#51926" in n for n in SglangBackend().spec_notes(cfg, pm, hw_a100, True, None))
+
+
+def test_its_size_is_read_from_the_hub_listing(monkeypatch):
+    from rigtune import hfconfig
+
+    monkeypatch.setattr(hfconfig, "fetch_config", lambda spec, token=None: INKLING2)
+    listing = {"model-00001-of-00001.safetensors": 19_525_870_752, "mtp.safetensors": DRAFTER_BYTES}
+    monkeypatch.setattr(hfconfig, "hub_weights", lambda spec, token=None: (None, 19_525_870_752, listing))
+    a = hfconfig.load_arch(ModelSpec(hf_id="thinkingmachines/Inkling-2-Mini"))
+    assert (a.own_drafter_bytes, a.checkpoint_bytes) == (DRAFTER_BYTES, 19_525_870_752)  # not in the index's files
+
+
+def test_vllm_without_the_conversion_is_not_offered_it(hw_a100, monkeypatch):
+    monkeypatch.setattr(vl, "_vllm_runs_own_drafter", lambda: False)
+    base = Config(backend="vllm", quant="ckpt-nvfp4", ctx=4096, batch=16, gpu_memory_utilization=0.9)
+    offered, notes = vl.VllmBackend()._own_drafter_variants(base, _prepared(), _h100(hw_a100), True, None)
+    assert offered == [] and "Inkling2DSparkConfig" in notes[0]
+
+
+def test_its_launch_is_the_recipe_s_speculative_config(nightly, monkeypatch):
+    # Probabilistic drafting wherever offered: also when the probe could not say (the field predates the drafter).
+    cfg = Config(backend="vllm", quant="ckpt-nvfp4", ctx=4096, batch=16, gpu_memory_utilization=0.9,
+                 spec_decode="dspark:7", prefill_budget=2048)
+    args = vl.VllmBackend().launch_spec(cfg, _prepared(), 8000).args
+    payload = json.loads(args[args.index("--speculative-config") + 1])
+    assert payload == {"method": "dspark", "num_speculative_tokens": 7, "draft_sample_method": "probabilistic"}
+    monkeypatch.setattr(vl, "_engine_facts", lambda: None)
+    args = vl.VllmBackend().launch_spec(cfg, _prepared(), 8000).args
+    assert json.loads(args[args.index("--speculative-config") + 1])["draft_sample_method"] == "probabilistic"
+    # A vLLM without the field gets vLLM's own default (greedy), not a flag it would refuse.
+    monkeypatch.setattr(vl, "_engine_facts", lambda: EngineFacts(engine="vllm", version="0.35.0", spec_fields=[]))
+    args = vl.VllmBackend().launch_spec(cfg, _prepared(), 8000).args
+    assert "draft_sample_method" not in json.loads(args[args.index("--speculative-config") + 1])
+
+
+def test_model_runner_v1_and_a_short_budget_refuse_it(nightly, monkeypatch):
+    cfg = Config(backend="vllm", quant="ckpt-nvfp4", ctx=4096, batch=64, gpu_memory_utilization=0.9,
+                 spec_decode="dspark:7", prefill_budget=256)
+    assert "run only 32 of batch 64" in vl.VllmBackend().config_refusal(cfg, _prepared())  # 256 // 8 a request
+    monkeypatch.setenv("VLLM_USE_V2_MODEL_RUNNER", "0")
+    assert "Model Runner V2" in vl.VllmBackend().config_refusal(cfg, _prepared())
+
+
 @pytest.mark.parametrize("cfg, expected", [
     ({"max_position_embeddings": 32768, "seq_length": 8192}, 8192),  # the smallest key wins (Qwen/Qwen-7B-Chat)
     ({"n_positions": 1024}, 1024),  # GPT-2

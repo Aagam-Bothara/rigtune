@@ -1061,7 +1061,11 @@ class SglangBackend(BaseBackend):
 
     def spec_notes(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
                    all_methods: bool = False, min_batch: Optional[int] = None) -> List[str]:
-        return self._mtp_variants(cfg, model, hw, all_methods, min_batch)[1]
+        notes = self._mtp_variants(cfg, model, hw, all_methods, min_batch)[1]
+        if all_methods and model.arch.own_drafter_tokens:
+            notes.append("sglang: the checkpoint's own DSpark drafter not tried: SGLang serves Inkling 2 only in an "
+                         "unmerged pull request (#51926)")
+        return notes
 
     def _at_spec_fraction(self, cfg: Config, spec: str, model: PreparedModel,
                           hw: Optional[HardwareDescriptor]) -> Tuple[Config, bool]:

@@ -17,6 +17,7 @@ from rigtune import kernels, paths, speculative
 from rigtune.spec_length import probe_tokens
 from rigtune.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from rigtune.hfconfig import dtype_bytes, kv_element_bytes, load_arch
+from rigtune.introspect import OWN_DRAFTER_FILE
 from rigtune.memory import HybridKV, MemoryModel, estimate
 from rigtune.models import ArchInfo, Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
 from rigtune.hardware import nvlink_between
@@ -228,6 +229,10 @@ def vllm_drafter_layers(cfg: Config, model: PreparedModel) -> int:
     vLLM holds for Qwen3.5-9B and Gemma 4 12B, but group padding is not monotonic, so this is an estimate there, not a
     bound (planning the drafter's groups apart is left to do). Its sliding layers are counted as full. A drafter whose
     size per token is unknown plans none, and is not offered (_drafter_variants)."""
+    if speculative.own_drafter(cfg.spec_decode):
+        # The checkpoint's own (Inkling 2's): its layers' KV heads and size are the target's (mtp_config: 8 x 128),
+        # one full and two sliding (models/inkling2/nvidia/dspark.py lines 118-173), all planned as full.
+        return model.arch.own_drafter_layers
     found = block_drafter(cfg, model)
     if found is None:
         return 0
@@ -248,6 +253,14 @@ def vllm_mtp_extra_weights(cfg: Config, model: PreparedModel) -> int:
     if (speculative.own_head(cfg.spec_decode) and os.path.isdir(model.spec.hf_id)
             and model.arch.checkpoint_bytes is None):
         return int(model.spec_bytes.get(speculative.MTP_KEY) or 0)
+    if speculative.own_drafter(cfg.spec_decode):
+        # Inkling 2's: its weights (a file the index does not map), the matrix vLLM folds from them at load, and with
+        # probabilistic drafting its draft_logits of max_num_reqs x k x vocabulary in bf16, allocated in the
+        # speculator's __init__ before the KV pool is sized (v1/worker/gpu/spec_decode/speculator_base.py lines
+        # 179-191; models/inkling2/speculator.py lines 38-40): 180 MB at 64 requests, 720 MB at 256.
+        arch, k = model.arch, speculative.parse(cfg.spec_decode)[2]
+        logits = cfg.batch * k * (arch.vocab_size or 0) * 2 if _own_drafter_sample() else 0
+        return int((arch.own_drafter_bytes or 0) + arch.own_drafter_fold_bytes + logits)
     found = block_drafter(cfg, model)
     if found is not None:  # loaded inside the target's load_model, before the KV pool is sized (gpu_worker.py)
         return int(model.spec_bytes.get(found[0]) or 0)
@@ -728,6 +741,32 @@ def vllm_tier_config(cfg: Config, port: int) -> dict:
     return {"kv_connector": "OffloadingConnector", "kv_role": "kv_both", "kv_connector_extra_config": extra}
 
 
+# A vLLM whose SpeculativeConfig converts an Inkling 2 target into its own DSpark drafter (config/speculative.py lines
+# 1274-1277 on main, from PR #69028, merged 21 Nov 2026; in no release up to v0.34.0).
+VLLM_OWN_DRAFTER_MARKER = "Inkling2DSparkConfig"
+
+
+def _own_drafter_sample() -> bool:
+    """Whether Inkling 2's drafter is launched with draft_sample_method "probabilistic", as its recipe sets
+    (recipes/models/thinkingmachines/Inkling-2-Mini.yaml) where vLLM's default is greedy: wherever it is offered,
+    since the field is older than the conversion (v0.33.0 config/speculative.py line 634), unless the engine probe
+    answered and its SpeculativeConfig has no such field."""
+    facts = _engine_facts()
+    return not (facts is not None and facts.answered("spec_fields") and "draft_sample_method" not in facts.spec_fields)
+
+
+@functools.lru_cache(maxsize=1)
+def _vllm_runs_own_drafter() -> bool:
+    """Whether the installed vLLM's config/speculative.py names VLLM_OWN_DRAFTER_MARKER; read, not imported."""
+    root = _vllm_package()
+    if root is None:
+        return False
+    try:
+        return VLLM_OWN_DRAFTER_MARKER in root.joinpath("config", "speculative.py").read_text("utf-8")
+    except OSError:
+        return False
+
+
 def vllm_full_kv_reason(arch: ArchInfo) -> Optional[str]:
     """Why a recognised hybrid layout is planned as every layer full on vLLM, or None when its rules apply.
 
@@ -840,7 +879,8 @@ class VllmBackend(BaseBackend):
         out = [cfg.model_copy(update={"spec_decode": s, "spec_head_quant": None}) for s in specs if s != cfg.spec_decode]
         out = [v for v in out if self.known_failure(v) is None]
         out += (self._mtp_variants(cfg, model, hw, all_methods, min_batch)[0]
-                + self._drafter_variants(cfg, model, hw, all_methods, min_batch)[0])
+                + self._drafter_variants(cfg, model, hw, all_methods, min_batch)[0]
+                + self._own_drafter_variants(cfg, model, hw, all_methods, min_batch)[0])
         return [v for v in out if v.key() != leader]  # a block drafter leading is re-derived at its own budget
 
     def spec_notes(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
@@ -853,6 +893,7 @@ class VllmBackend(BaseBackend):
         cfg = self._before_block_drafter(cfg, model, hw)
         notes = self._mtp_variants(cfg, model, hw, all_methods, min_batch)[1]
         notes += self._drafter_variants(cfg, model, hw, all_methods, min_batch)[1]
+        notes += self._own_drafter_variants(cfg, model, hw, all_methods, min_batch)[1]
         if model.drafts_mode == "verified":
             notes += self._pair_variants(cfg, model, hw, all_methods, min_batch)[1]
         if speculative.vllm_suffix_release():
@@ -881,6 +922,8 @@ class VllmBackend(BaseBackend):
         chose otherwise is kept."""
         drafter = block_drafter(cfg, model) if hw is not None and cfg.prefill_budget is not None else None
         lookahead = drafter[1].get("lookahead") if drafter is not None else None
+        if hw is not None and cfg.prefill_budget is not None and speculative.own_drafter(cfg.spec_decode):
+            lookahead = speculative.parse(cfg.spec_decode)[2] + 1  # as _own_drafter_variants stated it
         if lookahead and cfg.prefill_budget == max(vllm_default_batched_tokens(hw), cfg.batch * lookahead):
             return cfg.model_copy(update={"prefill_budget": None})
         return cfg
@@ -950,6 +993,38 @@ class VllmBackend(BaseBackend):
         fitted, notes = self.own_head_fit(variants, model, hw, min_batch)
         return fitted, notes + head_notes
 
+    def _own_drafter_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor],
+                              all_methods: bool, min_batch: Optional[int]) -> Tuple[List[Config], List[str]]:
+        """The checkpoint's own block drafter (Inkling 2's DSpark head, introspect.own_block_drafter) under
+        --speculative all with the machine known, at the one k vLLM takes, with notes; offered where the installed
+        vLLM's source converts the model for it (_vllm_runs_own_drafter). Like a recorded drafter: the batch kept
+        and the token budget raised to batch x 8 where below, then the largest batch the planner fits that covers
+        the workload's busiest level (own_head_fit)."""
+        k = model.arch.own_drafter_tokens
+        if not (all_methods and hw is not None and k) or cfg.quant in PREQUANTIZED:
+            return [], []
+        if model.arch.own_drafter_bytes is None:
+            return [], [f"vllm: the checkpoint's own DSpark drafter not tried: the size of its weights "
+                        f"({OWN_DRAFTER_FILE}) could not be read, so it cannot be planned"]
+        if not _vllm_runs_own_drafter():
+            return [], [f"vllm: the checkpoint's own DSpark drafter not tried: this vLLM's config/speculative.py has "
+                        f"no {VLLM_OWN_DRAFTER_MARKER} (vLLM main from 21 Nov 2026, PR #69028; no release yet)"]
+        notes: List[str] = []
+        v = cfg.model_copy(update={"spec_decode": speculative.own_block_drafter(k), "spec_head_quant": None})
+        lookahead = k + 1
+        budget = cfg.prefill_budget or vllm_default_batched_tokens(hw)
+        v = v.model_copy(update={"prefill_budget": max(budget, v.batch * lookahead)})
+        if v.prefill_budget > budget:
+            notes.append(f"vllm: the checkpoint's own DSpark drafter tried with max_num_batched_tokens "
+                         f"{v.prefill_budget}: vLLM runs no more than that // {lookahead} requests with it")
+        if v.key() == cfg.key():
+            return [], notes
+        why = self.known_failure(v) or self.config_refusal(v, model)
+        if why:
+            return [], notes + [f"vllm: the checkpoint's own DSpark drafter not tried: {why}"]
+        fitted, fit_notes = self.own_head_fit([v], model, hw, min_batch)
+        return fitted, notes + fit_notes
+
     def _drafter_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor],
                           all_methods: bool, min_batch: Optional[int]) -> Tuple[List[Config], List[str]]:
         """The DFlash and DSpark drafters recorded for this model (find_second_models), under --speculative all and
@@ -1004,6 +1079,14 @@ class VllmBackend(BaseBackend):
             return "verified pairs excluded from the measured failing fp8_e5m2 FlashInfer combination"
         if cfg.spec_head_quant and os.environ.get("VLLM_USE_V2_MODEL_RUNNER") == "0":
             return "quantized MTP output heads require Model Runner V2"
+        if speculative.own_drafter(cfg.spec_decode):
+            if os.environ.get("VLLM_USE_V2_MODEL_RUNNER") == "0":
+                return "the checkpoint's own DSpark drafter requires Model Runner V2, disabled by VLLM_USE_V2_MODEL_RUNNER=0"
+            lookahead = speculative.parse(cfg.spec_decode)[2] + 1  # the anchor and k drafts: 8 tokens verified a step
+            if cfg.prefill_budget and cfg.prefill_budget // lookahead < cfg.batch:
+                return (f"max_num_batched_tokens {cfg.prefill_budget} would let vLLM run only "
+                        f"{cfg.prefill_budget // lookahead} of batch {cfg.batch} with this drafter "
+                        f"({lookahead} tokens a request a step)")
         drafter = block_drafter(cfg, model)
         if drafter is not None:
             kind = speculative.parse(cfg.spec_decode)[0]
@@ -1204,7 +1287,8 @@ class VllmBackend(BaseBackend):
             kind, second, _ = speculative.parse(cfg.spec_decode)
             if second:
                 revision = model.spec_revisions.get(second)
-            payload = speculative.vllm_config(cfg.spec_decode, revision, cfg.spec_head_quant)
+            sample = "probabilistic" if speculative.own_drafter(cfg.spec_decode) and _own_drafter_sample() else None
+            payload = speculative.vllm_config(cfg.spec_decode, revision, cfg.spec_head_quant, sample)
             if second in model.spec_paths:
                 payload["model"] = model.spec_paths[second]
             args += ["--speculative-config", json.dumps(payload)]

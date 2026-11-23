@@ -143,6 +143,15 @@ class ArchInfo(BaseModel):
     # (rigtune.introspect.mtp_layers); 0 for none. The planner counts them only for an "mtp" speculation setting,
     # which is offered only once the head's weights were found. Defaulted, so older profiles load.
     mtp_layers: int = 0
+    # The checkpoint's own block drafter (Inkling 2's DSpark head, declared in mtp_config with a block_size): the
+    # tokens it must draft (block_size - 1; vLLM refuses any other count) and its attention layers; 0 for none.
+    # Not an MTP head: vLLM runs it as method "dspark". Defaulted, so older profiles load.
+    own_drafter_tokens: int = 0
+    own_drafter_layers: int = 0
+    # Its weights, a file of their own the checkpoint's index does not map (introspect.OWN_DRAFTER_FILE), so not in
+    # checkpoint_bytes; None when unknown. And the bf16 matrix vLLM folds from them at load (vocabulary x markov_rank).
+    own_drafter_bytes: Optional[int] = None
+    own_drafter_fold_bytes: int = 0
     # Bytes of the safetensors files the engines load (hfconfig.loaded_bytes); None when unknown. Not saved: a profile
     # keeps the weights_bytes worked out from it.
     checkpoint_bytes: Optional[int] = Field(default=None, exclude=True)

@@ -101,10 +101,11 @@ def vllm_context_length(cfg: Dict[str, Any]) -> int:
 
 def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
     """Build ArchInfo from a raw config.json dict. Handles nested text_config (multimodal)."""
-    from rigtune.introspect import mtp_layers, quantization
+    from rigtune.introspect import mtp_layers, own_block_drafter, own_drafter_fold_bytes, quantization
 
     mm = any(isinstance(cfg.get(k), dict) for k in ("vision_config", "audio_config"))
     mtp = mtp_layers(cfg)
+    drafter = own_block_drafter(cfg)
     quant = quantization(cfg)
     if "text_config" in cfg and isinstance(cfg["text_config"], dict):
         merged = dict(cfg)
@@ -136,6 +137,9 @@ def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
         torch_dtype=dtype,
         has_mm_config=mm,
         mtp_layers=mtp[0] if mtp else 0,
+        own_drafter_layers=drafter[0] if drafter else 0,
+        own_drafter_tokens=drafter[1] if drafter else 0,
+        own_drafter_fold_bytes=own_drafter_fold_bytes(cfg) if drafter else 0,
         checkpoint_quant=quant.describe() if quant else None,
         stored_as=quant.label if quant else None,
         loop_extra_layers=loop_extra_layers(cfg, layers),
@@ -522,10 +526,14 @@ def resolve_revision(spec: ModelSpec, fetch: Optional[Callable[[ModelSpec], Opti
 
 
 def load_arch(spec: ModelSpec, token: Optional[str] = None) -> ArchInfo:
+    from rigtune.introspect import OWN_DRAFTER_FILE
+
     arch = arch_from_config(fetch_config(spec, token=token))
     if os.path.isdir(spec.hf_id):
         root = Path(spec.hf_id)
         arch.checkpoint_bytes = local_checkpoint_bytes(root)
+        if arch.own_drafter_tokens and (root / OWN_DRAFTER_FILE).is_file():
+            arch.own_drafter_bytes = (root / OWN_DRAFTER_FILE).stat().st_size
         if arch.checkpoint_quant is None and (root / HF_QUANT).is_file():
             _modelopt_quant(arch, lambda: root / HF_QUANT)
         if arch.checkpoint_quant is None:  # a quantized one is sized by its files alone (quantized.as_stored)
@@ -544,6 +552,8 @@ def load_arch(spec: ModelSpec, token: Optional[str] = None) -> ArchInfo:
                 arch.num_params = by_size if safetensors else max(arch.num_params or 0, by_size)
         return arch
     exact, arch.checkpoint_bytes, listing = hub_weights(spec, token=token)
+    if arch.own_drafter_tokens and listing.get(OWN_DRAFTER_FILE):
+        arch.own_drafter_bytes = int(listing[OWN_DRAFTER_FILE])
     if exact:
         arch.num_params = exact
     if arch.checkpoint_quant is None and HF_QUANT in listing:

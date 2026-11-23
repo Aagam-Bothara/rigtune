@@ -661,9 +661,22 @@ def mtp(k: int) -> str:
     return f"mtp:{k}"
 
 
+def own_block_drafter(k: int) -> str:
+    """The checkpoint's own DSpark drafter proposing k tokens (Inkling 2's: introspect.own_block_drafter)."""
+    return f"dspark:{k}"
+
+
+def own_drafter(spec: Optional[str]) -> bool:
+    """Whether a spec uses the checkpoint's own block drafter: a block drafter named without a repository."""
+    if not spec:
+        return False
+    kind, model_id, _ = parse(spec)
+    return kind in BLOCK_DRAFTERS and model_id is None
+
+
 def parse(spec: str) -> Tuple[str, Optional[str], int]:
-    """(kind, None, k) for the lookup proposers ("ngram", "ngram_gpu", "suffix") and the checkpoint's own head
-    ("mtp"), or (kind, model_id, k) for "draft" and "eagle3"."""
+    """(kind, None, k) for the lookup proposers ("ngram", "ngram_gpu", "suffix"), the checkpoint's own head ("mtp")
+    and its own block drafter ("dspark:7"), or (kind, model_id, k) for "draft", "eagle3" and a drafter's repository."""
     kind, _, rest = spec.partition(":")
     if kind in LOOKUP:
         return kind, None, int(rest or (SUFFIX_TOKENS if kind == "suffix" else NGRAM_TOKENS))
@@ -672,6 +685,10 @@ def parse(spec: str) -> Tuple[str, Optional[str], int]:
         if k < 1:
             raise ValueError(f"bad speculative spec {spec!r}: an MTP head proposes at least one token")
         return kind, None, k
+    if kind == "dspark" and rest.isdigit():  # no repository: the checkpoint's own (own_block_drafter)
+        if int(rest) < 1:
+            raise ValueError(f"bad speculative spec {spec!r}: a drafter proposes at least one token")
+        return kind, None, int(rest)
     if kind in SECOND_MODEL:
         model_id, _, k = rest.rpartition(":")
         if not model_id:
@@ -680,8 +697,11 @@ def parse(spec: str) -> Tuple[str, Optional[str], int]:
     raise ValueError(f"unknown speculative method in {spec!r}")
 
 
-def vllm_config(spec: str, revision: Optional[str] = None, head_quant: Optional[str] = None) -> Dict[str, object]:
-    """The value for vLLM's --speculative-config. `revision` is the target's, used only by an MTP head."""
+def vllm_config(spec: str, revision: Optional[str] = None, head_quant: Optional[str] = None,
+                sample_method: Optional[str] = None) -> Dict[str, object]:
+    """The value for vLLM's --speculative-config. `revision` is the target's for the checkpoint's own head or drafter,
+    the drafter's for a second model. `sample_method` is a block drafter's draft_sample_method (vLLM's default is
+    "greedy", config/speculative.py line 701 on main), given only where the installed vLLM has the field."""
     kind, model_id, k = parse(spec)
     if head_quant is not None and (kind != "mtp" or head_quant != "fp8"):
         raise ValueError("fp8 output-head quantization is offered only for the checkpoint's own MTP head")
@@ -703,9 +723,13 @@ def vllm_config(spec: str, revision: Optional[str] = None, head_quant: Optional[
     if kind == "eagle3":  # vLLM 0.29 reads the head's architecture from its config
         return {"method": "eagle3", "model": model_id, "num_speculative_tokens": k}
     if kind in BLOCK_DRAFTERS:  # the method is named, never left to vLLM's guess from the repository's name
-        out = {"method": kind, "model": model_id, "num_speculative_tokens": k}
+        out = {"method": kind, "num_speculative_tokens": k}
+        if model_id is not None:  # else the checkpoint's own: vLLM takes the target as the draft's model
+            out["model"] = model_id
         if revision:  # the commit whose config was checked (rigtune.heads), not the default branch
             out["revision"] = revision
+        if sample_method:
+            out["draft_sample_method"] = sample_method
         return out
     out = {"method": "mtp" if kind == "assist" else "draft_model", "model": model_id, "num_speculative_tokens": k}
     if revision:
@@ -753,6 +777,9 @@ def sglang_config(spec: str, model_path: Optional[str] = None, revision: Optiona
         # gamma, and SGLang adds one (fields/spec.py 78-81; speculative_hook.py 824-839, which refuses a draft-token
         # count other than gamma + 1). Both stated, though SGLang would read them from the checkpoint, so the
         # launch says what was planned. The same k as vLLM's: tokens drafted a step (drafter_tokens).
+        if model_id is None and not draft_path:
+            # The checkpoint's own (Inkling 2): SGLang serves it only in an unmerged PR (#51926), so it is not offered.
+            raise ValueError(f"SGLang is not offered the checkpoint's own {kind} drafter ({spec!r})")
         out = ["--speculative-algorithm", kind.upper(), "--speculative-draft-model-path", draft_path or str(model_id)]
         out += (["--speculative-num-draft-tokens", str(k + 1)] if kind == "dflash"
                 else ["--speculative-dspark-block-size", str(k)])
