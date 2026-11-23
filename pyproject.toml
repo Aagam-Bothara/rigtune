@@ -38,6 +38,8 @@ dependencies = [
 
 [project.optional-dependencies]
 nvml = ["nvidia-ml-py>=12.535.133"]
+# The reasoning harness (rigtune.reasoning): MATH's Parquet files, and math-verify to compare LaTeX answers as maths.
+reason = ["pyarrow>=14", "math-verify[antlr4_13_2]>=0.7"]
 # llmtrace, the GPU tracer rigtune prefers for telemetry (it falls back to pynvml, then psutil), is not an
 # extra: PyPI refuses packages with git dependencies, and "llmtrace" on PyPI is an unrelated project. Install
 # it from git: pip install "llmtrace @ git+https://github.com/Aagam-Bothara/llmtrace.git"
