@@ -22,6 +22,8 @@ In November 2026 I tested it against everything I could find: stock vLLM and SGL
 
 **What won.** On Qwen it was the model's own multi-token-prediction (MTP) head, which sits in the checkpoint and is off by default. On the H200 it added fp8 weights and an fp8 KV cache, which the Ampere runs left out. On Gemma it was suffix decoding, which reuses text from the prompt. Different model and card, different winner. That's the whole reason to measure instead of guess.
 
+**New, and not yet a head-to-head.** Most models have no MTP head, so rigtune now searches the Hugging Face Hub for drafters built for your model (EAGLE3 heads, DFlash and DSpark drafters), checks each one's config against what vLLM and SGLang will actually load, and picks how many tokens a drafter guesses from the engine's own acceptance counts. On Qwen3-8B on an A100 it found a DeepSeek DSpark drafter that no list of mine included and served **1,822 tok/s against 705 for stock vLLM (2.58×)** on Dolly prompts, at lower time-to-first-token. That's one calibration run with one measurement per trial and ungraded answers, not the comparison above ([session](benchmarks/sessions/2026-11/modal-roundc-qwen3-8b/)).
+
 **Before you get excited, here's what this doesn't show:**
 - **On Qwen, most of the gain is MTP.** You could turn it on yourself if you read the model card, and none of the expert rows did. With it on, SGLang reached 937–948 tok/s in the A100 calibration, so a careful engineer would close much of the gap by hand.
 - **The Gemma gain depends on your prompts.** Suffix decoding shines when answers copy from their context, so expect less on open-ended chat.
@@ -69,7 +71,7 @@ curl localhost:8000/v1/chat/completions -H 'content-type: application/json' \
   -d '{"model":"Qwen/Qwen2.5-3B-Instruct","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-The first launch calibrates and caches the result for this machine, model, objective and workload. After that it serves straight away. To tune for your own traffic, pass a sample of it with `--workload-file prompts.jsonl`, one prompt per line. Add `--speculative all` to also try a checkpoint's own MTP head and draft models.
+The first launch calibrates and caches the result for this machine, model, objective and workload. After that it serves straight away. To tune for your own traffic, pass a sample of it with `--workload-file prompts.jsonl`, one prompt per line. Add `--speculative all` to also try a checkpoint's own MTP head, draft models, and the EAGLE3, DFlash and DSpark drafters the Hub has for it.
 
 Optional extras:
 - **Suffix decoding** needs arctic-inference built for the Python that runs vLLM: `CMAKE_ARGS="-DPython_EXECUTABLE=$(python -c 'import sys; print(sys.executable)')" python -m pip install --no-cache-dir --force-reinstall arctic-inference==0.1.1` ([why each part](docs/usage.md#suffix-decoding)).
