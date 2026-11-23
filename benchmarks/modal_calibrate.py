@@ -1,7 +1,10 @@
-"""One rigtune command on a Modal GPU, rigtune installed from this repo into vLLM 0.33's own Python.
+"""One rigtune command on a Modal GPU, rigtune installed from this repo into vLLM 0.33's own Python, or with
+--engine sglang into a Python with SGLang 0.5.23 from PyPI (as the November GPU sessions installed it).
 
   modal run benchmarks/modal_calibrate.py --name qwen9b-a100-bench --gpu A100-80GB --hours 1 \
       --command "bench Qwen/Qwen3.5-9B --speculative all --budget 20m --save"
+  modal run benchmarks/modal_calibrate.py --engine sglang --name qwen3-8b-sglang --gpu A100-80GB --hours 1.25 \
+      --command "bench Qwen/Qwen3-8B --backend sglang --speculative all --budget 40m --save"
   modal run benchmarks/modal_calibrate.py --name qwen35b-h200-compare --gpu H200 --hours 4 --hf-local \
       --command "compare Qwen/Qwen3.5-35B-A3B --workload-file {prompts}/dolly.jsonl ... --out {out}/results"
 
@@ -46,11 +49,30 @@ image = (modal.Image.from_registry("vllm/vllm-openai:v0.33.0", add_python="3.12"
                                 "*.egg-info", "build", "dist"])
          .run_commands(f"echo {base64.b64encode(INSTALL.encode()).decode()} | base64 -d > /tmp/install.sh "
                        "&& bash /tmp/install.sh"))
+# SGLang 0.5.23 from PyPI on a CUDA 13.0 image, as benchmarks/modal_sglang_compile_oom.py and the GPU sessions, with
+# rigtune from this repo in the same Python; `rigtune` is then on PATH.
+sglang_image = (modal.Image.from_registry("nvidia/cuda:13.0.1-devel-ubuntu24.04", add_python="3.12")
+                .entrypoint([])
+                .apt_install("libnuma1")
+                .pip_install("sglang==0.5.23", "nvidia-ml-py")
+                .add_local_dir(REPO, "/src/rigtune", copy=True,
+                               ignore=[".git", "**/__pycache__", "benchmarks", "tests", "research_notes", "reports",
+                                       "*.egg-info", "build", "dist"])
+                .run_commands("pip install --no-cache-dir /src/rigtune && rigtune --help > /dev/null"))
 volume = modal.Volume.from_name("rigtune-triton-cache", create_if_missing=True)
 
 
 @app.function(image=image, volumes={"/vol": volume}, gpu="A100-80GB", timeout=3600)
 def run(name: str, command: str, prompts: dict, hf_local: bool) -> dict:
+    return _run(name, command, prompts, hf_local, "rigtune-vllm")
+
+
+@app.function(image=sglang_image, volumes={"/vol": volume}, gpu="A100-80GB", timeout=3600)
+def run_sglang(name: str, command: str, prompts: dict, hf_local: bool) -> dict:
+    return _run(name, command, prompts, hf_local, "rigtune")
+
+
+def _run(name: str, command: str, prompts: dict, hf_local: bool, cli: str) -> dict:
     import os
     import shlex
     import shutil
@@ -66,7 +88,7 @@ def run(name: str, command: str, prompts: dict, hf_local: bool) -> dict:
     home = pathlib.Path("/root/rigtune-home")
     env = {**os.environ, "RIGTUNE_HOME": str(home), "HF_HOME": "/root/hf" if hf_local else "/vol/hf",
            "COLUMNS": "200"}
-    argv = ["rigtune-vllm", *shlex.split(command.format(prompts=out / "prompts", out=out))]
+    argv = [cli, *shlex.split(command.format(prompts=out / "prompts", out=out))]
 
     def keep() -> None:
         if home.exists():
@@ -98,7 +120,8 @@ def run(name: str, command: str, prompts: dict, hf_local: bool) -> dict:
 
 
 @app.local_entrypoint()
-def main(name: str, command: str, gpu: str = "A100-80GB", hours: float = 1.0, hf_local: bool = False) -> None:
+def main(name: str, command: str, gpu: str = "A100-80GB", hours: float = 1.0, hf_local: bool = False,
+         engine: str = "vllm") -> None:
     import json
     import subprocess
     import sys
@@ -110,7 +133,8 @@ def main(name: str, command: str, gpu: str = "A100-80GB", hours: float = 1.0, hf
                             str(offset), "--out", f"{tmp}/{file}"], check=True)
         prompts = {f: pathlib.Path(tmp, f).read_text(encoding="utf-8")
                    for f in ("dolly.jsonl", "dolly-heldout.jsonl")}
-    result = run.with_options(gpu=gpu, timeout=int(hours * 3600)).remote(name, command, prompts, hf_local)
+    fn = run_sglang if engine == "sglang" else run
+    result = fn.with_options(gpu=gpu, timeout=int(hours * 3600)).remote(name, command, prompts, hf_local)
     with open(f"modal_{name}.json", "w", encoding="utf-8", newline="\n") as fh:
         json.dump(result, fh, indent=2)
     print(f"{name}: exit {result['exit']} in {result['seconds']} s")
