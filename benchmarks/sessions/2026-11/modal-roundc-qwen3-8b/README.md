@@ -3,7 +3,7 @@
 Three runs on a Modal A100 80GB, 22 November 2026: vLLM on Dolly and on synthetic prompts, then SGLang on Dolly. Both
 engines picked DeepSeek's DSpark drafter, found by the Hub search: 2.58× on vLLM, 2.37× on SGLang.
 
-Two runs on 22 November 2026 with [modal_calibrate.py](../../../modal_calibrate.py) on a Modal A100 80GB: vLLM 0.33.0
+The two vLLM runs, 22 November 2026, with [modal_calibrate.py](../../../modal_calibrate.py) on a Modal A100 80GB: vLLM 0.33.0
 (its own Docker image), Qwen/Qwen3-8B, rigtune at 3d2500f (round C through C10; the fix in 0f7cd9d came after). One
 measurement per trial; the pick re-measured once. The commands' last lines are in [results-dolly.json](results-dolly.json)
 and [results-synthetic.json](results-synthetic.json); the logs and rigtune's homes are in the Modal volume
