@@ -133,6 +133,9 @@ class ArchInfo(BaseModel):
     # What that state grows by per speculative token: the conv state keeps one more column for each.
     linear_conv_step_bytes: int = 0
     layout_note: Optional[str] = None  # why a hybrid-looking layout fell back to the every-layer-full estimate
+    # Layer applications a looped model adds to num_layers, each with its own KV cache (Inkling 2: layers 6-17 run 3
+    # passes, 24 more); the hybrid counts above already include them. num_layers stays the layers of weights.
+    loop_extra_layers: int = 0
     # The config has a vision or audio sub-config (vision_config, audio_config). Defaulted: profiles saved before it
     # load as False, and `multimodal_arch` still recognises them by name.
     has_mm_config: bool = False
@@ -158,8 +161,9 @@ class ArchInfo(BaseModel):
         # 2 (K and V) x layers x kv_heads x head_dim x bytes.  For MHA models
         # kv_heads*head_dim == hidden_size, which matches the spec formula; for GQA
         # models this is the correct (smaller) number.  It counts every layer as full
-        # attention; see is_hybrid for the layouts where that is not so.
-        return 2 * self.num_layers * self.num_kv_heads * self.head_dim * kv_dtype_bytes
+        # attention; see is_hybrid for the layouts where that is not so. A looped model's extra passes each keep a
+        # cache of their own (loop_extra_layers).
+        return 2 * (self.num_layers + self.loop_extra_layers) * self.num_kv_heads * self.head_dim * kv_dtype_bytes
 
     @property
     def is_hybrid(self) -> bool:

@@ -95,7 +95,14 @@ def sglang_default_chunk(vram_total_bytes: int, version: Optional[str] = None) -
 
 
 def sglang_full_kv_reason(arch: ArchInfo) -> Optional[str]:
-    """Why SGLang keeps a full KV cache on every layer of this hybrid layout, or None when it does not."""
+    """Why SGLang keeps a full KV cache on every layer of this hybrid layout, or None when it does not; for Inkling 2,
+    why it is planned so though SGLang does not keep one."""
+    if arch.architecture.startswith("Inkling2"):
+        # SGLang PR #51926 (not merged): a hybrid SWA pool over its 48 cache layers (configs/inkling2.py lines
+        # 122-134) at swa_full_tokens_ratio 0.1, and the conv state in a mamba pool at mamba_full_memory_ratio 0.1
+        # (arg_groups/model_overrides/inkling.py). Not modelled: the every-layer-full estimate is larger.
+        return ("SGLang's pools for Inkling 2 (a sliding-window pool at a 0.1 token ratio and a conv-state pool) are "
+                "not modelled; planned as every layer full instead, which is larger")
     if arch.sliding_layers and arch.architecture not in SGLANG_HYBRID_SWA_ARCHS:
         return (f"SGLang keeps a full KV cache on every layer of {arch.architecture}: it is not one of the "
                 "architectures it gives a sliding-window pool (and it disables that pool for Gemma 2 and 3)")

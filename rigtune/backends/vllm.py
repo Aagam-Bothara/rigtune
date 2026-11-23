@@ -728,6 +728,20 @@ def vllm_tier_config(cfg: Config, port: int) -> dict:
     return {"kv_connector": "OffloadingConnector", "kv_role": "kv_both", "kv_connector_extra_config": extra}
 
 
+def vllm_full_kv_reason(arch: ArchInfo) -> Optional[str]:
+    """Why a recognised hybrid layout is planned as every layer full on vLLM, or None when its rules apply.
+
+    Inkling 2 (vLLM main, models/inkling2): beside its 8 full and 40 sliding attention caches, vLLM keeps a conv state
+    for every layer and pass (nvidia/model.py lines 182-192, 48 InklingConvState), each a sliding-window spec of
+    window and block 4 whose 16 KiB a token is not divided by tensor parallelism (inkling/nvidia/sconv_swa_attn.py
+    lines 122-208), and admits a request against about 768 KiB per in-flight token of it (about 3 GiB at the default
+    batched tokens). Until those are planned, the every-layer-full estimate (48 caches), which is larger, stands."""
+    if arch.architecture.startswith("Inkling2"):
+        return ("vLLM keeps a conv state for every layer and loop pass of Inkling 2 beside its attention caches, which "
+                "rigtune does not plan yet; planned as every layer full instead, which is larger")
+    return None
+
+
 class VllmBackend(BaseBackend):
     name = "vllm"
     runtime_workspace_bytes = int(1.5 * GiB)  # CUDA context + CUDA graphs + activation workspace
@@ -1128,6 +1142,7 @@ class VllmBackend(BaseBackend):
         return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "gpu",
                                       hybrid_fn=lambda cfg, arch: vllm_hybrid_kv_any_depth(
                                           cfg, arch, vllm_default_batched_tokens(hw)),
+                                      full_kv_fn=vllm_full_kv_reason,
                                       extra_weights_fn=vllm_mtp_extra_weights,
                                       extra_layers_fn=vllm_drafter_layers)
 

@@ -138,6 +138,7 @@ def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
         mtp_layers=mtp[0] if mtp else 0,
         checkpoint_quant=quant.describe() if quant else None,
         stored_as=quant.label if quant else None,
+        loop_extra_layers=loop_extra_layers(cfg, layers),
         **hybrid_layout(cfg, layers, dtype),
     )
 
@@ -169,7 +170,42 @@ def _layer_types(cfg: Dict[str, Any], layers: int) -> Optional[list]:
     pattern = cfg.get("sliding_window_pattern")
     if isinstance(pattern, int) and pattern > 0 and cfg.get("sliding_window"):
         return ["sliding_attention" if (i + 1) % pattern else "full_attention" for i in range(layers)]
+    # Inkling 2: the layers in `local_layer_ids` are sliding, with window `sliding_window_size`, the rest full (vLLM
+    # models/inkling2/nvidia/attention.py lines 114-130 on main: SlidingWindowManager and FullAttentionManager). The
+    # first Inkling's configs may carry the same fields; they were not checked, so only Inkling 2's are read.
+    local = cfg.get("local_layer_ids")
+    arch = str((cfg.get("architectures") or [""])[0])
+    if isinstance(local, list) and local and _sliding_window(cfg) and arch.startswith("Inkling2"):
+        ids = {int(i) for i in local}
+        return ["sliding_attention" if i in ids else "full_attention" for i in range(layers)]
     return None
+
+
+def _sliding_window(cfg: Dict[str, Any]) -> Optional[int]:
+    """The sliding window in tokens: `sliding_window`, or Inkling 2's `sliding_window_size`."""
+    window = cfg.get("sliding_window") or cfg.get("sliding_window_size")
+    return window if isinstance(window, int) and window > 0 else None
+
+
+def loop_extra_layers(cfg: Dict[str, Any], layers: int) -> int:
+    """The layer applications a loop adds, each with its own cache: (passes - 1) x core layers; 0 without a loop. Set
+    whatever the layout's outcome, so the every-layer-full fallback counts them too."""
+    loop = loop_passes(cfg, layers)
+    return (loop[2] - 1) * (loop[1] - loop[0]) if loop else 0
+
+
+def loop_passes(cfg: Dict[str, Any], layers: int) -> Optional[Tuple[int, int, int]]:
+    """(first, end, passes) of a looped model's core: layers first..end-1 run `passes` times with shared weights, each
+    pass with its own KV cache (Inkling 2's loop_config, vLLM models/inkling2/configs.py lines 106-141 and
+    nvidia/attention.py lines 133-163, 268-279: Inkling2AttentionPassCache for passes 1..n-1; SGLang PR #51926
+    configs/inkling2.py lines 122-133 the same). None without a loop, or one whose fields do not make one."""
+    loop = cfg.get("loop_config")
+    if not isinstance(loop, dict):
+        return None
+    first, end, passes = loop.get("core_start"), loop.get("core_end"), loop.get("num_passes")
+    if not all(isinstance(v, int) for v in (first, end, passes)) or not 0 <= first < end <= layers or passes < 1:
+        return None
+    return first, end, passes
 
 
 def gdn_state_bytes(cfg: Dict[str, Any], model_dtype: str) -> int:
@@ -215,10 +251,19 @@ def hybrid_layout(cfg: Dict[str, Any], layers: int, model_dtype: str) -> Dict[st
     attention. Anything else returns just a `layout_note`, so the planner keeps today's estimate.
     """
     types = _layer_types(cfg, layers)
+    loop = loop_passes(cfg, layers)
     if types is None or all(t in _FULL_TYPES for t in types):
         return {}
     if len(types) != layers:
         return _unrecognised(cfg, f"layer_types lists {len(types)} layers for {layers}")
+    # Sliding layers sized apart from the full ones (vLLM inkling2 attention.py lines 194-200: swa_head_dim and
+    # swa_num_key_value_heads) are not modelled; where they differ, the every-layer-full estimate stands.
+    for key, full_key in (("swa_head_dim", "head_dim"), ("swa_num_key_value_heads", "num_key_value_heads")):
+        if cfg.get(key) is not None and cfg.get(key) != cfg.get(full_key):
+            return _unrecognised(cfg, f"sliding layers with their own {key} are not modelled")
+    if loop:  # each pass's layers keep their own caches, of their own types
+        first, end, passes = loop
+        types = types[:first] + types[first:end] * passes + types[end:]
     unknown = sorted(set(types) - _FULL_TYPES - _SLIDING_TYPES - _LINEAR_TYPES)
     if unknown:
         return _unrecognised(cfg, f"unrecognised layer types {', '.join(unknown)}")
@@ -231,8 +276,8 @@ def hybrid_layout(cfg: Dict[str, Any], layers: int, model_dtype: str) -> Dict[st
     linear = sum(t in _LINEAR_TYPES for t in types)
     out: Dict[str, Any] = {"full_attention_layers": full}
     if sliding:
-        window = cfg.get("sliding_window")
-        if not isinstance(window, int) or window <= 0:
+        window = _sliding_window(cfg)
+        if window is None:
             return _unrecognised(cfg, "sliding layers without a sliding_window")
         out.update(sliding_layers=sliding, sliding_window=window)
     if linear:
