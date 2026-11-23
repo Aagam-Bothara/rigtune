@@ -80,6 +80,9 @@ class Settings:
     temperature: float = 0.7
     top_p: float = 0.95
     thinking: Optional[bool] = None  # chat_template_kwargs enable_thinking; None leaves the template's default
+    # chat_template_kwargs reasoning_effort, for templates that take one instead of (or beside) a thinking switch:
+    # Inkling 2's ("none", "minimal", "low", "medium", "high", "xhigh", "max"; 0.9 when unset). None leaves it out.
+    reasoning_effort: Optional[str] = None
     seed: Optional[int] = None
     top_k: Optional[int] = None  # sent when set; vLLM otherwise applies the model's generation_config (Qwen3: 20)
     keep_texts: bool = False  # keep every reply's text and thinking in its Call (not a model setting)
@@ -130,8 +133,13 @@ def split_thinking(message: Dict[str, Any], finish_reason: str = "stop",
 def _body(settings: Settings, messages: List[Dict[str, str]], salt: int, priority: int) -> Dict[str, Any]:
     body: Dict[str, Any] = {"model": settings.model, "messages": messages, "n": 1, "max_tokens": settings.max_tokens,
                             "temperature": settings.temperature, "top_p": settings.top_p, PRIORITY: priority}
+    kwargs: Dict[str, Any] = {}
     if settings.thinking is not None:
-        body["chat_template_kwargs"] = {"enable_thinking": settings.thinking}
+        kwargs["enable_thinking"] = settings.thinking
+    if settings.reasoning_effort is not None:
+        kwargs["reasoning_effort"] = settings.reasoning_effort
+    if kwargs:
+        body["chat_template_kwargs"] = kwargs
     if settings.seed is not None:
         body["seed"] = settings.seed + salt
     if settings.top_k is not None:

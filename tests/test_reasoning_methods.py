@@ -157,6 +157,16 @@ def test_the_template_default_is_left_alone_when_thinking_is_unset():
     assert "chat_template_kwargs" not in ep.bodies[0] and "seed" not in ep.bodies[0]
 
 
+def test_a_reasoning_effort_reaches_the_template_beside_the_thinking_switch():
+    # Inkling 2's template reads reasoning_effort ("none" to "max", default 0.9) and has no enable_thinking.
+    ep = Endpoint(boxed("1"))
+    run(rm.direct(ep, Settings(model="m/m", reasoning_effort="low"), PROBLEM))
+    assert ep.bodies[0]["chat_template_kwargs"] == {"reasoning_effort": "low"}
+    ep = Endpoint(boxed("1"))
+    run(rm.direct(ep, Settings(model="m/m", thinking=True, reasoning_effort="high"), PROBLEM))
+    assert ep.bodies[0]["chat_template_kwargs"] == {"enable_thinking": True, "reasoning_effort": "high"}
+
+
 def test_the_http_client_has_no_connection_cap_and_sends_only_the_engine_s_fields(monkeypatch):
     import httpx
 
