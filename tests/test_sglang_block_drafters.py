@@ -55,6 +55,38 @@ def test_each_release_s_source_decides(tmp_path, monkeypatch, version, expected)
         sg.sglang_block_drafters.cache_clear()
 
 
+# DFlash's sampling rehearsal as each source has it: none at 0.5.19; 0.5.23's fresh matrix (dflash_worker_v2.py lines
+# 799, 825); SGLang PR #52548's rehearsal on the shared logits buffer, which falls back to a fresh matrix under a
+# deferred TP gather or DP attention, so it counts as 0.5.23's.
+WORKER_0_5_19 = "class DFlashWorkerV2(BaseSpecWorker):\n    def forward_batch_generation(self, batch):\n        ...\n"
+WORKER_0_5_23 = ("    def prewarm_sampling(self) -> SamplingPrewarmResult:\n"
+                 "        target_logits = torch.zeros(\n"
+                 "            (bs * block_size, vocab_size), dtype=torch.float32, device=device\n")
+WORKER_PR_52548 = WORKER_0_5_23 + "        shared_output = self._verify_logits_shared_output(rows)\n"
+
+
+def test_the_rehearsal_s_matrices_are_read_from_the_worker_source():
+    assert sg.rehearsal_matrices_in(WORKER_0_5_19) == 0
+    assert sg.rehearsal_matrices_in(WORKER_0_5_23) == 3
+    assert sg.rehearsal_matrices_in(WORKER_PR_52548) == 3
+    assert sg.rehearsal_matrices_in(None) == 0
+
+
+@pytest.mark.parametrize("source, expected", [(WORKER_0_5_23, 3), (None, 0)])
+def test_the_installed_worker_is_read(tmp_path, monkeypatch, source, expected):
+    pkg = tmp_path / "sglang"
+    (pkg / "srt" / "speculative").mkdir(parents=True)
+    if source is not None:
+        (pkg / "srt" / "speculative" / "dflash_worker_v2.py").write_text(source)
+    monkeypatch.setattr(sg, "sglang_python", lambda: "python")
+    monkeypatch.setattr(sg, "_sglang_package_dir", lambda python: pkg)
+    sg.sglang_rehearsal_matrices.cache_clear()
+    try:
+        assert sg.sglang_rehearsal_matrices() == expected
+    finally:
+        sg.sglang_rehearsal_matrices.cache_clear()
+
+
 def _model():
     pm = _qwen3_8b().model_copy(update={"backend": "sglang"})
     pm.spec_repos.update({"dflash": DFLASH, "dspark": DSPARK})
@@ -97,6 +129,8 @@ def test_each_launches_at_the_tokens_it_drafts_unquantized_at_its_checked_commit
 def sglang_offers(monkeypatch):
     monkeypatch.setattr(sg, "sglang_spec_methods", lambda: frozenset({"ngram", "eagle3", "draft"}))
     monkeypatch.setattr(sg, "sglang_block_drafters", lambda: frozenset({"dflash", "dspark"}))
+    # The rehearsal an installed SGLang would add is tested on its own; a test machine with SGLang must not see it.
+    monkeypatch.setattr(sg, "sglang_rehearsal_matrices", lambda: 0)
 
 
 def _offered(cfg, pm, hw):
@@ -194,6 +228,24 @@ def test_a_drafter_of_unknown_size_is_not_recorded(found_for_sglang, monkeypatch
     pm = _qwen3_8b().model_copy(update={"backend": "sglang"})
     notes = sg.SglangBackend().find_second_models(pm)
     assert pm.spec_repos == {} and any("its size could not be read" in n for n in notes)
+
+
+def test_dflash_s_fraction_leaves_its_start_up_rehearsal_room(tmp_home, hw_a100, sglang_offers, monkeypatch):
+    """On an A40 or A6000 (46,068 MiB) at 64 requests the cap fell from 0.93 to 0.89 with 0.5.23's rehearsal; SGLang
+    itself failed at 0.88 there, the rest being graph memory the rehearsal does not cover (measured per start, S2)."""
+    be, pm = sg.SglangBackend(), _model()
+    gpu = hw_a100.gpus[0].model_copy(update={"vram_total_bytes": 46068 << 20})
+    hw = hw_a100.model_copy(update={"gpus": [gpu]})
+    dflash, dspark = f"dflash:{DFLASH}:15", f"dspark:{DSPARK}:7"
+    monkeypatch.setattr(sg, "sglang_rehearsal_matrices", lambda: 0)
+    before = be.spec_fraction(dflash, pm, hw, 64)
+    dspark_before = be.spec_fraction(dspark, pm, hw, 64)
+    monkeypatch.setattr(sg, "sglang_rehearsal_matrices", lambda: 3)
+    assert sg.sglang_rehearsal_bytes(dflash, pm, 64) == 3 * 64 * 16 * 151936 * 4  # 1.74 GiB
+    assert (before, be.spec_fraction(dflash, pm, hw, 64)) == (0.93, 0.89)
+    # DSpark has no rehearsal; a spec without a drafter neither.
+    assert sg.sglang_rehearsal_bytes(dspark, pm, 64) == 0 and sg.sglang_rehearsal_bytes(None, pm, 64) == 0
+    assert be.spec_fraction(dspark, pm, hw, 64) == dspark_before
 
 
 def test_a_larger_batch_cannot_keep_a_fraction_the_buffer_no_longer_fits(tmp_home, hw_rtx4090, sglang_offers):

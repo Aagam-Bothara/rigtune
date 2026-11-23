@@ -343,6 +343,46 @@ def sglang_logits_bytes(spec: Optional[str], model: PreparedModel, batch: Option
     return batch * tokens * (model.arch.vocab_size or 0) * 4
 
 
+# DFlash's sampling rehearsal (0.5.23 speculative/dflash_worker_v2.py: prewarm_sampling, line 799), run after CUDA-graph
+# capture, so outside the fraction: a fresh fp32 (batch x block, vocabulary) matrix (line 825) and the dense top-p
+# path's two more of that size (dflash_utils.py: logits over the temperature, then the softmax, line 1094). The
+# batch is min(max_decode_logits_rows // block, max_running_requests) (line 771): rigtune's batch. Measured on an A40
+# and an A6000 (23 Nov 2026, Qwen3-8B, 64 requests): its logged need is 1.79 GiB, the input matrix and a peak of two
+# more (1,302,737,408 B). SGLang PR #52548 (not merged) rehearses on the shared logits buffer, one matrix less, but
+# not under a deferred TP gather or DP attention, which this cannot see, so a release with it is still counted at 3:
+# one matrix too many, never too few. DSpark's worker inherits BaseSpecWorker.prewarm_sampling (base_spec_worker.py
+# line 240), which allocates nothing (model_runner.py line 1165), and 0.5.19 has no rehearsal.
+SGLANG_DFLASH_WORKER = ("srt", "speculative", "dflash_worker_v2.py")
+
+
+def rehearsal_matrices_in(source: Optional[str]) -> int:
+    """How many full-vocabulary fp32 matrices DFlash's start-up rehearsal holds at once in SGLang's
+    dflash_worker_v2.py source text: 0 without a rehearsal, 3 with one."""
+    return 3 if source and "def prewarm_sampling" in source else 0
+
+
+@functools.lru_cache(maxsize=1)
+def sglang_rehearsal_matrices() -> int:
+    """rehearsal_matrices_in for the SGLang that would be launched; 0 when it is not found."""
+    python = sglang_python()
+    pkg = _sglang_package_dir(python) if python else None
+    if not pkg:
+        return 0
+    try:
+        return rehearsal_matrices_in(pkg.joinpath(*SGLANG_DFLASH_WORKER).read_text("utf-8"))
+    except OSError:
+        return 0
+
+
+def sglang_rehearsal_bytes(spec: Optional[str], model: PreparedModel, batch: Optional[int]) -> int:
+    """What DFlash's sampling rehearsal takes outside the fraction at start-up, on top of the logits buffer: its
+    matrices x batch x block x vocabulary x 4 B (1.74 GiB for Qwen3-8B's DFlash drafter at 64 requests on 0.5.23).
+    0 for any other setting."""
+    if not spec or not batch or speculative.parse(spec)[0] != "dflash":
+        return 0
+    return sglang_rehearsal_matrices() * sglang_logits_bytes(spec, model, batch)
+
+
 @functools.lru_cache(maxsize=1)
 def sglang_spec_methods() -> FrozenSet[str]:
     """rigtune's spec kinds ("ngram", "eagle3", "draft") the SGLang that would be launched offers. Empty when
@@ -942,7 +982,7 @@ class SglangBackend(BaseBackend):
 
         A DFlash or DSpark drafter was read at 0.5.23: its weights are inside the fraction (planned there,
         sglang_drafter_weights), and what needs room outside is the logits buffer its CUDA graphs take at `batch`
-        (sglang_logits_bytes)."""
+        (sglang_logits_bytes), and for DFlash its start-up sampling rehearsal (sglang_rehearsal_bytes)."""
         if not spec or hw.gpu is None or not hw.gpu.vram_total_bytes:
             return None
         extra = speculative.draft_bytes(spec, model)
@@ -953,7 +993,7 @@ class SglangBackend(BaseBackend):
         if speculative.parse(spec)[0] in speculative.BLOCK_DRAFTERS:
             if not batch or not model.arch.vocab_size:  # the buffer cannot be sized: no fraction is known to fit
                 return 0.0
-            extra = sglang_logits_bytes(spec, model, batch)
+            extra = sglang_logits_bytes(spec, model, batch) + sglang_rehearsal_bytes(spec, model, batch)
         outside = extra + self.memory_model(hw).runtime_workspace + MIN_SAFETY_MARGIN
         return math.floor((1 - outside / hw.gpu.vram_total_bytes) * 100) / 100
 
