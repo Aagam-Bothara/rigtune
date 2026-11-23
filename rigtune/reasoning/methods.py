@@ -44,6 +44,8 @@ class Call:
     seconds: float
     finish_reason: str
     thinking_chars: int = 0
+    text: Optional[str] = None  # the answer text and thinking, kept only with Settings.keep_texts: training data for
+    thinking: Optional[str] = None  # a verifier or a STaR adapter (.git/wip/plan-reasoning.md)
 
 
 @dataclass
@@ -79,6 +81,8 @@ class Settings:
     top_p: float = 0.95
     thinking: Optional[bool] = None  # chat_template_kwargs enable_thinking; None leaves the template's default
     seed: Optional[int] = None
+    top_k: Optional[int] = None  # sent when set; vLLM otherwise applies the model's generation_config (Qwen3: 20)
+    keep_texts: bool = False  # keep every reply's text and thinking in its Call (not a model setting)
 
 
 def groups(answers: Sequence[Optional[str]]) -> List[List[str]]:
@@ -130,6 +134,8 @@ def _body(settings: Settings, messages: List[Dict[str, str]], salt: int, priorit
         body["chat_template_kwargs"] = {"enable_thinking": settings.thinking}
     if settings.seed is not None:
         body["seed"] = settings.seed + salt
+    if settings.top_k is not None:
+        body["top_k"] = settings.top_k
     return body
 
 
@@ -146,7 +152,9 @@ async def _ask(post: Post, settings: Settings, messages: List[Dict[str, str]], s
     return text, Call(prompt_tokens=int(usage.get("prompt_tokens") or 0),
                       completion_tokens=int(usage.get("completion_tokens") or 0),
                       cached_tokens=int(details.get("cached_tokens") or 0), seconds=seconds,
-                      finish_reason=str(choice.get("finish_reason")), thinking_chars=len(thinking))
+                      finish_reason=str(choice.get("finish_reason")), thinking_chars=len(thinking),
+                      text=text if settings.keep_texts else None,
+                      thinking=thinking if settings.keep_texts else None)
 
 
 def _solve_messages(problem: Problem) -> List[Dict[str, str]]:

@@ -44,6 +44,7 @@ class Row:
     utilisation: Optional[float]
     cached_share: Optional[float]  # of prompt tokens
     joules: Optional[float]  # per problem
+    preemptions: Optional[float] = None  # requests the engine preempted and recomputed during the run
 
 
 def _correct(run: Dict[str, Any]) -> Dict[str, float]:
@@ -63,7 +64,7 @@ def row(run: Dict[str, Any]) -> Row:
                truncated=sum(1 for c in calls if c.get("finish_reason") == "length"),
                errors=sum(1 for a in attempts if a.get("error")), utilisation=run.get("utilisation"),
                cached_share=sum(c.get("cached_tokens", 0) for c in calls) / prompt if prompt else None,
-               joules=joules / n if joules is not None and n else None)
+               joules=joules / n if joules is not None and n else None, preemptions=run.get("preemptions"))
 
 
 def _bootstrap(diffs: Sequence[float], seed: int) -> Tuple[float, float]:
@@ -116,7 +117,8 @@ def _comparable(runs: Sequence[Dict[str, Any]]) -> Optional[str]:
         return "the runs ran at different sequence limits"
     if len({r.get("server") for r in runs}) > 1:
         return "the runs were served differently"
-    keys = {tuple(sorted((k, str(v)) for k, v in (r.get("settings") or {}).items())) for r in runs}
+    keys = {tuple(sorted((k, str(v)) for k, v in (r.get("settings") or {}).items() if k != "keep_texts"))
+            for r in runs}
     if len(keys) > 1:
         return "the runs used different model settings"
     return None
@@ -167,15 +169,17 @@ def markdown(runs: Sequence[Dict[str, Any]], references: Dict[str, str], title: 
     rows = sorted((row(r) for r in runs), key=lambda x: x.gpu_seconds)
     lines = [f"# {title}", "",
              "| Method | Problems | Accuracy | 95% interval | GPU-s / problem | Tokens / problem | Cut off | Failed | "
-             "Utilisation | Cached prompt | J / problem |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+             "Utilisation | Cached prompt | J / problem | Preempted |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for x in rows:
         util = "—" if x.utilisation is None else f"{x.utilisation:.0%}" + (
             " (low: wall time, not GPU time)" if x.utilisation < UTILISATION_FLOOR else "")
         cached = "—" if x.cached_share is None else f"{x.cached_share:.0%}"
         joules = f"{x.joules:.0f}" if x.joules is not None else "—"
+        pre = f"{x.preemptions:.0f}" if x.preemptions is not None else "—"
         lines.append(f"| {x.name} | {x.n} | {x.accuracy:.1%} | {x.interval[0]:.1%}–{x.interval[1]:.1%} | "
                      f"{x.gpu_seconds:.2f} | {x.completion_tokens:.0f} | {x.truncated} | {x.errors} | {util} | "
-                     f"{cached} | {joules} |")
+                     f"{cached} | {joules} | {pre} |")
     base = next((r for r in runs if r["method"] == "direct"), None)
     if base is not None:
         lines += ["", "Against direct answers, paired (descriptive; the criterion below is the test):", ""]
