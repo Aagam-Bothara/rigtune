@@ -122,11 +122,17 @@ def fill_warning(problems: Sequence[rp.Problem], sequences: int) -> Optional[str
     """A warning when the batch is too small to keep `sequences` answers in flight: a method that sends one answer a
     problem at a time (direct, self-correction) can fill at most len(problems) of them, so its utilisation, and with it
     the criterion, cannot be read as GPU time."""
-    if len(problems) < 4 * sequences:
+    if len(problems) < PROBLEMS_PER_PLACE * sequences:
         return (f"{len(problems)} problems cannot keep {sequences} answers in flight for direct answers or "
                 f"self-correction: their utilisation will be low and the criterion undecided; use --sequences "
-                f"{max(1, len(problems) // 4)} or fewer for a meaningful GPU time")
+                f"{max(1, len(problems) // PROBLEMS_PER_PLACE)} or fewer for a meaningful GPU time")
     return None
+
+
+# The batch ends on its slowest answers, so utilisation is about 1 - 1.1 / (requests a place): measured 60-62% at 3.1
+# (dev run), 73% at 3.9, 91% at 11.7 and 95% at 19.5 (held-out run). The report's 80% floor needs about 5.5; 6 leaves a
+# little margin.
+PROBLEMS_PER_PLACE = 6
 
 
 async def run_experiment(post: rm.Post, settings: rm.Settings, problems: Sequence[rp.Problem],

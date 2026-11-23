@@ -119,8 +119,18 @@ def test_an_output_folder_with_runs_is_refused(tmp_path):
 
 def test_a_batch_too_small_for_its_limit_is_warned_of():
     assert "use --sequences 1 or fewer" in ex.fill_warning(PROBLEMS, 32)
-    many = PROBLEMS * 30
+    many = PROBLEMS * 32  # 192 problems, 6 a place
     assert ex.fill_warning(many, 32) is None
+
+
+def test_the_fill_warning_is_set_where_utilisation_reaches_the_floor():
+    # The held-out run: 500 problems on 128 places kept direct answers 73% busy, and 125 places would have done no
+    # better; 100 places (5 a place) still lands under 80%.
+    held_out = [Problem(id=f"{i:016x}", subject="algebra", level=5, problem=f"p{i}", answer=str(i))
+                for i in range(500)]
+    assert "use --sequences 83 or fewer" in ex.fill_warning(held_out, 128)
+    assert ex.fill_warning(held_out, 100) is not None
+    assert ex.fill_warning(held_out, 83) is None
 
 
 def test_preemptions_and_a_warm_up_batch_are_measured_around_each_run(tmp_path):

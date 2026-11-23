@@ -129,8 +129,8 @@ def run(name: str, model: str, args: str, max_model_len: int, sequences: int, gp
 @app.local_entrypoint()
 def main(name: str, model: str, args: str = "", gpu: str = "L4", hours: float = 2.0, max_model_len: int = 20480,
          sequences: int = 32, gpu_memory: float = 0.9, serve_args: str = "") -> None:
-    """--sequences 32 suits the 98-problem dev set (a batch must be several times the limit to keep it full); the
-    held-out set of 2,440 can take the engine's own maximum."""
+    """A batch must hold about 6 problems a place to keep the GPU busy (experiment.PROBLEMS_PER_PLACE): --sequences
+    16 for the 98-problem dev set (32 kept it 60% busy), 83 or fewer for 500 held-out problems, 406 for all 2,440."""
     import json
 
     result = run.with_options(gpu=gpu, timeout=int(hours * 3600)).remote(name, model, args, max_model_len, sequences,
