@@ -107,7 +107,7 @@ def run(name: str, model: str, args: str, max_model_len: int, sequences: int, gp
 
 
 @app.local_entrypoint()
-def main(name: str, model: str, args: str = "", gpu: str = "L4", hours: float = 2.0, max_model_len: int = 12288,
+def main(name: str, model: str, args: str = "", gpu: str = "L4", hours: float = 2.0, max_model_len: int = 20480,
          sequences: int = 32, gpu_memory: float = 0.9) -> None:
     """--sequences 32 suits the 98-problem dev set (a batch must be several times the limit to keep it full); the
     held-out set of 2,440 can take the engine's own maximum."""

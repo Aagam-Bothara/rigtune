@@ -170,7 +170,9 @@ def _arguments(argv: Optional[Sequence[str]]) -> argparse.Namespace:
     ap.add_argument("--limit", type=int, default=0, help="the first N problems by id (0: all)")
     ap.add_argument("--methods", default="direct,self-consistency:3,self-consistency:5,self-correction,adaptive:8")
     ap.add_argument("--thinking", choices=("on", "off", "default"), default="off")
-    ap.add_argument("--max-tokens", type=int, default=4096)
+    # 4,096 cut off 3.7% of the dev run's replies (Qwen3-4B, thinking off), each certainly wrong; a third of them
+    # looked like long derivations still going. The same cap for every method keeps the comparison fair.
+    ap.add_argument("--max-tokens", type=int, default=8192)
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--top-p", type=float, default=0.95)
     ap.add_argument("--top-k", type=int, default=0, help="0: the model's own (vLLM reads its generation_config)")

@@ -76,7 +76,7 @@ class Attempt:
 @dataclass(frozen=True)
 class Settings:
     model: str
-    max_tokens: int = 4096
+    max_tokens: int = 8192
     temperature: float = 0.7
     top_p: float = 0.95
     thinking: Optional[bool] = None  # chat_template_kwargs enable_thinking; None leaves the template's default
