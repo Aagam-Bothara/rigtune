@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rigtune"
 version = "0.3.0"
-description = "Autotuner for LLM serving: measures vLLM, SGLang and llama.cpp settings on your GPU and your traffic, then serves the fastest"
+description = "Autotuner for LLM serving: finds which engine (vLLM, SGLang or llama.cpp) and which settings run your model fastest on your GPU and your traffic, then serves the winner"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 license = {text = "MIT"}
