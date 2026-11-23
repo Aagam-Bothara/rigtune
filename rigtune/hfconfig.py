@@ -79,6 +79,26 @@ def sglang_context_length(cfg: Dict[str, Any]) -> int:
     return 2048
 
 
+# The keys vLLM derives a model's maximum length from, the smallest present wins, and model_max_length then replaces
+# it wherever it is set (transformers_utils/model_arch_config_convertor.py derive_max_model_len_and_key, lines
+# 374-407 at v0.33.0). Inkling 2's config sets only model_max_length (1,048,576), which vLLM's own config class also
+# copies to max_position_embeddings (models/inkling2/configs.py line 88 on main).
+VLLM_CONTEXT_KEYS = ("max_position_embeddings", "n_positions", "max_seq_len", "seq_length", "model_max_length",
+                     "max_target_positions", "max_sequence_length", "max_seq_length", "seq_len")
+
+
+def vllm_context_length(cfg: Dict[str, Any]) -> int:
+    """The maximum length vLLM derives from a (text) config before rope scaling: the smallest of VLLM_CONTEXT_KEYS
+    present, replaced by model_max_length where it is set. A config with none of them falls back to n_ctx, else
+    4096, as rigtune did before (vLLM itself would stop and ask for --max-model-len)."""
+    found = [int(cfg[k]) for k in VLLM_CONTEXT_KEYS if isinstance(cfg.get(k), (int, float))]
+    if isinstance(cfg.get("model_max_length"), (int, float)) and cfg["model_max_length"]:
+        return int(cfg["model_max_length"])
+    if found:
+        return min(found)
+    return int(_first(cfg, "n_ctx", default=4096))
+
+
 def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
     """Build ArchInfo from a raw config.json dict. Handles nested text_config (multimodal)."""
     from rigtune.introspect import mtp_layers, quantization
@@ -96,7 +116,7 @@ def arch_from_config(cfg: Dict[str, Any]) -> ArchInfo:
     kv_heads = int(_first(cfg, "num_key_value_heads", "num_kv_heads", default=heads))
     head_dim = int(_first(cfg, "head_dim", default=hidden // max(heads, 1)))
     vocab = int(_first(cfg, "vocab_size", default=32000))
-    max_pos = int(_first(cfg, "max_position_embeddings", "n_positions", "n_ctx", default=4096))
+    max_pos = vllm_context_length(cfg)
     dtype = str(_first(cfg, "torch_dtype", "dtype", default="bfloat16"))
     archs = cfg.get("architectures") or ["unknown"]
     intermediate = int(_first(cfg, "intermediate_size", "n_inner", default=4 * hidden))
