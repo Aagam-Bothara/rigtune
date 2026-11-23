@@ -67,12 +67,12 @@ WORKER_PR_52548 = WORKER_0_5_23 + "        shared_output = self._verify_logits_s
 
 def test_the_rehearsal_s_matrices_are_read_from_the_worker_source():
     assert sg.rehearsal_matrices_in(WORKER_0_5_19) == 0
-    assert sg.rehearsal_matrices_in(WORKER_0_5_23) == 3
-    assert sg.rehearsal_matrices_in(WORKER_PR_52548) == 3
+    assert sg.rehearsal_matrices_in(WORKER_0_5_23) == 4
+    assert sg.rehearsal_matrices_in(WORKER_PR_52548) == 4
     assert sg.rehearsal_matrices_in(None) == 0
 
 
-@pytest.mark.parametrize("source, expected", [(WORKER_0_5_23, 3), (None, 0)])
+@pytest.mark.parametrize("source, expected", [(WORKER_0_5_23, 4), (None, 0)])
 def test_the_installed_worker_is_read(tmp_path, monkeypatch, source, expected):
     pkg = tmp_path / "sglang"
     (pkg / "srt" / "speculative").mkdir(parents=True)
@@ -231,8 +231,9 @@ def test_a_drafter_of_unknown_size_is_not_recorded(found_for_sglang, monkeypatch
 
 
 def test_dflash_s_fraction_leaves_its_start_up_rehearsal_room(tmp_home, hw_a100, sglang_offers, monkeypatch):
-    """On an A40 or A6000 (46,068 MiB) at 64 requests the cap fell from 0.93 to 0.89 with 0.5.23's rehearsal; SGLang
-    itself failed at 0.88 there, the rest being graph memory the rehearsal does not cover (measured per start, S2)."""
+    """On an A40 or A6000 (46,068 MiB) at 64 requests the cap falls from 0.93 to 0.88 with the rehearsal's 4 matrices
+    (2.37 GiB logged on 0.5.23). SGLang main still failed at 0.88 there and started at 0.841: the rest is graph memory
+    beyond the planned workspace, which a start's own log measures."""
     be, pm = sg.SglangBackend(), _model()
     gpu = hw_a100.gpus[0].model_copy(update={"vram_total_bytes": 46068 << 20})
     hw = hw_a100.model_copy(update={"gpus": [gpu]})
@@ -240,9 +241,9 @@ def test_dflash_s_fraction_leaves_its_start_up_rehearsal_room(tmp_home, hw_a100,
     monkeypatch.setattr(sg, "sglang_rehearsal_matrices", lambda: 0)
     before = be.spec_fraction(dflash, pm, hw, 64)
     dspark_before = be.spec_fraction(dspark, pm, hw, 64)
-    monkeypatch.setattr(sg, "sglang_rehearsal_matrices", lambda: 3)
-    assert sg.sglang_rehearsal_bytes(dflash, pm, 64) == 3 * 64 * 16 * 151936 * 4  # 1.74 GiB
-    assert (before, be.spec_fraction(dflash, pm, hw, 64)) == (0.93, 0.89)
+    monkeypatch.setattr(sg, "sglang_rehearsal_matrices", lambda: 4)
+    assert sg.sglang_rehearsal_bytes(dflash, pm, 64) == 4 * 64 * 16 * 151936 * 4  # 2.32 GiB
+    assert (before, be.spec_fraction(dflash, pm, hw, 64)) == (0.93, 0.88)
     # DSpark has no rehearsal; a spec without a drafter neither.
     assert sg.sglang_rehearsal_bytes(dspark, pm, 64) == 0 and sg.sglang_rehearsal_bytes(None, pm, 64) == 0
     assert be.spec_fraction(dspark, pm, hw, 64) == dspark_before

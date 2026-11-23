@@ -345,20 +345,22 @@ def sglang_logits_bytes(spec: Optional[str], model: PreparedModel, batch: Option
 
 # DFlash's sampling rehearsal (0.5.23 speculative/dflash_worker_v2.py: prewarm_sampling, line 799), run after CUDA-graph
 # capture, so outside the fraction: a fresh fp32 (batch x block, vocabulary) matrix (line 825) and the dense top-p
-# path's two more of that size (dflash_utils.py: logits over the temperature, then the softmax, line 1094). The
-# batch is min(max_decode_logits_rows // block, max_running_requests) (line 771): rigtune's batch. Measured on an A40
-# and an A6000 (23 Nov 2026, Qwen3-8B, 64 requests): its logged need is 1.79 GiB, the input matrix and a peak of two
-# more (1,302,737,408 B). SGLang PR #52548 (not merged) rehearses on the shared logits buffer, one matrix less, but
-# not under a deferred TP gather or DP attention, which this cannot see, so a release with it is still counted at 3:
-# one matrix too many, never too few. DSpark's worker inherits BaseSpecWorker.prewarm_sampling (base_spec_worker.py
-# line 240), which allocates nothing (model_runner.py line 1165), and 0.5.19 has no rehearsal.
+# path's temporaries of that size (dflash_utils.py build_speculative_verify_target_probs: the logits over the
+# temperature, the softmax, then the top-p renormalisation's output, lines 1094-1104). The batch is
+# min(max_decode_logits_rows // block, max_running_requests) (line 771): rigtune's batch. Its logged need at 64
+# requests on Qwen3-8B (one matrix 622,329,856 B): 2,547,921,408 B, 4.09 matrices, on 0.5.23 (round C, A100, 22 Nov
+# 2026); 1,925,067,264 B, 3.09, on main at e96e9675 (A40 and A6000, 23 Nov), whose top-p path holds one fewer. So 4:
+# on a later release one matrix too many, never too few; a start's own logged need replaces it once measured.
+# SGLang PR #52548 (not merged) rehearses on the shared logits buffer, one matrix less, but not under a deferred TP
+# gather or DP attention, which this cannot see. DSpark's worker inherits BaseSpecWorker.prewarm_sampling
+# (base_spec_worker.py line 240), which allocates nothing (model_runner.py line 1165), and 0.5.19 has no rehearsal.
 SGLANG_DFLASH_WORKER = ("srt", "speculative", "dflash_worker_v2.py")
 
 
 def rehearsal_matrices_in(source: Optional[str]) -> int:
     """How many full-vocabulary fp32 matrices DFlash's start-up rehearsal holds at once in SGLang's
-    dflash_worker_v2.py source text: 0 without a rehearsal, 3 with one."""
-    return 3 if source and "def prewarm_sampling" in source else 0
+    dflash_worker_v2.py source text: 0 without a rehearsal, 4 with one (the most any release was measured to)."""
+    return 4 if source and "def prewarm_sampling" in source else 0
 
 
 @functools.lru_cache(maxsize=1)
@@ -376,7 +378,7 @@ def sglang_rehearsal_matrices() -> int:
 
 def sglang_rehearsal_bytes(spec: Optional[str], model: PreparedModel, batch: Optional[int]) -> int:
     """What DFlash's sampling rehearsal takes outside the fraction at start-up, on top of the logits buffer: its
-    matrices x batch x block x vocabulary x 4 B (1.74 GiB for Qwen3-8B's DFlash drafter at 64 requests on 0.5.23).
+    matrices x batch x block x vocabulary x 4 B (2.32 GiB for Qwen3-8B's DFlash drafter at 64 requests).
     0 for any other setting."""
     if not spec or not batch or speculative.parse(spec)[0] != "dflash":
         return 0
