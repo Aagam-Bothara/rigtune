@@ -389,10 +389,11 @@ def combination_fits(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: 
             return False
         if c.kv_tier is not None and tier_refusal(hw, reg[c.backend], pm, c) is not None:
             return False  # a combination may carry a tier to a config its engine or the host cannot give one
-        # SGLang: a draft or EAGLE3 head needs its weights' room outside the reservation (SglangBackend.spec_fraction);
-        # a second model of unknown size gets a limit of 0, so it is never combined in.
+        # SGLang: a draft or EAGLE3 head needs its weights' room outside the reservation, a DFlash or DSpark drafter its
+        # logits buffer at this batch (SglangBackend.spec_fraction); a second model of unknown size gets a limit of 0,
+        # so it is never combined in.
         cap = getattr(reg[c.backend], "spec_fraction", None)
-        limit = cap(c.spec_decode, pm, hw) if cap is not None and c.spec_decode else None
+        limit = cap(c.spec_decode, pm, hw, c.batch) if cap is not None and c.spec_decode else None
         if limit is not None and (c.gpu_memory_utilization or 0) > limit + 1e-9:
             return False
         if c.prefill_budget is not None and c.prefill_budget < c.batch and not c.backend.startswith("llamacpp"):
@@ -679,6 +680,12 @@ def kv_variants_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "P
 
         def fits(x: Config) -> bool:
             if be.known_failure(x) or be.config_refusal(x, pm):
+                return False
+            # The batch step keeps the leader's fraction, which SGLang's cap for a DFlash or DSpark drafter may not
+            # allow at the larger batch (its logits buffer grows with it: SglangBackend.spec_fraction).
+            cap = getattr(be, "spec_fraction", None)
+            limit = cap(x.spec_decode, pm, hw, x.batch) if cap is not None and x.spec_decode else None
+            if limit is not None and (x.gpu_memory_utilization or 0) > limit + 1e-9:
                 return False
             try:
                 return estimate(hw, pm, x, mm).feasible

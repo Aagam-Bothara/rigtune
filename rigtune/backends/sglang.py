@@ -63,7 +63,9 @@ SGLANG_MTP_DRAFT_LAYERS = 1
 # unasked (config/speculative.py lines 1503-1511 at v0.33.0). Set only for these algorithms: a head reads the
 # target's positions, while a draft model's own context limit is pairing's to check (context_too_short).
 LONGER_CONTEXT_VAR = "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN"  # environ.py 308 / 320, an EnvBool: "1" is true
-HEAD_ALGORITHMS = frozenset({"EAGLE3"})
+# SGLang checks every draft's context against the target's (configs/model_config.py 1296-1319): a head's, and a DFlash
+# or DSpark drafter's, which vLLM raises itself.
+HEAD_ALGORITHMS = frozenset({"EAGLE3", "DFLASH", "DSPARK"})
 
 
 # SGLang 0.5.23 raised the default prefill chunk of cards with 20 to 35 GiB (an RTX 4090, an L4) from 2048 to
@@ -267,8 +269,9 @@ def _engine_facts():
 
 
 def _server_args_source(pkg: Path) -> str:
-    """srt/server_args.py, plus srt/arg_groups/*.py where a release has split its arguments out."""
-    files = [pkg / "srt" / "server_args.py"] + sorted((pkg / "srt" / "arg_groups").glob("*.py"))
+    """srt/server_args.py, plus srt/arg_groups/**/*.py where a release has split its arguments out (0.5.23 declares
+    them in arg_groups/fields/ and arg_groups/field_order.py)."""
+    files = [pkg / "srt" / "server_args.py"] + sorted((pkg / "srt" / "arg_groups").rglob("*.py"))
     texts = []
     for f in files:
         try:
@@ -276,6 +279,68 @@ def _server_args_source(pkg: Path) -> str:
         except OSError:
             continue
     return "\n".join(texts)
+
+
+# The flag each block drafter is launched with (speculative.sglang_config), as SGLang 0.5.23 declares it
+# (arg_groups/fields/spec.py lines 70, 78). The flags came with the drafters themselves (DFlash in April, DSpark in July
+# 2026), so 0.5.19 has them too; what rigtune plans by was read at 0.5.23 only: the draft pool budgeted from its own
+# attention geometry (mem_cache/draft_kv_budget.py, added 24 Oct 2026, four days before 0.5.23), its weights inside
+# the fraction and its logits buffer outside it. So the drafters are offered where that file is as well.
+SGLANG_BLOCK_FLAGS = {"dflash": "speculative_dflash_block_size", "dspark": "speculative_dspark_block_size"}
+SGLANG_DRAFT_POOL_MARKER = ("srt", "mem_cache", "draft_kv_budget.py")
+
+
+def block_drafters_in(source: str, draft_pool_read: bool = True) -> FrozenSet[str]:
+    """The block drafter kinds whose launch flag SGLang argument-parser source text declares, in a release whose draft
+    memory was read (`draft_pool_read`: SGLANG_DRAFT_POOL_MARKER present); none otherwise."""
+    if not draft_pool_read:
+        return frozenset()
+    return frozenset(kind for kind, flag in SGLANG_BLOCK_FLAGS.items() if flag in source)
+
+
+@functools.lru_cache(maxsize=1)
+def sglang_block_drafters() -> FrozenSet[str]:
+    """The DFlash and DSpark kinds the SGLang that would be launched takes rigtune's flags for, in a release whose
+    draft memory was read, from its source without importing it; empty when SGLang is not found."""
+    python = sglang_python()
+    pkg = _sglang_package_dir(python) if python else None
+    if not pkg:
+        return frozenset()
+    return block_drafters_in(_server_args_source(pkg), pkg.joinpath(*SGLANG_DRAFT_POOL_MARKER).is_file())
+
+
+def sglang_drafter_weights(cfg: Config, model: PreparedModel) -> int:
+    """Bytes of a DFlash or DSpark drafter's weights, inside --mem-fraction-static: SGLang 0.5.23 builds the draft
+    worker before it sizes the KV pools from what is left of the fraction (managers/scheduler.py lines 1130-1137;
+    kv_cache_configurator.py 2990-3060, "draft weights are now counted"). Both take the target's embedding and output
+    head (models/dflash.py 708-716; models/dspark.py 550-555), so their own bytes are all. 0 for any other setting."""
+    from rigtune.backends.vllm import block_drafter
+
+    found = block_drafter(cfg, model)
+    return int(model.spec_bytes.get(found[0]) or 0) if found is not None else 0
+
+
+def sglang_drafter_layers(cfg: Config, model: PreparedModel) -> int:
+    """A DFlash or DSpark drafter's own KV pool, which SGLang 0.5.23 gives a slot per target token at its exact size,
+    its KV heads x (K + V head dims) x its layers (pool_configurator.py lines 316-338; dflash_utils.py 121-175),
+    planned as that many of the target's full-attention layers, as vLLM's is (vllm_drafter_layers)."""
+    from rigtune.backends.vllm import vllm_drafter_layers
+
+    return vllm_drafter_layers(cfg, model)
+
+
+def sglang_logits_bytes(spec: Optional[str], model: PreparedModel, batch: Optional[int]) -> int:
+    """The fp32 logits buffer a DFlash or DSpark launch allocates for its CUDA graphs after the KV pools are sized,
+    outside the fraction: batch x draft tokens x vocabulary x 4 B (graph_shared_output.py lines 61-70; model_runner.py
+    905-930; the capture batch is at most the request pool's, base_cuda_graph_runner.py 77-97). 467 MB for
+    Qwen3-8B's DFlash drafter at SGLang's default 48 requests. 0 for any other setting."""
+    if not spec or not batch:
+        return 0
+    kind, _, k = speculative.parse(spec)
+    if kind not in speculative.BLOCK_DRAFTERS:
+        return 0
+    tokens = k + 1  # DFlash: the last accepted token and k drafts; DSpark: gamma + 1
+    return batch * tokens * (model.arch.vocab_size or 0) * 4
 
 
 @functools.lru_cache(maxsize=1)
@@ -624,6 +689,16 @@ class SglangBackend(BaseBackend):
                 notes += speculative.found_head_notes(self.name, prepared.spec, prepared.arch, found[0])
             elif found:
                 notes.append(f"sglang: EAGLE3 head {found[0]} not tried, its size could not be read")
+        if "draft" in methods:  # a release whose second-model behaviour was read
+            kinds = [k for k in speculative.BLOCK_DRAFTERS if k in sglang_block_drafters()]
+            notes += speculative.record_block_drafters(prepared, self.name, kinds, self.release(hw))
+            for kind in kinds:  # SGLang offers no second model of unknown size
+                repo = prepared.spec_repos.get(kind)
+                if repo and not prepared.spec_bytes.get(repo):
+                    del prepared.spec_repos[kind]
+                    prepared.spec_facts.pop(repo, None)
+                    prepared.spec_revisions.pop(repo, None)
+                    notes.append(f"sglang: {kind} drafter {repo} not tried, its size could not be read")
         draft = speculative.draft_for(prepared.spec.hf_id)
         if "draft" in methods and draft and prepared.drafts_mode == "table":
             try:
@@ -710,7 +785,8 @@ class SglangBackend(BaseBackend):
         version = found.version if found is not None else None
         mm = self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "gpu",
                                     hybrid_fn=lambda cfg, arch: sglang_hybrid_kv(cfg, arch, total, version),
-                                    full_kv_fn=sglang_full_kv_reason)
+                                    full_kv_fn=sglang_full_kv_reason, extra_weights_fn=sglang_drafter_weights,
+                                    extra_layers_fn=sglang_drafter_layers)
         mm.extra_fn = lambda cfg: sglang_graph_bytes(cfg, total, version)
         return mm
 
@@ -846,13 +922,14 @@ class SglangBackend(BaseBackend):
         --hicache-size). Its size per token is the second model's, which the planner does not know, so it is
         counted as the target's (for an MTP head, one layer, that overstates it)."""
         kind = speculative.parse(cfg.spec_decode)[0] if cfg.spec_decode else None
-        return 2 * host_bytes if kind in ("eagle3", "draft", "mtp") else host_bytes
+        return 2 * host_bytes if kind in ("eagle3", "draft", "mtp", *speculative.BLOCK_DRAFTERS) else host_bytes
 
     # A start-up out-of-memory failure with a second model steps down from the lowered fraction, this far at most
     # (the search's own floor, 0.85, sits above it on a 24 GB card).
     SPEC_RETRY_DEPTH = 0.10
 
-    def spec_fraction(self, spec: Optional[str], model: PreparedModel, hw: HardwareDescriptor) -> Optional[float]:
+    def spec_fraction(self, spec: Optional[str], model: PreparedModel, hw: HardwareDescriptor,
+                      batch: Optional[int] = None) -> Optional[float]:
         """The largest --mem-fraction-static that leaves a spec's second weights room outside the reservation:
         1 - (draft weights + runtime workspace + 512 MB) / total VRAM, rounded down to 0.01 (0.86 for an 850 MB
         EAGLE3 head on a 24 GB card, 0.79 for Llama 3.2 1B). None: no second model (no spec, a lookup method) or no
@@ -861,7 +938,11 @@ class SglangBackend(BaseBackend):
         SGLang 0.5.19 loads the draft after the target, sizes its KV pools after both, and scales the pool's cell
         size for the draft's KV cache, so that cache lives inside the fraction; the planner does not count it, so
         the pool holds fewer tokens than it estimates. Whether the first sizing subtracts the draft's weights was
-        not verified, so they are assumed to need room outside the fraction."""
+        not verified, so they are assumed to need room outside the fraction.
+
+        A DFlash or DSpark drafter was read at 0.5.23: its weights are inside the fraction (planned there,
+        sglang_drafter_weights), and what needs room outside is the logits buffer its CUDA graphs take at `batch`
+        (sglang_logits_bytes)."""
         if not spec or hw.gpu is None or not hw.gpu.vram_total_bytes:
             return None
         extra = speculative.draft_bytes(spec, model)
@@ -869,18 +950,23 @@ class SglangBackend(BaseBackend):
             return None
         if extra is None:
             return 0.0
+        if speculative.parse(spec)[0] in speculative.BLOCK_DRAFTERS:
+            if not batch or not model.arch.vocab_size:  # the buffer cannot be sized: no fraction is known to fit
+                return 0.0
+            extra = sglang_logits_bytes(spec, model, batch)
         outside = extra + self.memory_model(hw).runtime_workspace + MIN_SAFETY_MARGIN
         return math.floor((1 - outside / hw.gpu.vram_total_bytes) * 100) / 100
 
     def spec_retry_floor(self, cfg: Config, model: PreparedModel, hw: HardwareDescriptor) -> Optional[float]:
         """How low an out-of-memory retry may take a second-model spec trial: SPEC_RETRY_DEPTH below its cap."""
-        cap = self.spec_fraction(cfg.spec_decode, model, hw)
+        cap = self.spec_fraction(cfg.spec_decode, model, hw, cfg.batch)
         return round(cap - self.SPEC_RETRY_DEPTH, 2) if cap else None
 
     def spec_variants(self, cfg: Config, model: PreparedModel, hw: Optional[HardwareDescriptor] = None,
                       all_methods: bool = False, min_batch: Optional[int] = None) -> List[Config]:
-        """Under --speculative all only: n-gram lookup, the verified EAGLE3 head, the draft model and the
-        checkpoint's own MTP head, as far as the installed SGLang has them. A second model (the MTP head counts as
+        """Under --speculative all only: n-gram lookup, the verified EAGLE3 head, the draft model, the DFlash and
+        DSpark drafters (sglang_block_drafters) and the checkpoint's own MTP head, as far as the installed SGLang has
+        them. A second model (the MTP head counts as
         one) needs `hw` to be left room. An EAGLE3 head or a draft model is offered only where the planner says the
         configuration still fits at the lower fraction; an MTP setting that does not fit is tried at a smaller batch
         that covers the workload, or not at all (_mtp_variants). Fractions start from the one before any speculation
@@ -903,12 +989,19 @@ class SglangBackend(BaseBackend):
                           for p in eligible_pairs(model, "draft", cfg.ctx)]
             elif "draft" in methods and "draft" in model.spec_repos:
                 specs.append(speculative.draft(model.spec_repos["draft"], speculative.DRAFT_TOKENS_SGLANG))
+            if "draft" in methods and cfg.quant not in INT4_METHODS:
+                for kind in speculative.BLOCK_DRAFTERS:
+                    repo = model.spec_repos.get(kind)
+                    facts = model.spec_facts.get(repo or "", {})
+                    if kind in sglang_block_drafters() and repo and facts.get("k") and facts.get("kv_elements"):
+                        specs.append(speculative.block_drafter(kind, repo, facts["k"]))
         out: List[Config] = []
         for s in specs:
             if s == cfg.spec_decode:
                 continue
             v, lowered = self._at_spec_fraction(cfg, s, model, hw)
-            if lowered:  # the configuration must still fit at the lower fraction
+            planned = speculative.parse(s)[0] in speculative.BLOCK_DRAFTERS  # its weights and pool are in the plan
+            if lowered or planned:  # the configuration must still fit at the lower fraction
                 try:
                     if not v.gpu_memory_utilization or not estimate(hw, model, v, self.memory_model(hw)).feasible:
                         continue
@@ -927,7 +1020,7 @@ class SglangBackend(BaseBackend):
         or at the spec's own cap where that is lower (gmu_before_spec then keeps the fraction it came from)."""
         base = cfg.gmu_before_spec if cfg.gmu_before_spec is not None else cfg.gpu_memory_utilization
         v = cfg.model_copy(update={"spec_decode": spec, "gpu_memory_utilization": base, "gmu_before_spec": None})
-        cap = self.spec_fraction(spec, model, hw) if hw is not None else None
+        cap = self.spec_fraction(spec, model, hw, cfg.batch) if hw is not None else None
         if cap is not None and (base is None or base > cap):
             return v.model_copy(update={"gpu_memory_utilization": cap, "gmu_before_spec": base}), True
         return v, False

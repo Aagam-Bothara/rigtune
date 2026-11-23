@@ -248,8 +248,8 @@ TREES: Dict[str, Dict[str, str]] = {
     },
     "sglang-0.5.23": {
         # Arguments moved to srt/arg_groups/fields/*.py; server_args.py keeps add_cli_args (line 351). rigtune reads
-        # server_args.py and arg_groups/*.py, not fields/, and still finds every name through
-        # arg_groups/field_order.py's POSITIONAL_FIELD_ORDER (lines 146, 300, 359, 362, 366) and the hooks.
+        # server_args.py and every arg_groups/**/*.py, and finds the names through arg_groups/field_order.py's
+        # POSITIONAL_FIELD_ORDER (lines 146, 300, 359, 362, 366), the fields and the hooks.
         "srt/server_args.py": "    def add_cli_args(parser: argparse.ArgumentParser):\n",
         "srt/arg_groups/field_order.py": (
             "    \"enable_cache_report\",\n"
@@ -262,7 +262,11 @@ TREES: Dict[str, Dict[str, str]] = {
             _SGLANG_0_5_23_NEXTN + "    if cfg.speculative_algorithm == \"STANDALONE\" and attn_dp_enabled_of(\n",
         # line 480
         "srt/arg_groups/attention_hook.py": "            if _algo not in (\"DSPARK\", \"DFLASH\") or verify not in (\n",
-        "srt/arg_groups/fields/serving.py": "    enable_cache_report: A[\n",  # line 196, not read by rigtune
+        "srt/arg_groups/fields/serving.py": "    enable_cache_report: A[\n",  # line 196
+        # lines 70, 78: the block drafters' flags (sglang.SGLANG_BLOCK_FLAGS)
+        "srt/arg_groups/fields/spec.py": "    speculative_dflash_block_size: A[\n    speculative_dspark_block_size: A[\n",
+        # added 24 Oct 2026: the draft pool budgeted from its own geometry (sglang.SGLANG_DRAFT_POOL_MARKER)
+        "srt/mem_cache/draft_kv_budget.py": "def draft_kv_bytes_per_token(\n",
         "srt/environ.py": _SGLANG_ENVIRON,  # lines 828, 830
         "srt/entrypoints/openai/protocol.py": _SGLANG_PROTOCOL,  # line 392
         "srt/configs/model_config.py": _SGLANG_0_5_23_MTP_REWRITE,
@@ -288,7 +292,7 @@ def _clear() -> None:
     for fn in (vl._vllm_package, vl._serve_cli, vl._attention_backend_flag, vl._prompt_tokens_details_flag,
                vl._language_model_only_flag, vl._offload_features, vl._mtp_archs, vl._own_head, vl._vllm_python,
                vl._suffix_refusal, vl._arctic_report, vl._engine_facts, sg._engine_facts,
-               vl._offload_counts_every_group_as_draft, sg.sglang_spec_methods,
+               vl._offload_counts_every_group_as_draft, sg.sglang_spec_methods, sg.sglang_block_drafters,
                sg._cache_report_flag, sg._hicache_features, sg._tier_details_flag, sg.sglang_mtp_archs,
                sg._own_head):
         if hasattr(fn, "cache_clear"):  # a test may have put a plain function in its place

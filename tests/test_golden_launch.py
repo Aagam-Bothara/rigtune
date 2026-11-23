@@ -90,11 +90,16 @@ def test_each_releases_tree_answers_every_feature_check_as_the_release_does(rele
         assert _answers(engine) == RELEASE_ANSWERS[engine]
 
 
-def test_sglang_0523_answers_through_its_field_order_not_its_argument_definitions(tmp_path):
-    """0.5.23 moved the argument definitions to srt/arg_groups/fields/, which rigtune does not read; its answers
-    come from arg_groups/field_order.py and the hooks. Without those files nothing would be found."""
+def test_sglang_0523_answers_through_its_field_definitions_and_field_order(tmp_path):
+    """0.5.23 moved the argument definitions to srt/arg_groups/fields/; rigtune reads them (since the block drafters'
+    flags are declared only there and in field_order.py) beside arg_groups/field_order.py and the hooks. Either names
+    the cache-report flag; without both, nothing is found."""
     with installed("sglang", "0.5.23", tmp_path) as pkg:
         (pkg / "srt" / "arg_groups" / "field_order.py").unlink()
         sg._cache_report_flag.cache_clear()
         sg._hicache_features.cache_clear()
-        assert not sg._cache_report_flag() and sg._hicache_features() == frozenset()
+        assert sg._cache_report_flag()  # fields/serving.py line 196
+        assert sg._hicache_features() == frozenset()  # declared in field_order.py and the hooks only, in this tree
+        (pkg / "srt" / "arg_groups" / "fields" / "serving.py").unlink()
+        sg._cache_report_flag.cache_clear()
+        assert not sg._cache_report_flag()

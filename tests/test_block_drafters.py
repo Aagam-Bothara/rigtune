@@ -51,13 +51,14 @@ def test_a_drafter_without_a_block_size_drafts_an_unknown_number():
     assert speculative.drafter_tokens(_config(DFLASH), "eagle3") is None
 
 
-def test_the_launch_names_the_method_and_sglang_refuses_it_for_now():
+def test_the_launch_names_the_method_on_both_engines_at_one_k():
     spec = speculative.block_drafter("dflash", DFLASH, 15)
     assert speculative.parse(spec) == ("dflash", DFLASH, 15)
     assert speculative.vllm_config(spec) == {"method": "dflash", "model": DFLASH, "num_speculative_tokens": 15}
     assert speculative.vllm_config(f"dspark:{DSPARK}:7")["method"] == "dspark"
-    with pytest.raises(ValueError, match="not written yet"):
-        speculative.sglang_config(spec)
+    # SGLang counts the block: the last accepted token and the 15 drafts (tests/test_sglang_block_drafters.py).
+    assert speculative.sglang_config(spec)[:6] == ["--speculative-algorithm", "DFLASH", "--speculative-draft-model-path",
+                                                   DFLASH, "--speculative-num-draft-tokens", "16"]
     assert speculative.vllm_supports_block_drafter("dflash", "0.33.0")
     assert not speculative.vllm_supports_block_drafter("dflash", "0.29.0")  # not checked before 0.33
 

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from rigtune.models import ArchInfo, ModelSpec, PreparedModel
 
@@ -258,6 +258,40 @@ def find_drafter(spec: ModelSpec, target: ArchInfo, *, engine: str, kind: str, h
     if best is None and not found.complete and not passed_over:  # a refused drafter is no failed lookup
         raise HubLookupError("the search was incomplete and found no head: " + "; ".join(found.notes))
     return best
+
+
+def record_block_drafters(prepared: PreparedModel, engine: str, kinds: Iterable[str],
+                          release: Optional[str] = None) -> List[str]:
+    """Record in `prepared` the best drafter of each of `kinds` ("dflash", "dspark") the Hub search found that `engine`
+    loads and that fits the model (find_drafter), with what the backends plan and launch it by: its k and lookahead
+    (drafter_tokens: from its block size, the same k on both engines), its size, its KV per token, and the commit
+    whose config was checked. Returns notes saying where each came from, or why none was recorded."""
+    notes: List[str] = []
+    for kind in kinds:
+        try:
+            cand = find_drafter(prepared.spec, prepared.arch, engine=engine, kind=kind, hub_off=prepared.hub_off,
+                                release=release, notes=notes)
+        except Exception as exc:
+            notes.append(f"{engine}: no {kind} drafter tried, the Hub could not be asked ({exc})")
+            continue
+        if cand is None:
+            continue
+        tokens = drafter_tokens(cand.config, kind)
+        if tokens is None:
+            notes.append(f"{engine}: {kind} drafter {cand.repo} not tried: its config states no block size, so the "
+                         "number of tokens it drafts is unknown")
+            continue
+        prepared.spec_repos[kind] = cand.repo
+        if cand.size_bytes:
+            prepared.spec_bytes[cand.repo] = int(cand.size_bytes)
+        prepared.spec_facts[cand.repo] = {"k": tokens[0], "lookahead": tokens[1],
+                                          "kv_elements": drafter_kv_elements(cand.config),
+                                          "needs_v2": drafter_needs_v2(cand.config)}
+        if cand.sha:  # launched at the commit whose config was checked
+            prepared.spec_revisions[cand.repo] = cand.sha
+        notes.append(f"{engine}: {kind} drafter {cand.repo} found by a Hub search, drafting {tokens[0]} tokens a step "
+                     "(its block size); it has not been run by rigtune before")
+    return notes
 
 
 def find_eagle3_head(spec: ModelSpec, target: ArchInfo, *, engine: str, hub: Any = None,
@@ -713,7 +747,20 @@ def sglang_config(spec: str, model_path: Optional[str] = None, revision: Optiona
         return out + ["--speculative-num-steps", str(k), "--speculative-eagle-topk", "1",
                       "--speculative-num-draft-tokens", str(k + 1)]
     if kind in BLOCK_DRAFTERS:
-        raise ValueError(f"SGLang's {kind} launch is not written yet")
+        # SGLang 0.5.23 forces one step and top-k 1 for both (arg_groups/speculative_hook.py lines 334-366, 757-789).
+        # A DFlash block holds the last accepted token and k drafts, so its draft tokens are k + 1, the checkpoint's
+        # block size (lines 368-425; dflash_worker_v2.py 2534-2535); a DSpark block size is the tokens it drafts,
+        # gamma, and SGLang adds one (fields/spec.py 78-81; speculative_hook.py 824-839, which refuses a draft-token
+        # count other than gamma + 1). Both stated, though SGLang would read them from the checkpoint, so the
+        # launch says what was planned. The same k as vLLM's: tokens drafted a step (drafter_tokens).
+        out = ["--speculative-algorithm", kind.upper(), "--speculative-draft-model-path", draft_path or str(model_id)]
+        out += (["--speculative-num-draft-tokens", str(k + 1)] if kind == "dflash"
+                else ["--speculative-dspark-block-size", str(k)])
+        if draft_revision:
+            out += ["--speculative-draft-model-revision", draft_revision]
+        if draft_quantization:
+            out += ["--speculative-draft-model-quantization", draft_quantization]
+        return out
     if kind in SECOND_MODEL:
         out = ["--speculative-algorithm", "NEXTN" if kind == "assist" else "EAGLE3" if kind == "eagle3" else "STANDALONE",
                "--speculative-draft-model-path", draft_path or str(model_id), "--speculative-num-steps", str(k),

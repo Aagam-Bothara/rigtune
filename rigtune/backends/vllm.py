@@ -1082,37 +1082,12 @@ class VllmBackend(BaseBackend):
     def _block_drafter_notes(self, prepared: PreparedModel, unreachable: bool,
                              release: Optional[str] = None) -> List[str]:
         """Record the best DFlash and DSpark drafter the Hub search found for this model that vLLM loads and that fits
-        it (speculative.find_drafter), with what _drafter_variants plans it by: its k and lookahead (from its block
-        size), its size, and its KV per token. Notes say where it came from, or why none was recorded. When the
-        search could not be made (`unreachable`, already noted for EAGLE3), nothing more is asked or said."""
-        notes: List[str] = []
-        for kind in speculative.BLOCK_DRAFTERS:
-            if unreachable or not speculative.vllm_supports_block_drafter(kind):
-                continue
-            try:
-                cand = speculative.find_drafter(prepared.spec, prepared.arch, engine=self.name, kind=kind,
-                                                hub_off=prepared.hub_off, release=release, notes=notes)
-            except Exception as exc:
-                notes.append(f"vllm: no {kind} drafter tried, the Hub could not be asked ({exc})")
-                continue
-            if cand is None:
-                continue
-            tokens = speculative.drafter_tokens(cand.config, kind)
-            if tokens is None:
-                notes.append(f"vllm: {kind} drafter {cand.repo} not tried: its config states no block size, so the "
-                             "number of tokens it drafts is unknown")
-                continue
-            prepared.spec_repos[kind] = cand.repo
-            if cand.size_bytes:
-                prepared.spec_bytes[cand.repo] = int(cand.size_bytes)
-            prepared.spec_facts[cand.repo] = {"k": tokens[0], "lookahead": tokens[1],
-                                              "kv_elements": speculative.drafter_kv_elements(cand.config),
-                                              "needs_v2": speculative.drafter_needs_v2(cand.config)}
-            if cand.sha:  # launched at the commit whose config was checked
-                prepared.spec_revisions[cand.repo] = cand.sha
-            notes.append(f"vllm: {kind} drafter {cand.repo} found by a Hub search, drafting {tokens[0]} tokens a step "
-                         "(its block size); it has not been run by rigtune before")
-        return notes
+        it (speculative.record_block_drafters). When the search could not be made (`unreachable`, already noted for
+        EAGLE3), nothing more is asked or said."""
+        if unreachable:
+            return []
+        kinds = [k for k in speculative.BLOCK_DRAFTERS if speculative.vllm_supports_block_drafter(k)]
+        return speculative.record_block_drafters(prepared, self.name, kinds, release)
 
     def _own_head_notes(self, prepared: PreparedModel) -> List[str]:
         """Record the checkpoint's own MTP head when it holds one and this vLLM may load it; the notes say why not, or
