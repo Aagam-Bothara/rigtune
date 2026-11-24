@@ -1,0 +1,10 @@
+{
+ "rows": [
+  {
+   "label": "inkling-recipe",
+   "kind": "expert",
+   "source": "vLLM's own recipe for thinkingmachines/Inkling-2-Mini (recipes/models/thinkingmachines/Inkling-2-Mini.yaml, read 23 Nov 2026): --tensor-parallel-size 1, the bundled DSpark drafter at 7 tokens with probabilistic drafting, --max-model-len 262144 on H100; every other setting vLLM's default on this card (max_num_seqs 1,024 on an H100: engine/arg_utils.py, so stated; max_num_batched_tokens 8,192 and the memory fraction left unset). The reasoning parser it adds changes how replies are split, not what is generated or how fast.",
+   "config": {"backend": "vllm", "quant": "ckpt-nvfp4", "ctx": 262144, "batch": 1024, "spec_decode": "dspark:7"}
+  }
+ ]
+}

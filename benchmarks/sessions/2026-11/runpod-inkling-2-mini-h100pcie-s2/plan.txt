@@ -1,0 +1,31 @@
+[02:32:39] INFO     asking vllm's own Python what it offers (once per install,  
+                    up to 120 s): /root/v/bin/python                            
+[02:33:02] WARNING  vllm: no EAGLE3 head tried, the Hub could not be asked (no  
+                    drafter search kept for thinkingmachines/Inkling-2-Mini; the
+                    Hub is off, so none was made)                               
+           INFO     vllm: 16/27 configs feasible                                
+candidates: vllm   budget: 79.2 GiB   workload: long-concurrent: 128 prompts x 
+~8192 prefill x 256 decode, concurrency 8/32/64, TTFT ceiling 20000 ms, TPOT 
+ceiling 150 ms
+                                             vllm: 16/27 feasible               
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┳━━━
+┃                                          ┃   weights ┃        ┃ workspace ┃   
+┃ config                                   ┃       GiB ┃ kv GiB ┃       GiB ┃   
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━╇━━━
+│ vllm/ckpt-nvfp4/ctx16384/b16/gmu0.80     │      8.96 │  19.53 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx16384/b64/gmu0.80     │      8.96 │  34.62 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx32768/b16/gmu0.80     │      8.96 │  21.53 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx32768/b64/gmu0.80     │      8.96 │  42.62 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx65536/b16/gmu0.80     │      8.96 │  25.53 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx16384/b16/gmu0.90     │      8.96 │  19.53 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx16384/b64/gmu0.90     │      8.96 │  34.62 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx32768/b16/gmu0.90     │      8.96 │  21.53 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx32768/b64/gmu0.90     │      8.96 │  42.62 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx65536/b16/gmu0.90     │      8.96 │  25.53 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx16384/b16/gmu0.95     │      8.96 │  19.53 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx16384/b64/gmu0.95     │      8.96 │  34.62 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx32768/b16/gmu0.95     │      8.96 │  21.53 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx32768/b64/gmu0.95     │      8.96 │  42.62 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx65536/b16/gmu0.95     │      8.96 │  25.53 │      1.50 │   
+│ vllm/ckpt-nvfp4/ctx65536/b64/gmu0.95     │      8.96 │  58.62 │      1.50 │   
+└──────────────────────────────────────────┴───────────┴────────┴───────────┴───
