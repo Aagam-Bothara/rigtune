@@ -333,6 +333,8 @@ def sglang_drafter_layers(cfg: Config, model: PreparedModel) -> int:
     planned as that many of the target's full-attention layers, as vLLM's is (vllm_drafter_layers)."""
     from rigtune.backends.vllm import vllm_drafter_layers
 
+    if speculative.own_drafter(cfg.spec_decode):  # vLLM's 0 for Inkling 2's own is its rule's, not SGLang's
+        return model.arch.own_drafter_layers
     return vllm_drafter_layers(cfg, model)
 
 

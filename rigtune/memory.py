@@ -54,6 +54,11 @@ class HybridKV:
     swa_extra_tokens: int = 0  # sliding tokens held once across the batch (vLLM: scheduled, not yet settled)
     sliding_cap: Optional[int] = None  # the most sliding tokens one sequence can hold, in-flight ones included
     min_bytes: int = 0  # the cache the engine needs before it starts at all; the plan is never below it
+    # Bytes every running sequence holds whatever its length (vLLM main's blocks for Inkling 2's conv states and its
+    # drafter's window), counted once per sequence of cfg.batch; and bytes held once across the batch (the conv
+    # states' in-flight tokens).
+    request_bytes: int = 0
+    shared_bytes: int = 0
 
 
 def _round_up(n: float, block: int) -> int:
@@ -101,7 +106,7 @@ def kv_cache_bytes(model: PreparedModel, cfg: Config, kv_tokens: int,
             # swa_tokens = full_tokens x swa_full_tokens_ratio, so the full pool must also cover swa / ratio.
             full_tokens = max(full_tokens, math.ceil(swa_tokens / hybrid.swa_full_tokens_ratio))
             swa_tokens = int(full_tokens * hybrid.swa_full_tokens_ratio)
-    kv = int(full_bpt * full_tokens + sliding_bpt * swa_tokens)
+    kv = int(full_bpt * full_tokens + sliding_bpt * swa_tokens) + hybrid.request_bytes * seqs + hybrid.shared_bytes
     # Recurrent state keeps its own dtype (conv: model dtype, temporal: mamba_ssm_dtype); --kv-cache-dtype does
     # not shrink it in either engine.
     per_state = hybrid.state_bytes if hybrid.state_bytes is not None else arch.linear_state_bytes
@@ -304,7 +309,8 @@ def working_set_bytes(model: PreparedModel, cfg: Config, tokens: int, sessions: 
     hybrid = mm.hybrid_for(held, model.arch)
     if hybrid is not None:
         hybrid = dataclasses.replace(hybrid, min_bytes=0, state_slots=held.batch, state_share=None,
-                                     swa_full_tokens_ratio=None, swa_pool_tokens=None)
+                                     swa_full_tokens_ratio=None, swa_pool_tokens=None,
+                                     shared_bytes=0)  # in-flight tokens are a running batch's, not a cached session's
     return kv_cache_bytes(model, held, max(0, int(tokens)), hybrid)
 
 

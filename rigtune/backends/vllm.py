@@ -184,6 +184,101 @@ def vllm_hybrid_kv(cfg: Config, arch: ArchInfo, default_batched_tokens: int = 20
     )
 
 
+# vLLM main's cache for Inkling 2 (read and fitted at 5a215c27fd76, the nightly of the first H100 session, 23-24 Nov
+# 2026; it reproduced that session's five start-ups to the logged token count): one block id spans a group's layers at
+# a 256 KiB page (attention 4 KiB a token at block 64, the conv states 16 KiB a token at block 16); groups of 9 layers
+# with the drafter (8 target full + its full layer; 40 sliding + 5 padding = 5 groups; 48 conv + 6 padding = 6; its 2
+# sliding + 7 padding = 1), of 8 without (kv_cache_planning._get_kv_cache_groups_uniform_page_size). A request holds
+# cdiv(L, 64) full blocks, cdiv(min(1023 + in-flight, L), 64) + 1 per sliding group and cdiv(min(3 + in-flight, L), 16) +
+# 1 per conv group (SlidingWindowManager.max_admission_blocks, single_type_kv_cache_manager.py 1099-1124; the conv
+# state's spec in models/inkling/nvidia/sconv_swa_attn.py 154-208), and the drafter's sliding group at most
+# (batches + 1) x (cdiv(1024 + 7 x batches + 8, 64) + 1) (DFlashSlidingWindowManager, 1384-1409), in-flight being
+# 2 x max_num_batched_tokens with async scheduling. The recipe's 11,671 blocks a request at 262,144 tokens: 4,096 + 5 x
+# 273 + 6 x 1,026 + 54, the conv states 53% of it. That is a request's admission bound, what vLLM checks one request at
+# max_model_len against before it starts; the in-flight tokens in it are at most 2 x the budget across all running
+# requests together (they are tokens scheduled and not yet settled), so a batch is planned with them once, as vLLM
+# 0.33's sliding layers are (vllm_hybrid_kv): each request's windows in its blocks, the in-flight tokens once. On the
+# H100 NVL, 64 concurrent Dolly requests ran in a 49 GiB pool that the per-request bound would fill with four.
+INKLING2_PAGE = 256 * 1024
+INKLING2_ATTN_BLOCK = 64
+INKLING2_CONV_BLOCK = 16
+
+
+def inkling2_rule_applies(cfg: Config, arch: ArchInfo) -> bool:
+    """Where vllm_inkling2_kv's rule was fitted: an Inkling 2 target with a bf16 KV cache on one GPU. Elsewhere vLLM
+    lays the cache out otherwise (a quantized cache halves the attention page; tensor parallelism divides it but not
+    the conv states, which keep every head's hidden width, nvidia/model.py replicate_hidden), so config_refusal keeps
+    such a configuration from being tried rather than planned wrong."""
+    return (arch.architecture.startswith("Inkling2") and cfg.kv_dtype in ("auto", "bfloat16")
+            and arch.torch_dtype in ("bfloat16", "bf16") and cfg.tp <= 1)
+
+
+def vllm_inkling2_kv(cfg: Config, arch: ArchInfo, default_batched_tokens: int) -> Optional[HybridKV]:
+    """Inkling 2's plan on vLLM main: its full group by tokens; its sliding groups by each request's window and the
+    in-flight tokens once (the sliding machinery, 45 padded layers at block 64); its conv and drafter groups by the
+    blocks each request's window takes, plus the conv states' in-flight tokens once; and the admission bound of one
+    request at the context as the start-up minimum. None where the rule was not fitted (inkling2_rule_applies), which
+    config_refusal then keeps from being tried."""
+    if not inkling2_rule_applies(cfg, arch):
+        return None  # refused by config_refusal; the every-layer-full estimate meanwhile
+    own = speculative.own_drafter(cfg.spec_decode)
+    group = 9 if own else 8
+    block_bytes = group * INKLING2_PAGE
+    in_flight = VLLM_CONCURRENT_BATCHES * (cfg.prefill_budget or default_batched_tokens)
+    window = arch.sliding_window or 1024
+    ctx = cfg.ctx
+    sliding_groups = _cdiv(arch.sliding_layers, group)
+    conv_groups = _cdiv(arch.num_layers + arch.loop_extra_layers, group)  # one conv state per layer visit
+    # The admission bound (start-up check: one request at max_model_len).
+    admission = sliding_groups * (_cdiv(min(window - 1 + in_flight, ctx), INKLING2_ATTN_BLOCK) + 1)
+    admission += conv_groups * (_cdiv(min(INKLING2_CONV_KERNEL - 1 + in_flight, ctx), INKLING2_CONV_BLOCK) + 1)
+    # A running request's own: each conv group's window in its blocks, and the drafter's sliding window.
+    steady = conv_groups * (_cdiv(INKLING2_CONV_KERNEL - 1, INKLING2_CONV_BLOCK) + 1)
+    if own:
+        k = speculative.parse(cfg.spec_decode)[2]
+        look, steps = k + 1, VLLM_CONCURRENT_BATCHES
+        drafter = min(_cdiv(min(window - 1 + in_flight + look, ctx), INKLING2_ATTN_BLOCK) + 1,
+                      (steps + 1) * (_cdiv(window + k * steps + look, INKLING2_ATTN_BLOCK) + 1))
+        admission += drafter
+        steady += min(drafter, _cdiv(min(window + look, ctx), INKLING2_ATTN_BLOCK) + 1)
+        # Each step backs the main model's tokens plus the lookahead in every group (kv_cache_manager.allocate_slots,
+        # lines 562-564), so a drafting request's window spans 1023 + 2 x 8 + 8 tokens: one sliding block more than
+        # the window and its straddle block, per sliding group.
+        steady += sliding_groups
+    conv_token = block_bytes // INKLING2_CONV_BLOCK  # a conv group's bytes a token: 9 (8) layers x 16 KiB
+    return HybridKV(
+        state_slots=0,
+        full_block=INKLING2_ATTN_BLOCK,
+        full_layers=group,  # the full group's pages: 8 target layers (+ the drafter's), one block id for all
+        sliding_block=INKLING2_ATTN_BLOCK,
+        sliding_layers=sliding_groups * group,  # 45 layer pages
+        swa_extra_tokens=in_flight,
+        sliding_cap=(_cdiv(min(window - 1 + in_flight, ctx), INKLING2_ATTN_BLOCK) + 1) * INKLING2_ATTN_BLOCK,
+        request_bytes=steady * block_bytes,
+        shared_bytes=conv_groups * min(in_flight, ctx * max(cfg.batch, 1)) * conv_token,
+        min_bytes=(_cdiv(ctx, INKLING2_ATTN_BLOCK) + admission + 1) * block_bytes,
+    )
+
+
+INKLING2_CONV_KERNEL = 4  # sconv_kernel_size: the conv state's window (sconv_swa_attn.py)
+
+
+def inkling2_warmup_reserve(cfg: Config, arch: ArchInfo) -> int:
+    """What vLLM main keeps free of the KV pool after Inkling 2's warm-up (extensible_kv_cache.measure_kv_cache_bytes,
+    lines 599-625: 0.75 x the warm-up peak + max(peak, torch's growth)), planned as workspace. The peak follows the
+    widest decode step, min(max_num_seqs x (k + 1), max_num_batched_tokens) tokens through the sampler, 6.33 B x
+    vocabulary a token (1.186 GiB per 1,000 at Inkling-2-Mini's 201,024) plus 0.32 GiB: a fit to two start-ups (10.03 GiB
+    at 8,192 tokens, 2.75 at 2,048; torch's growth, 3.68 GiB, held where it is the larger), so an estimate, not a rule. The recipe's 1,024 x 8 = 8,192-token step held back 17.6 GiB of an 80 GB
+    card's pool; rigtune's batch of 64 at k 7, about 4.4 GiB."""
+    k = speculative.parse(cfg.spec_decode)[2] if speculative.own_drafter(cfg.spec_decode) else 0
+    tokens = min(cfg.batch * (k + 1), cfg.prefill_budget or 8192)
+    # Never below the largest peak measured at a small step (3.13 GiB, logged to two decimals, without the drafter at
+    # 1,024 tokens; the fit gives 1.5), taken as 3.14: the reserve is then the measured one or above it (17.55 GiB where
+    # 17.55 was held; 6.04 where 5.74, 6.03 and 5.13 were), never below.
+    peak = max(int(tokens * (arch.vocab_size or 0) * 6.33) + int(0.32 * GiB), int(3.14 * GiB))
+    return int(0.75 * peak + max(peak, int(3.68 * GiB)))
+
+
 def vllm_hybrid_kv_any_depth(cfg: Config, arch: ArchInfo, default_batched_tokens: int = 2048) -> HybridKV:
     """vllm_hybrid_kv, with an MTP setting planned at every head depth vLLM might build, from one to the checkpoint's
     count, keeping the largest of each field that changes with the depth (full-layer and sliding-layer pages, a state
@@ -230,8 +325,11 @@ def vllm_drafter_layers(cfg: Config, model: PreparedModel) -> int:
     bound (planning the drafter's groups apart is left to do). Its sliding layers are counted as full. A drafter whose
     size per token is unknown plans none, and is not offered (_drafter_variants)."""
     if speculative.own_drafter(cfg.spec_decode):
-        # The checkpoint's own (Inkling 2's): its layers' KV heads and size are the target's (mtp_config: 8 x 128),
-        # one full and two sliding (models/inkling2/nvidia/dspark.py lines 118-173), all planned as full.
+        # The checkpoint's own (Inkling 2's): its three layers are in vllm_inkling2_kv's groups (its full layer in
+        # the full group, its two sliding ones a group of their own); planned as full layers only where that rule
+        # does not apply (a KV dtype it was not fitted at).
+        if inkling2_rule_applies(cfg, model.arch):
+            return 0
         return model.arch.own_drafter_layers
     found = block_drafter(cfg, model)
     if found is None:
@@ -253,6 +351,7 @@ def vllm_mtp_extra_weights(cfg: Config, model: PreparedModel) -> int:
     if (speculative.own_head(cfg.spec_decode) and os.path.isdir(model.spec.hf_id)
             and model.arch.checkpoint_bytes is None):
         return int(model.spec_bytes.get(speculative.MTP_KEY) or 0)
+    reserve = inkling2_warmup_reserve(cfg, model.arch) if model.arch.architecture.startswith("Inkling2") else 0
     if speculative.own_drafter(cfg.spec_decode):
         # Inkling 2's: its weights (a file the index does not map), the matrix vLLM folds from them at load, and with
         # probabilistic drafting its draft_logits of max_num_reqs x k x vocabulary in bf16, allocated in the
@@ -260,12 +359,12 @@ def vllm_mtp_extra_weights(cfg: Config, model: PreparedModel) -> int:
         # 179-191; models/inkling2/speculator.py lines 38-40): 180 MB at 64 requests, 720 MB at 256.
         arch, k = model.arch, speculative.parse(cfg.spec_decode)[2]
         logits = cfg.batch * k * (arch.vocab_size or 0) * 2 if _own_drafter_sample() else 0
-        return int((arch.own_drafter_bytes or 0) + arch.own_drafter_fold_bytes + logits)
+        return int((arch.own_drafter_bytes or 0) + arch.own_drafter_fold_bytes + logits + reserve)
     found = block_drafter(cfg, model)
     if found is not None:  # loaded inside the target's load_model, before the KV pool is sized (gpu_worker.py)
-        return int(model.spec_bytes.get(found[0]) or 0)
+        return int(model.spec_bytes.get(found[0]) or 0) + reserve
     from rigtune.pairing import extra_weights
-    return extra_weights(cfg, model)
+    return extra_weights(cfg, model) + reserve
 
 
 def vllm_registry_archs() -> Optional[set]:
@@ -775,9 +874,6 @@ def vllm_full_kv_reason(arch: ArchInfo) -> Optional[str]:
     window and block 4 whose 16 KiB a token is not divided by tensor parallelism (inkling/nvidia/sconv_swa_attn.py
     lines 122-208), and admits a request against about 768 KiB per in-flight token of it (about 3 GiB at the default
     batched tokens). Until those are planned, the every-layer-full estimate (48 caches), which is larger, stands."""
-    if arch.architecture.startswith("Inkling2"):
-        return ("vLLM keeps a conv state for every layer and loop pass of Inkling 2 beside its attention caches, which "
-                "rigtune does not plan yet; planned as every layer full instead, which is larger")
     return None
 
 
@@ -1074,6 +1170,9 @@ class VllmBackend(BaseBackend):
         return speculative.MTP_KEY in model.spec_repos and cfg.quant not in PREQUANTIZED
 
     def config_refusal(self, cfg: Config, model: PreparedModel) -> Optional[str]:
+        if model.arch.architecture.startswith("Inkling2") and not inkling2_rule_applies(cfg, model.arch):
+            return ("Inkling 2's cache on vLLM main is planned only as it was measured: one GPU with a bf16 KV cache "
+                    "(its conv states do not shrink with tensor parallelism, and a quantized cache changes its pages)")
         if (model.drafts_mode == "verified" and cfg.kv_dtype == AMPERE_FP8_KV
                 and (cfg.spec_decode or "").startswith(("draft:", "assist:"))):
             return "verified pairs excluded from the measured failing fp8_e5m2 FlashInfer combination"
@@ -1223,8 +1322,10 @@ class VllmBackend(BaseBackend):
 
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
         return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "gpu",
-                                      hybrid_fn=lambda cfg, arch: vllm_hybrid_kv_any_depth(
-                                          cfg, arch, vllm_default_batched_tokens(hw)),
+                                      hybrid_fn=lambda cfg, arch: (
+                                          vllm_inkling2_kv(cfg, arch, vllm_default_batched_tokens(hw))
+                                          if arch.architecture.startswith("Inkling2")
+                                          else vllm_hybrid_kv_any_depth(cfg, arch, vllm_default_batched_tokens(hw))),
                                       full_kv_fn=vllm_full_kv_reason,
                                       extra_weights_fn=vllm_mtp_extra_weights,
                                       extra_layers_fn=vllm_drafter_layers)

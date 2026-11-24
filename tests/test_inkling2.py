@@ -55,19 +55,125 @@ def test_sliding_layers_sized_apart_from_the_full_ones_are_not_planned_as_if_ali
     assert arch_from_config(INKLING2).is_hybrid
 
 
-def test_both_engines_plan_it_as_every_layer_full_and_say_why(hw_a100):
+def test_sglang_plans_it_as_every_layer_full_and_says_why(hw_a100):
     from rigtune.backends.sglang import SglangBackend
-    from rigtune.backends.vllm import VllmBackend
 
     arch = arch_from_config(INKLING2)
-    for be, says in ((VllmBackend(), "conv state for every layer and loop pass"), (SglangBackend(), "not modelled")):
-        mm = be.memory_model(hw_a100)
-        reason = mm.full_kv_reason(arch)
-        assert says in reason and "every layer full" in reason
-        assert mm.hybrid_for(Config(backend=be.name, quant="bf16", ctx=4096, batch=16), arch) is None
-    # A family whose rules apply is unchanged.
-    gemma_like = arch.model_copy(update={"architecture": "Gemma4ForConditionalGeneration"})
-    assert VllmBackend().memory_model(hw_a100).full_kv_reason(gemma_like) is None
+    mm = SglangBackend().memory_model(hw_a100)
+    reason = mm.full_kv_reason(arch)
+    assert "not modelled" in reason and "every layer full" in reason
+    assert mm.hybrid_for(Config(backend="sglang", quant="bf16", ctx=4096, batch=16), arch) is None
+
+
+# ---------------------------------------------------------------- vLLM main's cache for it (F3b)
+
+# The first H100 session's five start-ups (benchmarks/sessions/2026-11/runpod-inkling-2-mini-h100nvl; vLLM
+# 5a215c27fd76): vLLM's logged pool blocks, its concurrency at max_model_len, and the blocks a request holds that both
+# give (pool / concurrency), for (spec, budget, max_model_len).
+SESSION_1 = [  # name, spec, budget, max_model_len, pool blocks (logged), concurrency (logged), blocks a request
+    ("recipe", "dspark:7", 8192, 262144, 22480, 1.93, 11671),
+    ("nospec", None, 8192, 262144, 33432, 2.88, 11617),
+    ("budget2048", "dspark:7", 2048, 262144, 28376, 4.65, 6103),
+    ("ctx32k", "dspark:7", 8192, 32768, 22824, 2.82, 8087),
+]
+
+
+@pytest.mark.parametrize("name, spec, budget, ctx, pool, conc, per_request", SESSION_1)
+def test_vllm_plans_it_by_the_rule_that_reproduced_session_1(name, spec, budget, ctx, pool, conc, per_request):
+    arch = arch_from_config(INKLING2)
+    cfg = Config(backend="vllm", quant="ckpt-nvfp4", ctx=ctx, batch=16, gpu_memory_utilization=0.9,
+                 spec_decode=spec, prefill_budget=budget)
+    h = vl.vllm_inkling2_kv(cfg, arch, 8192)
+    block = (9 if spec else 8) * 256 * 1024
+    # One request at the context, plus the null block: what vLLM checks before it starts.
+    assert h.min_bytes == (per_request + 1) * block
+    assert round(pool / per_request, 2) == conc  # the logged concurrency, from the logged pool
+
+
+def test_vllm_plans_a_batch_as_its_tokens_and_its_requests():
+    from rigtune.memory import kv_cache_bytes
+
+    arch, pm = arch_from_config(INKLING2), _prepared()
+    cfg = Config(backend="vllm", quant="ckpt-nvfp4", ctx=4096, batch=64, gpu_memory_utilization=0.9,
+                 spec_decode="dspark:7", prefill_budget=2048)
+    h = vl.vllm_inkling2_kv(cfg, arch, 8192)
+    block = 9 * 256 * 1024
+    # Each request: its conv windows (6 groups x 2 blocks of 16), its drafter window (cdiv(1032, 64) + 1 = 18), and the
+    # sliding block its lookahead adds in each of 5 groups; the in-flight tokens (2 x 2,048) once, in the sliding groups
+    # and the conv groups.
+    assert h.request_bytes == (6 * 2 + 18 + 5) * block
+    assert h.shared_bytes == 6 * 4096 * (block // 16)
+    assert (h.sliding_layers, h.sliding_block, h.swa_extra_tokens) == (45, 64, 4096)
+    kv = kv_cache_bytes(pm, cfg, 64 * 2048, h)  # 2,048 tokens each
+    full = 64 * 2048 * 9 * 4096
+    sliding = (64 * (1024 + 64) + 4096) * 45 * 4096  # a window in 64-token blocks, one more once past it
+    assert kv == full + sliding + 64 * (6 * 2 + 18 + 5) * block + 6 * 4096 * (block // 16)
+    # The start-up minimum stays the admission bound of one request at the context.
+    assert h.min_bytes == ((4096 + 63) // 64 + 5 * 65 + 6 * 257 + 54 + 1) * block
+    # A KV dtype the rule was not fitted at keeps the every-layer-full estimate.
+    assert vl.vllm_inkling2_kv(cfg.model_copy(update={"kv_dtype": "fp8"}), arch, 8192) is None
+
+
+def test_what_the_rule_was_not_fitted_at_is_refused_not_planned_wrong():
+    pm, be = _prepared(), vl.VllmBackend()
+    cfg = Config(backend="vllm", quant="ckpt-nvfp4", ctx=4096, batch=16, gpu_memory_utilization=0.9)
+    assert be.config_refusal(cfg, pm) is None
+    for other in ({"tp": 2}, {"kv_dtype": "fp8"}, {"kv_dtype": "fp8_e5m2"}):
+        assert "only as it was measured" in be.config_refusal(cfg.model_copy(update=other), pm)
+    # Another family is untouched.
+    qwen = pm.model_copy(update={"arch": pm.arch.model_copy(update={"architecture": "Qwen3ForCausalLM"})})
+    assert be.config_refusal(cfg.model_copy(update={"tp": 2}), qwen) is None
+
+
+def test_its_warm_up_reserve_is_added_to_other_drafters_weights_not_in_their_place():
+    pm = _prepared()
+    pm.spec_repos["dspark"] = "someone/inkling2-dspark"
+    pm.spec_bytes["someone/inkling2-dspark"] = 700_000_000
+    cfg = Config(backend="vllm", quant="ckpt-nvfp4", ctx=4096, batch=64, gpu_memory_utilization=0.9,
+                 spec_decode="dspark:someone/inkling2-dspark:7")
+    assert vl.vllm_mtp_extra_weights(cfg, pm) == 700_000_000 + vl.inkling2_warmup_reserve(cfg, pm.arch)
+    plain = cfg.model_copy(update={"spec_decode": None})
+    assert vl.vllm_mtp_extra_weights(plain, pm) == vl.inkling2_warmup_reserve(plain, pm.arch)
+
+
+def test_a_cached_session_does_not_hold_the_in_flight_tokens(hw_a100):
+    from rigtune.memory import kv_cache_bytes, working_set_bytes
+
+    pm, mm = _prepared(), vl.VllmBackend().memory_model(hw_a100)
+    cfg = Config(backend="vllm", quant="ckpt-nvfp4", ctx=4096, batch=16, gpu_memory_utilization=0.9)
+    held = working_set_bytes(pm, cfg, 16 * 2048, 16, mm)
+    running = kv_cache_bytes(pm, cfg, 16 * 2048, mm.hybrid_for(cfg, pm.arch))
+    assert held < running  # the in-flight conv tokens (and the start-up floor) are a running batch's
+
+
+def test_sglang_counts_its_own_drafter_s_layers():
+    from rigtune.backends.sglang import sglang_drafter_layers
+
+    cfg = Config(backend="sglang", quant="ckpt-nvfp4", ctx=4096, batch=16, spec_decode="dspark:7")
+    assert sglang_drafter_layers(cfg, _prepared().model_copy(update={"backend": "sglang"})) == 3
+
+
+def test_vllm_s_memory_model_takes_it_through_the_rule(hw_a100):
+    arch = arch_from_config(INKLING2)
+    mm = vl.VllmBackend().memory_model(hw_a100)
+    cfg = Config(backend="vllm", quant="ckpt-nvfp4", ctx=4096, batch=16, gpu_memory_utilization=0.9)
+    assert mm.full_kv_reason(arch) is None
+    assert mm.hybrid_for(cfg, arch).request_bytes > 0  # vllm_inkling2_kv, not the Gemma-style rules
+
+
+def test_the_warm_up_reserve_is_never_below_session_1_s():
+    arch = arch_from_config(INKLING2)
+    GiB = 1 << 30
+
+    def reserve(batch, spec, budget):
+        return vl.inkling2_warmup_reserve(Config(backend="vllm", quant="ckpt-nvfp4", ctx=262144, batch=batch,
+                                                 spec_decode=spec, prefill_budget=budget), arch) / GiB
+    # Held: the recipe 17.55 GiB (1,024 requests x 8 tokens), budget 2,048 5.74, no drafter 6.03, 32 requests 5.13.
+    assert round(reserve(1024, "dspark:7", 8192), 2) == 17.55
+    assert 5.74 <= reserve(1024, "dspark:7", 2048) <= 6.05  # the 3.14 GiB floor: 6.04 where 5.74 was held
+    assert reserve(1024, None, 8192) >= 6.03 and reserve(32, "dspark:7", 8192) >= 5.13
+    # rigtune's own batch cap is a lever: 64 requests at k 7 hold back a third of the recipe's.
+    assert reserve(64, "dspark:7", 8192) < 17.55 / 2
 
 
 def test_a_loop_s_passes_are_counted_whatever_the_layout():
@@ -139,13 +245,19 @@ def _h100(hw_a100):
 
 def test_vllm_offers_it_at_7_with_the_budget_for_8_tokens_a_request(nightly, hw_a100):
     # An A100's default budget is 2,048 tokens: 512 requests at 8 tokens a step need 4,096, and 7 would give 3,584.
+    # A batch above the card's default budget // 8 raises the budget to batch x 8 (7 would give batch x 7). That many
+    # requests' conv and drafter windows, and the in-flight conv tokens at such a budget, need a card far larger than an
+    # A100: a 4 TiB one, for the budget arithmetic alone.
     pm, be = _prepared(), vl.VllmBackend()
-    base = Config(backend="vllm", quant="ckpt-nvfp4", ctx=512, batch=512, gpu_memory_utilization=0.95)
-    assert vl.vllm_default_batched_tokens(hw_a100) == 2048
+    big = hw_a100.gpus[0].model_copy(update={"vram_total_bytes": 4 << 40, "vram_free_bytes": (4 << 40) - (1 << 30)})
+    hw_a100 = hw_a100.model_copy(update={"gpus": [big]})
+    batch = vl.vllm_default_batched_tokens(hw_a100) // 8 + 64
+    base = Config(backend="vllm", quant="ckpt-nvfp4", ctx=256, batch=batch, gpu_memory_utilization=0.95)
     variants, notes = be._own_drafter_variants(base, pm, hw_a100, True, None)
     assert [v.spec_decode for v in variants] == ["dspark:7"]
-    assert variants[0].prefill_budget == 4096 and "max_num_batched_tokens 4096" in notes[0]
-    assert vl.vllm_drafter_layers(variants[0], pm) == 3  # its layers in the KV plan
+    assert variants[0].prefill_budget == batch * 8 and f"max_num_batched_tokens {batch * 8}" in notes[0]
+    assert vl.vllm_drafter_layers(variants[0], pm) == 0  # its layers are in vllm_inkling2_kv's groups
+    assert vl.vllm_drafter_layers(variants[0].model_copy(update={"kv_dtype": "fp8"}), pm) == 3  # else full layers
     # Not under --speculative on.
     assert be._own_drafter_variants(base, pm, hw_a100, False, None) == ([], [])
 
@@ -156,10 +268,11 @@ def test_its_weights_fold_and_sampled_logits_are_planned(nightly, monkeypatch):
                  spec_decode="dspark:7")
     fold, logits = 201024 * 256 * 2, 64 * 7 * 201024 * 2  # 103 MB; 180 MB at 64 requests
     assert pm.arch.own_drafter_fold_bytes == fold
-    assert vl.vllm_mtp_extra_weights(cfg, pm) == DRAFTER_BYTES + fold + logits
+    warmup = vl.inkling2_warmup_reserve(cfg, pm.arch)
+    assert vl.vllm_mtp_extra_weights(cfg, pm) == DRAFTER_BYTES + fold + logits + warmup
     # A vLLM the probe found without the field drafts greedily: no logits buffer.
     monkeypatch.setattr(vl, "_engine_facts", lambda: EngineFacts(engine="vllm", version="0.35.0", spec_fields=[]))
-    assert vl.vllm_mtp_extra_weights(cfg, pm) == DRAFTER_BYTES + fold
+    assert vl.vllm_mtp_extra_weights(cfg, pm) == DRAFTER_BYTES + fold + warmup
 
 
 def test_a_drafter_of_unknown_size_or_a_quantized_copy_is_not_offered_it(nightly, hw_a100):
