@@ -1,0 +1,28 @@
+{
+ "about": "Why to change a seed (recipe as seed, S5; rigtune.intent). Each rule names the conditions it holds under (as narrow as the measurement behind it), the change it proposes to measure against the seed, why, and the measurement it rests on. A rule proposes a trial; it never decides the pick, which the measurements make. A rule with no evidence is not shipped.",
+ "rules": [
+  {
+   "id": "inkling-short-prompts-token-budget",
+   "when": {"engine": "vllm", "architecture": "Inkling2", "seed_spec": "dspark", "seed_prefill_budget_unset": true,
+            "prefill_tokens_at_most": 2048, "max_users_at_most": 32},
+   "try": {"prefill_budget": 2048, "batch": 256},
+   "because": "on short prompts vLLM sizes Inkling 2's per-request KV reserve by the token budget, not the batch: a budget of 2,048 held 2.4x the KV tokens at the recipe's speed; at that budget vLLM runs at most 2,048 / 8 = 256 requests a step with 7 drafted tokens, so the batch is stated at that",
+   "evidence": "benchmarks/sessions/2026-11/runpod-inkling-2-mini-h100nvl (H100 NVL, vLLM nightly, Dolly prompts, single runs): 1,218,842 KV tokens against 504,926; 229 / 793 / 1,844 tok/s against the warm recipe's 228 / 805 / 1,557 at 1 / 8 / 32 users (2,232 against 2,492 at 64, so not above 32)"
+  },
+  {
+   "id": "qwen35-own-mtp-head-unused",
+   "when": {"engine": "vllm", "architecture": "Qwen3_5", "model_has_mtp_head": true, "seed_spec": "none",
+            "max_users_at_most": 8},
+   "try": {"spec_decode": "mtp:3"},
+   "because": "Qwen3.5 checkpoints ship a multi-token-prediction head trained with the model, which the seed leaves off; drafting 3 tokens with it was most of the largest gain rigtune has measured on one",
+   "evidence": "benchmarks/sessions/2026-11/a100-qwen3.5-9b (A100, vLLM 0.33, 8 users): the pick vllm/bf16/ctx8192/b64/gmu0.95/sd=mtp:3 at 1,067-1,071 tok/s against 565 stock (1.89x), answers certified on all 1,319 GSM8K items; its other settings do not act at 8 users (that session's verdict notes), so the gain is mostly the head"
+  },
+  {
+   "id": "gemma4-suffix-decoding",
+   "when": {"engine": "vllm", "architecture": "Gemma4", "seed_spec": "none", "max_users_at_most": 8},
+   "try": {"spec_decode": "suffix:24"},
+   "because": "suffix decoding drafts from the prompt and the model's earlier output with no second model; on Gemma 4 it was the largest gain measured, on answers that copy from their context",
+   "evidence": "benchmarks/sessions/2026-11/a40-gemma-4-12b (A40, vLLM 0.33, Gemma 4 12B, 8 users): vllm/bf16/ctx8192/b16/gmu0.95/sd=suffix:24 at 996-1,143 tok/s against 175 stock (about 6x, much of it on stock answers that looped to the token limit); answers held on all 1,319 GSM8K items (answer-check/summary.json, bound -0.83 points) though the 300-item verdict there lost 4"
+  }
+ ]
+}

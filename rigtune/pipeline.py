@@ -1050,6 +1050,31 @@ def seed_for(hw: HardwareDescriptor, spec: ModelSpec, plan: "PlanResult", reg: D
     return cfg, head + notes + [f"seed: {n}" for n in seed.notes] + [f"seed measured as {cfg.key()}"]
 
 
+def seed_proposals_for(hw: HardwareDescriptor, plan: "PlanResult", reg: Dict[str, BaseBackend], seed: Optional[Config],
+                       workload: Workload, opts: SearchOptions) -> Tuple[List[Tuple[str, Config, str]], List[str]]:
+    """The intent rules' changes to measure against the seed (rigtune.intent): (rule, config, why) each, and notes on
+    rules that held but were not tried. None without a seed."""
+    if seed is None:
+        return [], []
+    from rigtune.intent import propose
+
+    backend, model = reg[seed.backend], plan.prepared[seed.backend]
+
+    def offered(cfg: Config) -> Optional[List[str]]:
+        if not opts.speculative:
+            return None
+        try:  # what the spec stage itself would offer: --speculative all's methods only under it
+            return [v.spec_decode for v in backend.spec_variants(cfg, model, hw, opts.speculative_all) if v.spec_decode]
+        except Exception as exc:  # as the stages treat it (_offers_more): nothing offered, not a failed calibration
+            logger.debug("no speculation variants for %s: %s", cfg.key(), exc)
+            return []
+
+    gib = hw.gpu.vram_total_bytes / (1 << 30) if hw.gpu else 0.0
+    found, notes = propose(seed, model.arch, gib, workload.prefill_tokens, max(workload.concurrencies, default=0),
+                           offered, refusal=lambda cfg: backend.config_refusal(cfg, model))
+    return [(p.rule, p.config, p.because) for p in found], [f"seed: {n}" for n in notes]
+
+
 def calibrate(
     hw: HardwareDescriptor,
     spec: ModelSpec,
@@ -1168,7 +1193,10 @@ def calibrate(
     from rigtune.spec_length import refine as refine_lengths
 
     seed_cfg, seed_notes = seed_for(hw, spec, plan, reg, opts.seed, opts)
+    proposals, proposal_notes = seed_proposals_for(hw, plan, reg, seed_cfg, workload, opts)
+    seed_notes += proposal_notes
     search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress, seed=seed_cfg,
+                          seed_proposals=proposals,
                           block_failed_pairs=opts.drafts == "verified" or bool(opts.draft),
                           predictor=Predictor(hw), models=plan.prepared, workload=workload,
                           power_points=points, variant_stages=stages, combine=opts.combine,
