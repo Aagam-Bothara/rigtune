@@ -16,7 +16,7 @@ from rigtune.pipeline import default_profile, prepare_and_plan, select
 
 def test_presets_are_sane():
     assert set(WORKLOAD_NAMES) == {"default", "chat", "long-context", "generation", "high-concurrency", "rag",
-                                   "chat-system", "rag-shared", "sharegpt", "extract", "code-edit"}
+                                   "chat-system", "rag-shared", "sharegpt", "extract", "code-edit", "long-concurrent"}
     for name in WORKLOAD_NAMES:
         w = get_workload(name)
         assert w.name == name
@@ -27,6 +27,13 @@ def test_presets_are_sane():
     assert get_workload("default").spec() == Workload().spec()
     with pytest.raises(ValueError):
         get_workload("batch-inference")
+
+
+def test_long_concurrent_holds_many_long_prompts_at_once():
+    w = get_workload("long-concurrent")
+    assert (w.prefill_tokens, w.decode_tokens, w.concurrencies) == (8192, 256, (8, 32, 64))
+    assert w.n_prompts >= 2 * max(w.concurrencies)  # each level sends every user a second prompt
+    assert w.min_ctx > 8192 + 256
 
 
 def test_get_workload_returns_independent_copies():

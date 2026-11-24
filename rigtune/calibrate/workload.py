@@ -9,6 +9,7 @@ Presets (`rigtune serve <model> --workload NAME`):
 | long-context     |  8192   |  256   | 1 / 2 / 4     |  2000 ms     | document Q&A, summarisation     |
 | generation       |   128   | 1024   | 1 / 4 / 8     |   500 ms     | code / story generation         |
 | high-concurrency |   256   |   64   | 32 / 64 / 128 |  1000 ms     | many short requests             |
+| long-concurrent  |  8192   |  256   | 8 / 32 / 64   | 20000 ms     | many users with long prompts    |
 | rag              |  6144   |   64   | 1 / 4 / 8     |  1500 ms     | retrieval-augmented answers     |
 | sharegpt         | ≤1024   | ≤512   | 1 / 8 / 32    |  1000 ms     | real ChatGPT user turns         |
 | extract          | ≤1536   | ≤384   | 1 / 4 / 8     |  1500 ms     | quote sentences from an article |
@@ -370,6 +371,12 @@ _PRESETS: Dict[str, Workload] = {
     "high-concurrency": Workload(
         name="high-concurrency", n_prompts=256, prefill_tokens=256, decode_tokens=64,
         concurrencies=(32, 64, 128), ttft_ceiling_ms=1000.0, tpot_ceiling_ms=150.0,
+    ),
+    # Many users with long prompts at once, where the KV cache's capacity binds rather than a step's time: 64
+    # requests of 8,192 tokens hold half a million tokens of context, and queued prefill sets time to first token.
+    "long-concurrent": Workload(
+        name="long-concurrent", n_prompts=128, prefill_tokens=8192, decode_tokens=256,
+        concurrencies=(8, 32, 64), ttft_ceiling_ms=20000.0, tpot_ceiling_ms=150.0,
     ),
     "rag": Workload(name="rag", prefill_tokens=6144, decode_tokens=64, ttft_ceiling_ms=1500.0),
     # Shared-prefix shapes, where prefix caching decides time to first token.
