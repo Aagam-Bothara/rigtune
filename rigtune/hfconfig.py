@@ -482,9 +482,9 @@ def hub_listing(info: Any) -> Dict[str, Optional[int]]:
     return {getattr(s, "rfilename", ""): getattr(s, "size", None) for s in (getattr(info, "siblings", None) or [])}
 
 
-def snapshot_revision(spec: ModelSpec, cache_dir: Union[str, Path, None] = None) -> Optional[str]:
-    """The commit of the model's snapshot in the local Hugging Face cache, read from the snapshot's own path
-    (.../snapshots/<commit>/config.json). Never asks the Hub. None for a local directory or an uncached model."""
+def snapshot_dir(spec: ModelSpec, cache_dir: Union[str, Path, None] = None) -> Optional[Path]:
+    """The model's snapshot folder in the local Hugging Face cache (.../snapshots/<commit>), found by its config.json.
+    Never asks the Hub. None for a local directory or an uncached model."""
     if os.path.isdir(spec.hf_id):
         return None
     try:
@@ -498,8 +498,15 @@ def snapshot_revision(spec: ModelSpec, cache_dir: Union[str, Path, None] = None)
         return None
     snapshot = Path(path).parent
     if snapshot.parent.name == "snapshots" and _COMMIT.fullmatch(snapshot.name):
-        return snapshot.name
+        return snapshot
     return None
+
+
+def snapshot_revision(spec: ModelSpec, cache_dir: Union[str, Path, None] = None) -> Optional[str]:
+    """The commit of the model's snapshot in the local Hugging Face cache, read from the snapshot's own path
+    (.../snapshots/<commit>/config.json). Never asks the Hub. None for a local directory or an uncached model."""
+    snapshot = snapshot_dir(spec, cache_dir)
+    return snapshot.name if snapshot is not None else None
 
 
 def hub_revision(spec: ModelSpec, token: Optional[str] = None) -> Optional[str]:
@@ -525,33 +532,52 @@ def resolve_revision(spec: ModelSpec, fetch: Optional[Callable[[ModelSpec], Opti
         return None
 
 
+def _from_local_files(arch: ArchInfo, root: Path) -> ArchInfo:
+    """Size a checkpoint, find its own drafter and its ModelOpt quantization from a folder of its files: a local
+    directory, or the cached snapshot of a Hub model the Hub could not be asked about. A file that cannot be read
+    leaves what it would say unknown."""
+    from rigtune.introspect import OWN_DRAFTER_FILE
+
+    arch.checkpoint_bytes = local_checkpoint_bytes(root)
+    try:
+        if arch.own_drafter_tokens and (root / OWN_DRAFTER_FILE).is_file():
+            arch.own_drafter_bytes = (root / OWN_DRAFTER_FILE).stat().st_size
+        has_quant_file = (root / HF_QUANT).is_file()
+    except OSError as exc:  # an unreadable cache folder, or a file gone between the check and the read
+        logger.debug("could not read %s: %s", root, exc)
+        has_quant_file = False
+    if arch.checkpoint_quant is None and has_quant_file:
+        _modelopt_quant(arch, lambda: root / HF_QUANT)
+    if arch.checkpoint_quant is None:  # a quantized one is sized by its files alone (quantized.as_stored)
+        # From the files, like the Hub's count, rather than the config's dense estimate, which leaves out an MoE's
+        # experts and an MTP head: exact from the headers, else the files' size over the config's dtype.
+        from rigtune.pairing import _local_params
+
+        safetensors = sorted(root.glob("*.safetensors"))
+        counted = _local_params(root, safetensors)
+        if counted:
+            arch.num_params = counted
+        elif arch.checkpoint_bytes:
+            by_size = arch.checkpoint_bytes // dtype_bytes(arch.torch_dtype)
+            # .bin files have no header to count from, and their dtype need not be the config's: fp16 files under
+            # a float32 config would halve the count, and the planned weights with it. Never below the estimate.
+            arch.num_params = by_size if safetensors else max(arch.num_params or 0, by_size)
+    return arch
+
+
 def load_arch(spec: ModelSpec, token: Optional[str] = None) -> ArchInfo:
     from rigtune.introspect import OWN_DRAFTER_FILE
 
     arch = arch_from_config(fetch_config(spec, token=token))
     if os.path.isdir(spec.hf_id):
-        root = Path(spec.hf_id)
-        arch.checkpoint_bytes = local_checkpoint_bytes(root)
-        if arch.own_drafter_tokens and (root / OWN_DRAFTER_FILE).is_file():
-            arch.own_drafter_bytes = (root / OWN_DRAFTER_FILE).stat().st_size
-        if arch.checkpoint_quant is None and (root / HF_QUANT).is_file():
-            _modelopt_quant(arch, lambda: root / HF_QUANT)
-        if arch.checkpoint_quant is None:  # a quantized one is sized by its files alone (quantized.as_stored)
-            # From the files, like the Hub's count, rather than the dense estimate above, which leaves out an MoE's
-            # experts and an MTP head: exact from the headers, else the files' size over the config's dtype.
-            from rigtune.pairing import _local_params
-
-            safetensors = sorted(root.glob("*.safetensors"))
-            counted = _local_params(root, safetensors)
-            if counted:
-                arch.num_params = counted
-            elif arch.checkpoint_bytes:
-                by_size = arch.checkpoint_bytes // dtype_bytes(arch.torch_dtype)
-                # .bin files have no header to count from, and their dtype need not be the config's: fp16 files under
-                # a float32 config would halve the count, and the planned weights with it. Never below the estimate.
-                arch.num_params = by_size if safetensors else max(arch.num_params or 0, by_size)
-        return arch
+        return _from_local_files(arch, Path(spec.hf_id))
     exact, arch.checkpoint_bytes, listing = hub_weights(spec, token=token)
+    if not listing:
+        # The Hub did not answer (HF_HUB_OFFLINE, no network): the engines load the cached snapshot, so its files say
+        # what the listing would have, as a local directory's do. No snapshot: the estimate from the config.
+        snapshot = snapshot_dir(spec)
+        if snapshot is not None:
+            return _from_local_files(arch, snapshot)
     if arch.own_drafter_tokens and listing.get(OWN_DRAFTER_FILE):
         arch.own_drafter_bytes = int(listing[OWN_DRAFTER_FILE])
     if exact:

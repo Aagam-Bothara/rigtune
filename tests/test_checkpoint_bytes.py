@@ -241,6 +241,29 @@ def test_a_local_checkpoint_is_counted_from_its_files_mtp_head_included(tmp_path
     assert arch.num_params == 80 and arch.checkpoint_bytes == (tmp_path / "model.safetensors").stat().st_size
 
 
+def test_offline_a_cached_snapshot_is_read_as_a_local_checkpoint_is(monkeypatch, tmp_path):
+    # The Hub not answering (HF_HUB_OFFLINE): its count and listing are gone, the cached snapshot is what the engines
+    # load. Counted from its headers like a local directory, not from the config's estimate (3 billion here).
+    from huggingface_hub import constants
+
+    monkeypatch.setattr("rigtune.hfconfig.hub_weights", lambda spec, token=None: (None, None, {}))
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path))
+    repo = tmp_path / "models--org--model"
+    (repo / "refs").mkdir(parents=True)
+    (repo / "refs" / "main").write_text("c" * 40)
+    snap = repo / "snapshots" / ("c" * 40)
+    snap.mkdir(parents=True)
+    _local(snap)
+    monkeypatch.setattr("rigtune.hfconfig.fetch_config",
+                        lambda spec, token=None: json.loads((snap / "config.json").read_text()))
+    arch = load_arch(ModelSpec(hf_id="org/model"))
+    assert arch.num_params == 80 and arch.checkpoint_bytes == (snap / "model.safetensors").stat().st_size
+    # Nothing cached: the config's estimate, as before.
+    monkeypatch.setattr("rigtune.hfconfig.fetch_config", lambda spec, token=None: LLAMA_3B_CONFIG)
+    other = load_arch(ModelSpec(hf_id="org/other"))
+    assert other.checkpoint_bytes is None and other.num_params > 10**9
+
+
 def test_when_the_headers_cannot_be_counted_the_size_over_the_dtype_stands_in(tmp_path):
     spec = _local(tmp_path)
     (tmp_path / "extra.safetensors").write_bytes(b"not a safetensors file")  # the strict count gives up

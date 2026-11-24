@@ -312,6 +312,39 @@ def test_its_size_is_read_from_the_hub_listing(monkeypatch):
     assert (a.own_drafter_bytes, a.checkpoint_bytes) == (DRAFTER_BYTES, 19_525_870_752)  # not in the index's files
 
 
+def test_offline_its_size_and_drafter_are_read_from_the_cached_snapshot(monkeypatch, tmp_path):
+    # Session 2 (HF_HUB_OFFLINE=1, the snapshot cached): the Hub did not answer, and the plan sized the weights from
+    # the parameter count (8.96 GiB against the 18.24 GiB vLLM loaded) and offered no DSpark drafter.
+    from huggingface_hub import constants
+
+    from rigtune import hfconfig
+
+    monkeypatch.setattr(hfconfig, "fetch_config", lambda spec, token=None: INKLING2)
+    monkeypatch.setattr(hfconfig, "hub_weights", lambda spec, token=None: (None, None, {}))  # what an offline Hub gives
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path))
+    repo = tmp_path / "models--thinkingmachines--Inkling-2-Mini"
+    snap = repo / "snapshots" / ("7a" * 20)
+    snap.mkdir(parents=True)
+    (repo / "refs").mkdir()
+    (repo / "refs" / "main").write_text("7a" * 20)
+    (snap / "config.json").write_text(json.dumps(INKLING2))
+    spec = ModelSpec(hf_id="thinkingmachines/Inkling-2-Mini")
+    # Only config.json cached: nothing to size, as before.
+    a = hfconfig.load_arch(spec)
+    assert (a.checkpoint_bytes, a.own_drafter_bytes) == (None, None)
+    # The whole snapshot: the index's shards and the drafter's own file beside them.
+    (snap / "model-00001-of-00002.safetensors").write_bytes(b"x" * 300)
+    (snap / "model-00002-of-00002.safetensors").write_bytes(b"x" * 200)
+    (snap / "mtp.safetensors").write_bytes(b"x" * 64)
+    (snap / "model.safetensors.index.json").write_text(json.dumps(
+        {"weight_map": {"a": "model-00001-of-00002.safetensors", "b": "model-00002-of-00002.safetensors"}}))
+    a = hfconfig.load_arch(spec)
+    assert (a.checkpoint_bytes, a.own_drafter_bytes) == (500, 64)
+    # A shard still downloading leaves the size unknown, never a partial sum.
+    (snap / "model-00002-of-00002.safetensors").unlink()
+    assert hfconfig.load_arch(spec).checkpoint_bytes is None
+
+
 def test_vllm_without_the_conversion_is_not_offered_it(hw_a100, monkeypatch):
     monkeypatch.setattr(vl, "_vllm_runs_own_drafter", lambda: False)
     base = Config(backend="vllm", quant="ckpt-nvfp4", ctx=4096, batch=16, gpu_memory_utilization=0.9)
