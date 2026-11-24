@@ -390,6 +390,26 @@ def _pass_through(seed: Seed, name: str, value: Any) -> None:
     seed.notes.append(f"--{name} is passed through unchanged, not tuned")
 
 
+RECIPE = "recipe"  # --seed recipe: the shipped recipe for this model, engine and GPU (data/recipes.json)
+
+
+def recipe_for(model: str, engines: List[str], gpu_name: str) -> Optional[Tuple[str, str]]:
+    """(command, where it was read) of the shipped recipe for `model` on one of `engines`, in the file's order,
+    the first whose `gpus` (if any) names part of this GPU's name; None when none applies."""
+    from importlib import resources
+
+    data = json.loads(resources.files("rigtune").joinpath("data", "recipes.json").read_text(encoding="utf-8"))
+    name = gpu_name.lower()
+    mig = " mig " in f" {name} "  # a MIG slice is named after its card but has a fraction of its memory
+    for r in data["recipes"]:
+        if r["model"] != model or r["engine"] not in engines:
+            continue
+        if r.get("gpus") and (mig or not any(g in name for g in r["gpus"])):
+            continue
+        return r["command"], r["source"]
+    return None
+
+
 def seed_config(seed: Seed, hw: Any, model: Any, precisions: List[str]) -> Tuple[Any, List[str]]:
     """The Config rigtune launches for a seed on this machine: what the command says, and for what it leaves to the
     engine, the engine's own default where rigtune must state one (it always passes the context, batch and memory

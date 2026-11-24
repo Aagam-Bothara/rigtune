@@ -202,7 +202,14 @@ class SearchOptions:
         if self.report_reuse:
             out["reuse"] = "on"
         if self.seed:  # a seeded profile measured a command the grid may not hold: cached under its own name
-            out["seed"] = hashlib.sha256(self.seed.encode()).hexdigest()[:16]
+            text = self.seed
+            from rigtune.seed import RECIPE
+
+            if text == RECIPE:  # the recipes it may resolve to (the model and GPU are in the cache path already)
+                from importlib import resources
+
+                text += resources.files("rigtune").joinpath("data", "recipes.json").read_text(encoding="utf-8")
+            out["seed"] = hashlib.sha256(text.encode()).hexdigest()[:16]
         if self.kv_tier != "off":
             out["tier"] = self.kv_tier
         if self.arrival_rate is not None:  # picked for one rate; J/token profiles keep their names
@@ -1019,8 +1026,15 @@ def seed_for(hw: HardwareDescriptor, spec: ModelSpec, plan: "PlanResult", reg: D
     ValueError when the command cannot seed this calibration (another model, an engine not being calibrated)."""
     if not command:
         return None, []
-    from rigtune.seed import parse_command, seed_config
+    from rigtune.seed import RECIPE, parse_command, recipe_for, seed_config
 
+    source = None
+    if command == RECIPE:
+        found = recipe_for(spec.hf_id, list(plan.prepared), hw.gpu.name if hw.gpu else "")
+        if found is None:
+            raise ValueError(f"--seed recipe: rigtune ships no recipe for {spec.hf_id} on "
+                             f"{' or '.join(plan.prepared)} (give the command instead)")
+        command, source = found
     seed = parse_command(command)
     if seed.model != spec.hf_id:
         raise ValueError(f"--seed serves {seed.model}, but this calibration is of {spec.hf_id}")
@@ -1032,7 +1046,8 @@ def seed_for(hw: HardwareDescriptor, spec: ModelSpec, plan: "PlanResult", reg: D
     if opts is not None and opts.quants is not None and not opts.allows(cfg.quant):
         # A pick in a precision --quant excludes would never be served (the profile is checked against --quant).
         raise ValueError(f"--seed runs {cfg.quant}, which --quant {'+'.join(opts.quants)} excludes")
-    return cfg, notes + [f"seed: {n}" for n in seed.notes] + [f"seed measured first: {cfg.key()}"]
+    head = [f"seed: the recipe, {source}: {command}"] if source else []
+    return cfg, head + notes + [f"seed: {n}" for n in seed.notes] + [f"seed measured as {cfg.key()}"]
 
 
 def calibrate(

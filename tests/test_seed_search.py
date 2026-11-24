@@ -60,7 +60,7 @@ def test_seed_for_refuses_another_model_or_an_engine_not_calibrated(hw_a100, pre
     reg = {"vllm": get_backend("vllm")}
     spec = prepared_vllm.spec
     cfg, notes = seed_for(hw_a100, spec, Plan(), reg, f"vllm serve {spec.hf_id} --max-num-seqs 16")
-    assert cfg.batch == 16 and any("measured first" in n for n in notes)
+    assert cfg.batch == 16 and any("seed measured as" in n for n in notes)
     assert seed_for(hw_a100, spec, Plan(), reg, None) == (None, [])
     for command, why in [("vllm serve other/model", "this calibration is of"),
                          (f"python -m sglang.launch_server --model-path {spec.hf_id}", "does not"),
@@ -189,3 +189,112 @@ def test_sglang_s_seed_states_the_defaults_rigtune_launches(hw_a100, prepared_vl
     cfg, notes = seed_config(seed, hw_a100, prepared_vllm, ["bf16"])
     assert (cfg.backend, cfg.batch, cfg.gpu_memory_utilization) == ("sglang", 256, 0.88)
     assert any("max-running-requests" in n for n in notes) and any("mem-fraction-static" in n for n in notes)
+
+
+# ---------------------------------------------------------------- --seed recipe (S4)
+
+
+def _inkling(hw_a100, prepared_vllm, gpu, gib):
+    from tests.test_inkling2 import _prepared
+
+    return _gpu(hw_a100, gpu, gib, (9, 0)), _prepared()
+
+
+@pytest.mark.parametrize("gpu, gib, ctx", [
+    ("NVIDIA H100 PCIe", 79.18, 262144),  # the recipe's H100 line
+    ("NVIDIA H200", 139.8, 1048576),  # elsewhere the command names no length: the model's own
+])
+def test_the_shipped_recipe_seeds_a_calibration_for_its_gpu(hw_a100, prepared_vllm, gpu, gib, ctx):
+    from rigtune.pipeline import seed_for
+
+    hw, pm = _inkling(hw_a100, prepared_vllm, gpu, gib)
+
+    class Plan:
+        prepared = {"vllm": pm}
+
+    cfg, notes = seed_for(hw, pm.spec, Plan(), {"vllm": get_backend("vllm")}, "recipe")
+    assert (cfg.ctx, cfg.spec_decode, cfg.quant, cfg.batch) == (ctx, "dspark:7", "ckpt-nvfp4", 1024)
+    assert cfg.extra == {"reasoning_parser": "inkling"}
+    assert notes[0].startswith("seed: the recipe, vLLM's recipe recipes/models/thinkingmachines/Inkling-2-Mini.yaml")
+
+
+def test_a_model_with_no_shipped_recipe_asks_for_the_command(hw_a100, prepared_vllm):
+    from rigtune.pipeline import seed_for
+
+    class Plan:
+        prepared = {"vllm": prepared_vllm}
+
+    with pytest.raises(ValueError, match="ships no recipe"):
+        seed_for(hw_a100, prepared_vllm.spec, Plan(), {"vllm": get_backend("vllm")}, "recipe")
+
+
+def test_every_shipped_recipe_parses_and_names_its_model():
+    import json
+    from importlib import resources
+
+    data = json.loads(resources.files("rigtune").joinpath("data", "recipes.json").read_text(encoding="utf-8"))
+    for r in data["recipes"]:
+        seed = parse_command(r["command"])
+        assert (seed.model, seed.engine) == (r["model"], r["engine"]) and r["source"]
+
+
+def test_a_recipe_seeded_profile_is_not_served_once_the_shipped_recipes_change(monkeypatch):
+    import rigtune.pipeline as pl
+
+    before = pl.SearchOptions(seed="recipe").key()["seed"]
+
+    class Changed:
+        def joinpath(self, *parts):
+            return self
+
+        def read_text(self, encoding=None):
+            return '{"recipes": []}'
+
+    import importlib.resources
+
+    monkeypatch.setattr(importlib.resources, "files", lambda pkg: Changed())
+    assert pl.SearchOptions(seed="recipe").key()["seed"] != before
+
+
+@pytest.mark.parametrize("gpu, line", [
+    ("NVIDIA H100 NVL", "gpus"), ("NVIDIA H100 80GB HBM3", "gpus"), ("NVIDIA GB10", "gpus"),
+    ("NVIDIA H200", None), ("NVIDIA GH200 480GB", None),
+    ("NVIDIA H100 80GB HBM3 MIG 1g.10gb", None),  # a slice of an H100 is not an H100 for the recipe's length
+])
+def test_the_recipe_line_follows_the_gpu_name(gpu, line):
+    from rigtune.seed import recipe_for
+
+    command, source = recipe_for("thinkingmachines/Inkling-2-Mini", ["vllm"], gpu)
+    assert ("--max-model-len 262144" in command) == (line == "gpus")
+    assert recipe_for("thinkingmachines/Inkling-2-Mini", ["sglang"], gpu) is None  # no SGLang recipe shipped
+
+
+def test_the_cli_takes_the_word_recipe_and_reads_any_other_seed_now():
+    import typer
+
+    from rigtune.cli import _seed
+
+    assert _seed("recipe") == "recipe" and _seed(None) is None
+    with pytest.raises(typer.BadParameter):
+        _seed("llama-server -m x.gguf")
+
+
+@pytest.mark.usefixtures("no_network", "tmp_home")
+def test_a_profile_s_notes_are_printed_as_text_not_markup(spec, monkeypatch):
+    # A seed's note quotes its command, which may hold brackets rich would read as markup ("[/x]" raises).
+    import io
+
+    from rich.console import Console
+
+    from rigtune import cli
+    from rigtune.pipeline import calibrate, prepare_and_plan, select
+    from tests.test_phases import two_gpus
+
+    hw = two_gpus()
+    candidates, reg = select(hw, spec, force="vllm")
+    profile = calibrate(hw, spec, "throughput", prepare_and_plan(hw, spec, candidates, reg), reg, runner=FakeRunner())
+    profile.notes = ["seed: the recipe: vllm serve m --x '[/x]' --y [cuda]"]
+    out = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=out, width=100_000))
+    cli._print_profile(profile)
+    assert "--x '[/x]' --y [cuda]" in out.getvalue()

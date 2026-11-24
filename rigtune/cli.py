@@ -95,8 +95,8 @@ def _print_profile(p: Profile) -> None:
     console.print(f"[bold]launch[/]:  {' '.join(p.launch_args)}")
     if p.launch_env:
         console.print(f"[bold]env[/]:     {' '.join(f'{k}={v}' for k, v in p.launch_env.items())}")
-    for n in p.notes:
-        console.print(f"[dim]note: {n}[/]")
+    for n in p.notes:  # notes quote commands and engine output: printed as text, never read as markup
+        console.print(f"note: {n}", style="dim", markup=False)
 
 
 def _winner_key(p: Profile) -> str:
@@ -461,8 +461,10 @@ def _seed(command: Optional[str]) -> Optional[str]:
     """--seed read now, so a command rigtune cannot launch fails before any download, with the reason."""
     if not command:
         return None
-    from rigtune.seed import parse_command
+    from rigtune.seed import RECIPE, parse_command
 
+    if command == RECIPE:  # resolved once the model, its engines and the GPU are known (pipeline.seed_for)
+        return command
     try:
         parse_command(command)
     except ValueError as exc:
@@ -539,7 +541,8 @@ KV_TIER_OPT = typer.Option(
          "has not run on hardware. off (default): no tier is ever tried.")
 SEED_OPT = typer.Option(
     None, "--seed",
-    help="The command you would run yourself, or a model's published recipe, e.g. \"vllm serve MODEL "
+    help="The command you would run yourself, or 'recipe' for the model's published recipe where rigtune ships "
+         "one, e.g. \"vllm serve MODEL "
          "--max-model-len 32768 --speculative-config '{...}'\". It is measured first, so the pick is never "
          "measured below it, and the later stages improve from it. Settings it does not keep are noted. Has not run "
          "on hardware.")

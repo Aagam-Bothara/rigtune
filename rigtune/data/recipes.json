@@ -1,0 +1,18 @@
+{
+ "about": "Published launch commands rigtune can seed a calibration with (--seed recipe; rigtune.seed.recipe_for). Each is the engine's or the model's own recipe, quoted flag for flag with where and when it was read. A recipe with `gpus` applies on a GPU whose name contains one of them; the first that applies is used. Nothing here is rigtune's own choice: a recipe is the expert's command, measured first and improved from.",
+ "recipes": [
+  {
+   "model": "thinkingmachines/Inkling-2-Mini",
+   "engine": "vllm",
+   "gpus": ["h100", "gb10"],
+   "command": "vllm serve thinkingmachines/Inkling-2-Mini --tensor-parallel-size 1 --reasoning-parser inkling --max-model-len 262144 --speculative-config '{\"method\":\"dspark\",\"num_speculative_tokens\":7,\"draft_sample_method\":\"probabilistic\"}'",
+   "source": "vLLM's recipe recipes/models/thinkingmachines/Inkling-2-Mini.yaml, read 23 Nov 2026 (min_vllm_version 0.35.0, nightly required): --max-model-len 262144 on H100 and DGX Spark; TP1 recommended"
+  },
+  {
+   "model": "thinkingmachines/Inkling-2-Mini",
+   "engine": "vllm",
+   "command": "vllm serve thinkingmachines/Inkling-2-Mini --tensor-parallel-size 1 --reasoning-parser inkling --speculative-config '{\"method\":\"dspark\",\"num_speculative_tokens\":7,\"draft_sample_method\":\"probabilistic\"}'",
+   "source": "vLLM's recipe recipes/models/thinkingmachines/Inkling-2-Mini.yaml, read 23 Nov 2026 (min_vllm_version 0.35.0, nightly required): the command on other GPUs, the model's own context; TP1 recommended"
+  }
+ ]
+}
