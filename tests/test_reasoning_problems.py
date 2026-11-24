@@ -188,3 +188,50 @@ def _fresh_parse_cache():
     rp._parsed.cache_clear()
     yield
     rp._parsed.cache_clear()
+
+
+# ---------------------------------------------------------------- Omni-MATH
+
+OMNI_ROWS = [  # as KbsdJames/Omni-MATH's test.jsonl writes them (40ba231d), trimmed
+    {"domain": "['Mathematics -> Algebra -> Other']", "difficulty": "8.0", "problem": "Find the minimum m.",
+     "answer": r"1 + \left\lceil \frac{n}{2} \right\rceil", "source": "china_team_selection_test"},
+    {"domain": "['Mathematics -> Geometry -> Plane Geometry -> Polygons']", "difficulty": 6.5, "problem": "Find x.",
+     "answer": "3", "source": "imo"},
+    {"domain": "['Mathematics -> Number Theory']", "difficulty": "4.0", "problem": "An easy one.", "answer": "7"},
+    {"domain": "['Mathematics -> Algebra']", "difficulty": "7.0", "problem": "No answer.", "answer": ""},
+    {"domain": "['Mathematics -> Algebra']", "difficulty": "?", "problem": "Bad difficulty.", "answer": "1"},
+    {"domain": "['Mathematics -> Algebra']", "difficulty": "9.0", "problem": "A proof.", "answer": "x" * 401},
+    {"domain": "['Mathematics -> Algebra -> Other']", "difficulty": "8.0", "problem": "Find the minimum m.",
+     "answer": r"1 + \left\lceil \frac{n}{2} \right\rceil"},  # the same problem again
+]
+
+
+def test_omni_rows_become_problems_by_difficulty_and_domain():
+    got = {p.problem: p for p in rp.omni_problems_from_rows(OMNI_ROWS)}
+    assert set(got) == {"Find the minimum m.", "Find x.", "An easy one."}  # no answer, no difficulty, too long: out
+    assert (got["Find the minimum m."].level, got["Find the minimum m."].subject) == (8, "Algebra")
+    assert (got["Find x."].level, got["Find x."].subject) == (6, "Geometry")  # 6.5's whole part
+    assert got["Find x."].id == rp.problem_id("Find x.")
+
+
+def test_omni_is_loaded_from_its_cache_at_a_level_and_split(tmp_path):
+    problems = rp.omni_problems_from_rows(OMNI_ROWS)
+    cache = tmp_path / f"omni-math-{rp.OMNI_REVISION[:12]}.jsonl"
+    cache.write_text("".join(json.dumps(p.to_json(), sort_keys=True) + "\n" for p in problems), encoding="utf-8")
+    hard, digest = rp.load_omni(min_level=6, cache_dir=tmp_path)
+    assert [p.problem for p in hard] == sorted(["Find the minimum m.", "Find x."],
+                                               key=lambda t: rp.problem_id(t))
+    assert rp.load_omni(min_level=6, cache_dir=tmp_path)[1] == digest  # fingerprinted
+    assert rp.load_omni(min_level=8, cache_dir=tmp_path)[1] != digest
+    both = rp.load_omni(min_level=1, split="dev", cache_dir=tmp_path)[0] + \
+        rp.load_omni(min_level=1, split="heldout", cache_dir=tmp_path)[0]
+    assert len(both) == 3
+
+
+def test_an_omni_answer_is_graded_as_maths():
+    p = rp.omni_problems_from_rows(OMNI_ROWS[1:2])[0]
+    assert grade(r"So x = \boxed{3}.", p.answer)[0]
+    assert not grade(r"\boxed{4}", p.answer)[0]
+    ceiling = rp.omni_problems_from_rows(OMNI_ROWS[:1])[0]  # a LaTeX expression, as Omni-MATH's answers often are
+    # \left / \right and spacing do not matter, with math-verify or without it (its rewrites need it installed).
+    assert grade(r"\boxed{1+\lceil \frac{n}{2}\rceil}", ceiling.answer)[0]

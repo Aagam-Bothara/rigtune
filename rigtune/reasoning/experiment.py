@@ -172,7 +172,10 @@ def _arguments(argv: Optional[Sequence[str]]) -> argparse.Namespace:
     ap.add_argument("--base-url", required=True)
     ap.add_argument("--model", required=True)
     ap.add_argument("--split", choices=("dev", "heldout"), default="dev")
-    ap.add_argument("--levels", default="4,5")
+    ap.add_argument("--dataset", choices=("math", "omni"), default="math",
+                    help="MATH (EleutherAI/hendrycks_math) or Omni-MATH's olympiad problems (KbsdJames/Omni-MATH)")
+    ap.add_argument("--levels", default="4,5", help="MATH: the levels")
+    ap.add_argument("--min-level", type=int, default=6, help="Omni-MATH: the lowest difficulty (whole part, 1-10)")
     ap.add_argument("--limit", type=int, default=0, help="the first N problems by id (0: all)")
     ap.add_argument("--methods", default="direct,self-consistency:3,self-consistency:5,self-correction,adaptive:8")
     ap.add_argument("--thinking", choices=("on", "off", "default"), default="off")
@@ -197,8 +200,14 @@ def _arguments(argv: Optional[Sequence[str]]) -> argparse.Namespace:
 
 async def _main(args: argparse.Namespace) -> int:
     specs = parse_specs(args.methods)
-    levels = tuple(int(x) for x in args.levels.split(","))
-    problems, digest = rp.load_math(levels=levels, split=args.split, cache_dir=args.cache_dir)
+    if args.dataset == "omni":
+        levels = (args.min_level,)
+        problems, digest = rp.load_omni(min_level=args.min_level, split=args.split, cache_dir=args.cache_dir)
+        revision = rp.OMNI_REVISION
+    else:
+        levels = tuple(int(x) for x in args.levels.split(","))
+        problems, digest = rp.load_math(levels=levels, split=args.split, cache_dir=args.cache_dir)
+        revision = rp.MATH_REVISION
     if args.limit:
         problems = problems[: args.limit]
     thinking = {"on": True, "off": False, "default": None}[args.thinking]
@@ -218,8 +227,8 @@ async def _main(args: argparse.Namespace) -> int:
     grader = "math-verify" if rp._math_verify() is not None else "the MATH authors' normalisation"
     print(f"{len(problems)} {args.split} problems (set {digest[:12]}), graded by {grader}; context {context}")
     args.out.mkdir(parents=True, exist_ok=True)
-    manifest = {"split": args.split, "levels": levels, "limit": args.limit, "problem_set": digest,
-                "dataset_revision": rp.MATH_REVISION, "methods": args.methods, "settings": settings.__dict__,
+    manifest = {"dataset": args.dataset, "split": args.split, "levels": levels, "limit": args.limit,
+                "problem_set": digest, "dataset_revision": revision, "methods": args.methods, "settings": settings.__dict__,
                 "sequences": args.sequences, "order_seed": args.order_seed, "server": args.server,
                 "context": context, "grader": grader}
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")

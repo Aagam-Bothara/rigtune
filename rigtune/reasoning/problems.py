@@ -252,6 +252,68 @@ def problems_from_rows(rows: Iterable[Dict[str, Any]], subject: str, levels: Seq
 ALL_LEVELS = (1, 2, 3, 4, 5)
 
 
+# Olympiad-level problems for models MATH no longer separates (Inkling-2-Mini answered 97 of MATH levels 4-5's 98
+# development problems at its lowest reasoning effort): KbsdJames/Omni-MATH (Apache-2.0; Gao et al. 2024), 4,428
+# competition problems with a final answer each and a difficulty from 1 to 10 in half steps, in one test.jsonl,
+# pinned to the commit read on 24 Nov 2026.
+OMNI_REPO = "KbsdJames/Omni-MATH"
+OMNI_REVISION = "40ba231d8f16e29ecd40e6407e2c8640145a8f62"
+
+
+def omni_problems_from_rows(rows: Iterable[Dict[str, Any]]) -> List[Problem]:
+    """Problems from Omni-MATH rows ({problem, answer, difficulty, domain, ...}): level = the difficulty's whole part (an
+    8.5 is level 8), subject = the first domain's second part ("Mathematics -> Algebra -> Other": Algebra). A row
+    without a problem, an answer or a difficulty, or whose answer is longer than MAX_ANSWER_CHARS (math-verify's sympy
+    can stall on those), is left out; a problem text met twice is kept once."""
+    import ast
+
+    out: Dict[str, Problem] = {}
+    for row in rows:
+        text, reference = str(row.get("problem") or "").strip(), str(row.get("answer") or "").strip()
+        try:
+            difficulty = float(row.get("difficulty"))
+        except (TypeError, ValueError):
+            continue
+        if not text or not reference or len(reference) > MAX_ANSWER_CHARS:
+            continue
+        domains = row.get("domain")
+        if isinstance(domains, str):
+            try:
+                domains = ast.literal_eval(domains)
+            except (ValueError, SyntaxError):
+                domains = [domains]
+        first = str(domains[0]) if isinstance(domains, list) and domains else "Mathematics"
+        parts = [p.strip() for p in first.split("->")]
+        subject = parts[1] if len(parts) > 1 else parts[0]
+        pid = problem_id(text)
+        out.setdefault(pid, Problem(id=pid, subject=subject, level=int(difficulty), problem=text, answer=reference))
+    return list(out.values())
+
+
+def load_omni(min_level: int = 6, split: Optional[str] = None, revision: str = OMNI_REVISION,
+              cache_dir: Optional[Path] = None) -> Tuple[List[Problem], str]:
+    """Omni-MATH's problems at `min_level` and above (one `split`, or all), sorted by id, and a sha256 of the dataset
+    commit and their JSON, as load_math. `cache_dir` keeps every level of that commit as JSON lines."""
+    cache = cache_dir / f"omni-math-{revision[:12]}.jsonl" if cache_dir is not None else None
+    if cache is not None and cache.is_file():
+        problems = [Problem(**json.loads(line)) for line in cache.read_text(encoding="utf-8").splitlines() if line]
+    else:
+        from huggingface_hub import hf_hub_download
+
+        path = hf_hub_download(OMNI_REPO, "test.jsonl", repo_type="dataset", revision=revision)
+        with open(path, encoding="utf-8") as fh:
+            problems = omni_problems_from_rows(json.loads(line) for line in fh if line.strip())
+        if cache is not None:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text("".join(json.dumps(p.to_json(), sort_keys=True) + "\n" for p in problems),
+                             encoding="utf-8")
+    problems = sorted((p for p in problems if p.level >= min_level), key=lambda p: p.id)
+    if split is not None:
+        problems = [p for p in problems if split_of(p) == split]
+    body = revision + "".join(json.dumps(p.to_json(), sort_keys=True) for p in problems)
+    return problems, hashlib.sha256(body.encode()).hexdigest()
+
+
 def load_math(levels: Sequence[int] = (4, 5), split: Optional[str] = None, revision: str = MATH_REVISION,
               cache_dir: Optional[Path] = None) -> Tuple[List[Problem], str]:
     """The MATH test problems at `levels` (one `split`, "dev" or "heldout", or all), sorted by id, and a sha256 of the
