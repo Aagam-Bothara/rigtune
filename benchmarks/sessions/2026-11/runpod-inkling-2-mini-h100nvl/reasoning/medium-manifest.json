@@ -1,0 +1,27 @@
+{
+ "split": "dev",
+ "levels": [
+  4,
+  5
+ ],
+ "limit": 0,
+ "problem_set": "9b036577c0f1c3278cf50ed1306d9ab719d1901b6103cea47c1a7080e99d532f",
+ "dataset_revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+ "methods": "direct",
+ "settings": {
+  "model": "thinkingmachines/Inkling-2-Mini",
+  "max_tokens": 16384,
+  "temperature": 0.7,
+  "top_p": 0.95,
+  "thinking": null,
+  "reasoning_effort": "medium",
+  "seed": 0,
+  "top_k": null,
+  "keep_texts": true
+ },
+ "sequences": 16,
+ "order_seed": 0,
+ "server": "vllm nightly (recipe + --max-num-seqs 32) on NVIDIA H100 NVL",
+ "context": 262144,
+ "grader": "math-verify"
+}
