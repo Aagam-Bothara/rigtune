@@ -82,6 +82,20 @@ def vllm_default_batched_tokens(hw: HardwareDescriptor) -> int:
     return 2048
 
 
+def vllm_default_max_num_seqs(hw: HardwareDescriptor) -> int:
+    """max_num_seqs `vllm serve` picks when none is given (engine/arg_utils.EngineArgs.get_batch_defaults on main,
+    24 Nov 2026): 1,024 from 160 GiB, and from 70 GiB except on an A100 or a GB10 (compute capability 12.1); else
+    256. An H100 serving a recipe that names no batch runs 1,024 requests at once."""
+    gpu = hw.gpu
+    total = gpu.vram_total_bytes if gpu else 0
+    name = (gpu.name if gpu else "").lower()
+    if total >= 160 * GiB:
+        return 1024
+    if total >= 70 * GiB and "a100" not in name and (gpu.compute_capability if gpu else None) != (12, 1):
+        return 1024
+    return 256
+
+
 def _cdiv(a: float, b: float) -> int:
     return int(-(-a // b))
 

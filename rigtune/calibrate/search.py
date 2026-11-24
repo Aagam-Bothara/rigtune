@@ -961,6 +961,9 @@ class StagedSearch:
     # valuable trials. The clock is injectable so tests need not wait.
     budget_s: Optional[float] = None
     clock: Callable[[], float] = time.monotonic
+    # --seed: the user's (or a recipe's) own command, measured before any other trial, so the pick is chosen among
+    # trials that include it, and eligible as the leader the variant stages tune from (rigtune.seed). None = off.
+    seed: Optional[Config] = None
     # Stage 4: power settings to try on the leading config (the default setting first). Empty = off.
     power_points: List[PowerSetting] = field(default_factory=list)
     # Stage 3b: configs differing from the leader only in the prefill knob. None = stage off.
@@ -1467,12 +1470,40 @@ class StagedSearch:
         logger.info("stage 1 kept: %s", kept)
         return kept
 
+    def _seed_result(self) -> Optional[TrialResult]:
+        """The seed's own trial, after any start-up retry: the successful one, else the last that ran."""
+        mine = [r for r in self.results if r.stage == "seed"]
+        return next((r for r in mine if r.ok), mine[-1] if mine else None)
+
+    def _seed_note(self, winner: Optional[TrialResult], pool: Sequence[TrialResult]) -> str:
+        """How the pick compares with the seed, on the runs the pick was chosen on (the confirm round's, when it
+        re-measured the seed; else its first measurement)."""
+        key = self.seed.key() if self.seed is not None else ""
+        first = self._seed_result()
+        if first is None or not first.ok:
+            failed = next((r for r in self.results if r.stage == "seed" and r.error), None)
+            why = failed.error if failed is not None else "it did not finish"
+            return f"seed {key} did not run ({why.splitlines()[0]}); the pick is the best of the rest"
+        if first.config.key() != key:  # a start-up retry launched it with less memory reserved, or text only
+            self.notes.append(f"the seed {key} started only as {first.config.key()}, which stands for it")
+            key = first.config.key()
+        runs = [r for r in pool if r.config.key() == key and r.ok] or [first]
+        mine = max(runs, key=lambda r: r.metrics.tok_s)
+        if winner is None:
+            return f"seed {key}: {mine.metrics.tok_s:.0f} tok/s; nothing was picked"
+        if winner.config.key() == key:
+            return f"seed {key} was the best measured ({mine.metrics.tok_s:.0f} tok/s): kept as the pick"
+        gain = winner.metrics.tok_s / mine.metrics.tok_s - 1 if mine.metrics.tok_s else 0.0
+        return (f"seed {key}: {mine.metrics.tok_s:.0f} tok/s; the pick {winner.config.key()}: "
+                f"{winner.metrics.tok_s:.0f} tok/s ({gain:+.0%})")
+
     def stage_memory(self, feasible: Sequence[Config], kept: Sequence[Tuple[str, str]]) -> Dict[Tuple[str, str], Config]:
         chosen: Dict[Tuple[str, str], Config] = {}
         for key in kept:
             group = [c for c in feasible if (c.backend, c.quant) == key]
             base = next(
-                (r.config for r in self.results if r.ok and (r.config.backend, r.config.quant) == key),
+                (r.config for r in self.results
+                 if r.ok and r.stage != "seed" and (r.config.backend, r.config.quant) == key),
                 _baseline(group),
             )
             # Fix batch to the baseline's; vary memory knob and ctx, largest first.
@@ -1494,8 +1525,9 @@ class StagedSearch:
                     winner = c
                     break  # largest safe config found
             if winner is None:
-                # Fall back to whatever succeeded in stage 1 for this quant.
-                prior = [r for r in self.results if r.ok and (r.config.backend, r.config.quant) == key]
+                # Fall back to whatever succeeded in stage 1 for this quant (the grid's, not the seed's own).
+                prior = [r for r in self.results
+                         if r.ok and r.stage != "seed" and (r.config.backend, r.config.quant) == key]
                 if prior:
                     winner = prior[0].config
             if winner is not None:
@@ -1696,7 +1728,8 @@ class StagedSearch:
         gap = (mine.score - lead.score) / abs(lead.score) if lead.score else 0.0
         # What an engine can do, not what is left to try: the leader's first configuration, before its stages
         # adopted a KV cache or a speculation setting, stands for its engine.
-        lead_base = next(r.config for r in self.results if r.config.backend == lb)
+        lead_base = next((r.config for r in self.results if r.config.backend == lb and r.stage != "seed"),
+                         next(r.config for r in self.results if r.config.backend == lb))
         if gap <= self.contender_band or self._offers_more(mine.result.config, lead_base):
             return False
         self.notes.append(f"{base.backend} was not tuned further: {lb} led it by {gap:.0%} once tuned, and "
@@ -1730,7 +1763,8 @@ class StagedSearch:
         # configuration has already adopted a KV cache or a speculation setting, so judged against that, another
         # engine seemed to offer what the leader's engine lacks, was tuned, and was then dropped by _outpaced for
         # offering nothing it lacks; the notes said both.
-        lead_base = next(r.config for r in self.results if r.config.backend == lb)
+        lead_base = next((r.config for r in self.results if r.config.backend == lb and r.stage != "seed"),
+                         next(r.config for r in self.results if r.config.backend == lb))
         for x in ranked[1:]:
             backend = x.result.config.backend
             if backend in seen:
@@ -1940,6 +1974,11 @@ class StagedSearch:
                 break
             if all(c.key() != x.result.config.key() for c in shortlist):
                 shortlist.append(x.result.config)
+        seed_run = self._seed_result()
+        if seed_run is not None and seed_run.ok and all(c.key() != seed_run.config.key() for c in shortlist):
+            # The seed is re-measured whatever its rank, second (a budget keeps time for the first two), so the
+            # choice is never made without it.
+            shortlist.insert(1 if shortlist else 0, seed_run.config)
         if self.gate is not None and shortlist:
             self.gate.final_target = shortlist[0].base_key()  # grade the likely pick's own configuration on its run
         runs: Dict[str, List[TrialResult]] = {c.key(): [] for c in shortlist}
@@ -1956,6 +1995,10 @@ class StagedSearch:
                 reps.append(order[len(order) // 2].result)
             elif runs[cfg.key()]:
                 self.notes.append(f"{cfg.key()} failed when re-measured, so it was not chosen")
+        if seed_run is not None and seed_run.ok and not runs.get(seed_run.config.key()):
+            # Not re-measured (the budget ran out): its first measurement stands, so the pick is never made without it.
+            reps.append(seed_run)
+            self.notes.append("the seed was not re-measured (the budget ran out); its first measurement was compared")
         if not reps:
             return None
         winner, _ = pick(reps, self.objective, self.constraints)
@@ -2155,12 +2198,17 @@ class StagedSearch:
     # ---- entry
 
     def run(self, feasible: Sequence[Config]) -> Tuple[Optional[TrialResult], List[str]]:
-        if not feasible:
+        if not feasible and self.seed is None:
             return None, ["memory planner left no feasible configuration"]
-        kept = self.stage_quant(feasible)
-        if not kept and self.gate is not None and any(r.ok for r in self.results):
+        kept = self.stage_quant(feasible) if feasible else []
+        # The seed runs after stage 1, whose own trials the accuracy gate grades and decides on: a seed graded there
+        # would stand in for its precision's baseline. It is graded, like any pick, in the final-quality stage.
+        seeded = self._run(self.seed, "seed") if self.seed is not None else None
+        if not kept and seeded is not None and seeded.ok:
+            pass  # the seed carries the calibration on: the variant stages tune from it
+        elif not kept and self.gate is not None and any(r.ok for r in self.results):
             return None, self.notes + ["the accuracy gate refused every precision that ran"]
-        if not kept:
+        elif not kept:
             return None, ["every stage-1 trial failed"] + self._startup_notes + [
                 f"{r.config.key()}: {r.error}" for r in self.results if r.error
             ]
@@ -2228,6 +2276,8 @@ class StagedSearch:
             rn = self.stage_rate_check(winner)
             if rn:
                 notes.append(rn)
+        if self.seed is not None:
+            notes.append(self._seed_note(winner, pool))
         if self.gate is not None:
             notes.extend(self.gate.final_notes(winner, self.results, self.objective, self.constraints))  # type: ignore
         for kind, skipped in self._spec_blocked.items():

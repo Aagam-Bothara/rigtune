@@ -390,6 +390,40 @@ def _pass_through(seed: Seed, name: str, value: Any) -> None:
     seed.notes.append(f"--{name} is passed through unchanged, not tuned")
 
 
+def seed_config(seed: Seed, hw: Any, model: Any, precisions: List[str]) -> Tuple[Any, List[str]]:
+    """The Config rigtune launches for a seed on this machine: what the command says, and for what it leaves to the
+    engine, the engine's own default where rigtune must state one (it always passes the context, batch and memory
+    fraction), each noted. `model` is the PreparedModel, `precisions` the backend's on this GPU (its first is what an
+    unquantized checkpoint loads as with --dtype auto)."""
+    from rigtune.backends.vllm import vllm_default_max_num_seqs
+    from rigtune.models import Config
+    from rigtune.quantized import stored_quant
+
+    f = dict(seed.fields)
+    notes: List[str] = []
+    if "quant" not in f:
+        f["quant"] = stored_quant(model.weights_bytes) or precisions[0]
+    if "ctx" not in f:
+        f["ctx"] = model.arch.max_position_embeddings
+        notes.append(f"seed: no context given; the model's own, {f['ctx']:,} tokens, as the engine takes")
+    if "batch" not in f:
+        if seed.engine == "vllm":
+            f["batch"] = vllm_default_max_num_seqs(hw)
+            notes.append(f"seed: no --max-num-seqs; vLLM's default on this GPU, {f['batch']:,}")
+        else:  # SGLang sizes it from its pool at start-up; rigtune states the batch its stock row launches
+            f["batch"] = 256
+            notes.append("seed: no --max-running-requests; SGLang would size it from its pool, rigtune launches 256 "
+                         "as its stock row does")
+    if "gpu_memory_utilization" not in f:
+        f["gpu_memory_utilization"] = 0.90 if seed.engine == "vllm" else 0.88
+        if seed.engine == "sglang":
+            notes.append("seed: no --mem-fraction-static; rigtune launches 0.88, as its stock row does (SGLang picks "
+                         "its own per GPU)")
+    if seed.extra:
+        f["extra"] = dict(seed.extra)
+    return Config(backend=seed.engine, **f), notes
+
+
 def parse_command(command: str) -> Seed:
     """Read a vLLM or SGLang server command into a Seed. Raises ValueError, with the reason, on a command rigtune
     cannot read or launch as given; the message never repeats the command's values."""

@@ -128,6 +128,9 @@ class SearchOptions:
     # engine's leader when its session trial shows the working set outgrowing the GPU pool (tier_variants_fn).
     # Session files only. "off" (the default) changes nothing: no trial, no launch flag, no cache-key entry.
     kv_tier: str = "off"
+    # --seed: the command the user (or a model's recipe) would run, measured first so the pick is never measured
+    # below it, and improved from by the later stages (rigtune.seed). None = the grid alone.
+    seed: Optional[str] = None
 
     # --arrival-rate (efficiency only): requests per second the server will see. Trials are then scored by joules
     # per request at that rate, the card's idle draw and wind-down included (calibrate/rate.py). None = J/token.
@@ -198,6 +201,8 @@ class SearchOptions:
                 out["evaltries"] = str(self.eval_attempts)
         if self.report_reuse:
             out["reuse"] = "on"
+        if self.seed:  # a seeded profile measured a command the grid may not hold: cached under its own name
+            out["seed"] = hashlib.sha256(self.seed.encode()).hexdigest()[:16]
         if self.kv_tier != "off":
             out["tier"] = self.kv_tier
         if self.arrival_rate is not None:  # picked for one rate; J/token profiles keep their names
@@ -1008,6 +1013,28 @@ def default_profile(hw: HardwareDescriptor, spec: ModelSpec, plan: PlanResult, r
     raise RuntimeError(f"no usable backend for {spec.hf_id}; errors: {plan.errors}")
 
 
+def seed_for(hw: HardwareDescriptor, spec: ModelSpec, plan: "PlanResult", reg: Dict[str, BaseBackend],
+             command: Optional[str], opts: Optional[SearchOptions] = None) -> Tuple[Optional[Config], List[str]]:
+    """The Config a --seed command launches here, with notes on what it did not keep; (None, []) without one. Raises
+    ValueError when the command cannot seed this calibration (another model, an engine not being calibrated)."""
+    if not command:
+        return None, []
+    from rigtune.seed import parse_command, seed_config
+
+    seed = parse_command(command)
+    if seed.model != spec.hf_id:
+        raise ValueError(f"--seed serves {seed.model}, but this calibration is of {spec.hf_id}")
+    if seed.engine not in plan.prepared:
+        raise ValueError(f"--seed runs {seed.engine}, which this calibration does not (--backend)")
+    if seed.revision and seed.revision != spec.revision:
+        raise ValueError(f"--seed pins revision {seed.revision}; give it to rigtune as the model's revision instead")
+    cfg, notes = seed_config(seed, hw, plan.prepared[seed.engine], reg[seed.engine].precisions(hw))
+    if opts is not None and opts.quants is not None and not opts.allows(cfg.quant):
+        # A pick in a precision --quant excludes would never be served (the profile is checked against --quant).
+        raise ValueError(f"--seed runs {cfg.quant}, which --quant {'+'.join(opts.quants)} excludes")
+    return cfg, notes + [f"seed: {n}" for n in seed.notes] + [f"seed measured first: {cfg.key()}"]
+
+
 def calibrate(
     hw: HardwareDescriptor,
     spec: ModelSpec,
@@ -1046,7 +1073,7 @@ def calibrate(
         constraints = dataclasses.replace(constraints, arrival_rate=opts.arrival_rate)
         workload = dataclasses.replace(workload, arrival_rate_rps=opts.arrival_rate)
     feasible = plan.all_feasible
-    if not feasible:
+    if not feasible and not opts.seed:  # a seed is the user's own command: measured whatever the plan says
         raise RuntimeError("memory planner left no feasible configuration; try a smaller model or quant")
     if not opts.prefix_cache:
         feasible = [c.model_copy(update={"prefix_cache": False}) for c in feasible]
@@ -1125,7 +1152,8 @@ def calibrate(
     from rigtune.predict import Predictor
     from rigtune.spec_length import refine as refine_lengths
 
-    search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress,
+    seed_cfg, seed_notes = seed_for(hw, spec, plan, reg, opts.seed, opts)
+    search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress, seed=seed_cfg,
                           block_failed_pairs=opts.drafts == "verified" or bool(opts.draft),
                           predictor=Predictor(hw), models=plan.prepared, workload=workload,
                           power_points=points, variant_stages=stages, combine=opts.combine,
@@ -1152,8 +1180,8 @@ def calibrate(
     if winner is None:
         raise RuntimeError("calibration failed: " + "; ".join(notes))
     elapsed = time.monotonic() - t0
-    notes = (power_notes + version_notes + list(plan.notes) + tier_notes + client_notes + gate_notes + notes
-             + spec_notes)
+    notes = (power_notes + version_notes + list(plan.notes) + tier_notes + client_notes + gate_notes + seed_notes
+             + notes + spec_notes)
     notes += spec_state_notes_for(hw, reg, plan, winner.config, opts, workload)
     if winner.config.text_only:
         notes.append(TEXT_ONLY_NOTE)

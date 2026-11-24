@@ -457,11 +457,24 @@ def _check_min_requests(min_requests: Optional[int], wl) -> None:
         raise typer.BadParameter(str(exc), param_hint="--min-requests") from None
 
 
+def _seed(command: Optional[str]) -> Optional[str]:
+    """--seed read now, so a command rigtune cannot launch fails before any download, with the reason."""
+    if not command:
+        return None
+    from rigtune.seed import parse_command
+
+    try:
+        parse_command(command)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--seed") from None
+    return command
+
+
 def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combine: str = "on",
           budget: Optional[float] = None, ttft_percentile: int = 95, confirm: str = "on", all_levels: bool = False,
           explore: str = "off", quality_probe: str = "off", eval_set: Optional[str] = None,
           max_accuracy_loss: float = 3.0, eval_items: int = 300, report_reuse: bool = False,
-          kv_tier: str = "off",
+          kv_tier: str = "off", seed: Optional[str] = None,
           arrival_rate: Optional[float] = None, rate_check: str = "on",
           confirm_rounds: int = 1, min_requests: Optional[int] = None, eval_attempts: int = 3,
           drafts: str = "table", draft: Optional[str] = None, hub: str = "on",
@@ -481,7 +494,7 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
         prefix_cache=prefix_cache == "on", combine=combine == "on", budget_s=budget, ttft_percentile=ttft_percentile, confirm=confirm == "on",
         all_levels=all_levels, explore=explore == "on", quality_probe=quality_probe == "on",
         eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items, report_reuse=report_reuse,
-        kv_tier=kv_tier,
+        kv_tier=kv_tier, seed=_seed(seed),
         arrival_rate=arrival_rate, rate_check=rate_check == "on",
         confirm_rounds=confirm_rounds, min_requests=min_requests, eval_attempts=eval_attempts,
         drafts=drafts, draft=draft, hub=hub, kernel=kernel,
@@ -524,6 +537,12 @@ KV_TIER_OPT = typer.Option(
          "hierarchical cache), and a disk tier under rigtune's cache dir when host RAM cannot hold the "
          "working set, only when the leader's working set outgrows the GPU pool. Exercised by tests only; "
          "has not run on hardware. off (default): no tier is ever tried.")
+SEED_OPT = typer.Option(
+    None, "--seed",
+    help="The command you would run yourself, or a model's published recipe, e.g. \"vllm serve MODEL "
+         "--max-model-len 32768 --speculative-config '{...}'\". It is measured first, so the pick is never "
+         "measured below it, and the later stages improve from it. Settings it does not keep are noted. Has not run "
+         "on hardware.")
 REPORT_REUSE_OPT = typer.Option(
     False, "--report-reuse",
     help="Launch the engines with their per-request cached-token reports for a flat file or a preset too (a session "
@@ -997,6 +1016,7 @@ def bench(
     quality_probe: str = QUALITY_OPT,
     report_reuse: bool = REPORT_REUSE_OPT,
     kv_tier: str = KV_TIER_OPT,
+    seed: Optional[str] = SEED_OPT,
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
@@ -1034,7 +1054,7 @@ def bench(
     opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
                  eval_attempts=eval_attempts,
-                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
+                 report_reuse=report_reuse, kv_tier=kv_tier, seed=seed, arrival_rate=arrival_rate, rate_check=rate_check,
                  confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub,
                  kernel=kernel)
     try:  # as resolve_profile does: refused before the weights download and the search runs
@@ -1115,6 +1135,7 @@ def recalibrate(
     quality_probe: str = QUALITY_OPT,
     report_reuse: bool = REPORT_REUSE_OPT,
     kv_tier: str = KV_TIER_OPT,
+    seed: Optional[str] = SEED_OPT,
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
@@ -1140,7 +1161,7 @@ def recalibrate(
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
                  eval_attempts=eval_attempts,
-                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
+                 report_reuse=report_reuse, kv_tier=kv_tier, seed=seed, arrival_rate=arrival_rate, rate_check=rate_check,
                  confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub,
                  kernel=kernel), layout=layout)
     view.stop()
@@ -1238,6 +1259,7 @@ def compare(
     quality_probe: str = QUALITY_OPT,
     report_reuse: bool = REPORT_REUSE_OPT,
     kv_tier: str = KV_TIER_OPT,
+    seed: Optional[str] = SEED_OPT,
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
@@ -1304,7 +1326,7 @@ def compare(
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe,
                  eval_set=eval_set, max_accuracy_loss=max_accuracy_loss, eval_items=eval_items,
                  eval_attempts=eval_attempts,
-                 report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate, rate_check=rate_check,
+                 report_reuse=report_reuse, kv_tier=kv_tier, seed=seed, arrival_rate=arrival_rate, rate_check=rate_check,
                  confirm_rounds=confirm_rounds, min_requests=min_requests, drafts=drafts, draft=draft, hub=hub,
                  kernel=kernel), layout=layout)
     view.stop()
@@ -1672,6 +1694,7 @@ def serve(
     quality_probe: str = QUALITY_OPT,
     report_reuse: bool = REPORT_REUSE_OPT,
     kv_tier: str = KV_TIER_OPT,
+    seed: Optional[str] = SEED_OPT,
     eval_set: Optional[str] = EVAL_SET_OPT,
     max_accuracy_loss: float = MAX_LOSS_OPT,
     eval_items: int = EVAL_ITEMS_OPT,
@@ -1753,7 +1776,7 @@ def serve(
                                              ttft_percentile, confirm, all_levels, explore, quality_probe,
                                              eval_set=eval_set, max_accuracy_loss=max_accuracy_loss,
                                              eval_items=eval_items, eval_attempts=eval_attempts,
-                                             report_reuse=report_reuse, kv_tier=kv_tier, arrival_rate=arrival_rate,
+                                             report_reuse=report_reuse, kv_tier=kv_tier, seed=seed, arrival_rate=arrival_rate,
                                              rate_check=rate_check, confirm_rounds=confirm_rounds,
                                              min_requests=min_requests, drafts=drafts, draft=draft, hub=hub,
                                              kernel=kernel), layout=layout)
