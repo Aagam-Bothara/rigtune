@@ -52,10 +52,11 @@ def test_a_seed_leaves_to_the_engine_what_it_does_not_say_and_says_so(hw_a100, p
 
 
 def test_seed_for_refuses_another_model_or_an_engine_not_calibrated(hw_a100, prepared_vllm):
-    from rigtune.pipeline import seed_for
+    from rigtune.pipeline import OptionRefused, seed_for
 
     class Plan:
         prepared = {"vllm": prepared_vllm}
+        errors = {}
 
     reg = {"vllm": get_backend("vllm")}
     spec = prepared_vllm.spec
@@ -65,8 +66,17 @@ def test_seed_for_refuses_another_model_or_an_engine_not_calibrated(hw_a100, pre
     for command, why in [("vllm serve other/model", "this calibration is of"),
                          (f"python -m sglang.launch_server --model-path {spec.hf_id}", "does not"),
                          (f"vllm serve {spec.hf_id} --revision abc", "revision")]:
-        with pytest.raises(ValueError, match=why):
+        with pytest.raises(OptionRefused, match=why):
             seed_for(hw_a100, spec, Plan(), reg, command)
+    with pytest.raises(OptionRefused, match="--seed: not a vLLM or SGLang server command"):
+        seed_for(hw_a100, spec, Plan(), reg, "ls -la")
+
+    class Failed:  # the engine could not prepare the model (a gated repo without a token): its reason, not --backend
+        prepared = {}
+        errors = {"vllm": "401 Client Error: gated repo"}
+
+    with pytest.raises(OptionRefused, match="vllm, which could not prepare .*401 Client Error"):
+        seed_for(hw_a100, spec, Failed(), reg, f"vllm serve {spec.hf_id}")
 
 
 def _feasible(hw, prepared: PreparedModel) -> List[Config]:
@@ -193,6 +203,7 @@ def test_a_seed_in_a_precision_quant_excludes_is_refused(hw_a100, prepared_vllm)
 
     class Plan:
         prepared = {"vllm": prepared_vllm}
+        errors = {}
 
     command = f"vllm serve {prepared_vllm.spec.hf_id} --quantization fp8"
     with pytest.raises(ValueError, match="--quant bf16 excludes"):
@@ -227,6 +238,7 @@ def test_the_shipped_recipe_seeds_a_calibration_for_its_gpu(hw_a100, prepared_vl
 
     class Plan:
         prepared = {"vllm": pm}
+        errors = {}
 
     cfg, notes = seed_for(hw, pm.spec, Plan(), {"vllm": get_backend("vllm")}, "recipe")
     assert (cfg.ctx, cfg.spec_decode, cfg.quant, cfg.batch) == (ctx, "dspark:7", "ckpt-nvfp4", 1024)
@@ -239,6 +251,7 @@ def test_a_model_with_no_shipped_recipe_asks_for_the_command(hw_a100, prepared_v
 
     class Plan:
         prepared = {"vllm": prepared_vllm}
+        errors = {}
 
     with pytest.raises(ValueError, match="ships no recipe"):
         seed_for(hw_a100, prepared_vllm.spec, Plan(), {"vllm": get_backend("vllm")}, "recipe")

@@ -1035,7 +1035,8 @@ def seed_profile(hw: HardwareDescriptor, spec: ModelSpec, plan: PlanResult, reg:
 def seed_for(hw: HardwareDescriptor, spec: ModelSpec, plan: "PlanResult", reg: Dict[str, BaseBackend],
              command: Optional[str], opts: Optional[SearchOptions] = None) -> Tuple[Optional[Config], List[str]]:
     """The Config a --seed command launches here, with notes on what it did not keep; (None, []) without one. Raises
-    ValueError when the command cannot seed this calibration (another model, an engine not being calibrated)."""
+    OptionRefused (a ValueError, which the CLI prints as one line) when the command cannot seed this calibration
+    (another model, an engine not being calibrated or that could not prepare the model)."""
     if not command:
         return None, []
     from rigtune.seed import RECIPE, parse_command, recipe_for, seed_config
@@ -1044,20 +1045,26 @@ def seed_for(hw: HardwareDescriptor, spec: ModelSpec, plan: "PlanResult", reg: D
     if command == RECIPE:
         found = recipe_for(spec.hf_id, list(plan.prepared), hw.gpu.name if hw.gpu else "")
         if found is None:
-            raise ValueError(f"--seed recipe: rigtune ships no recipe for {spec.hf_id} on "
+            raise OptionRefused(f"--seed recipe: rigtune ships no recipe for {spec.hf_id} on "
                              f"{' or '.join(plan.prepared)} (give the command instead)")
         command, source = found
-    seed = parse_command(command)
+    try:
+        seed = parse_command(command)
+    except ValueError as exc:
+        raise OptionRefused(f"--seed: {exc}") from None
     if seed.model != spec.hf_id:
-        raise ValueError(f"--seed serves {seed.model}, but this calibration is of {spec.hf_id}")
+        raise OptionRefused(f"--seed serves {seed.model}, but this calibration is of {spec.hf_id}")
     if seed.engine not in plan.prepared:
-        raise ValueError(f"--seed runs {seed.engine}, which this calibration does not (--backend)")
+        why = plan.errors.get(seed.engine)  # the model could not be prepared for it: say why, not --backend
+        raise OptionRefused(f"--seed runs {seed.engine}, " + (f"which could not prepare {spec.hf_id}: {why}" if why
+                                                               else "which this calibration does not (--backend)"))
     if seed.revision and seed.revision != spec.revision:
-        raise ValueError(f"--seed pins revision {seed.revision}; give it to rigtune as the model's revision instead")
+        raise OptionRefused(f"--seed pins revision {seed.revision}; give it to rigtune as the model's revision "
+                            "instead")
     cfg, notes = seed_config(seed, hw, plan.prepared[seed.engine], reg[seed.engine].precisions(hw))
     if opts is not None and opts.quants is not None and not opts.allows(cfg.quant):
         # A pick in a precision --quant excludes would never be served (the profile is checked against --quant).
-        raise ValueError(f"--seed runs {cfg.quant}, which --quant {'+'.join(opts.quants)} excludes")
+        raise OptionRefused(f"--seed runs {cfg.quant}, which --quant {'+'.join(opts.quants)} excludes")
     head = [f"seed: the recipe, {source}: {command}"] if source else []
     return cfg, head + notes + [f"seed: {n}" for n in seed.notes] + [f"seed measured as {cfg.key()}"]
 

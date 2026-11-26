@@ -263,5 +263,6 @@ def test_a_larger_batch_cannot_keep_a_fraction_the_buffer_no_longer_fits(tmp_hom
 
     class Plan:
         prepared = {"sglang": pm}
+        errors = {}
 
     assert [v for v in kv_variants_fn(hw_rtx4090, {"sglang": be}, Plan())(leader) if v.batch > 16] == []
