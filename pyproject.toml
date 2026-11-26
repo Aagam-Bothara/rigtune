@@ -55,7 +55,7 @@ Benchmarks = "https://github.com/Aagam-Bothara/rigtune/blob/main/docs/benchmarks
 Issues = "https://github.com/Aagam-Bothara/rigtune/issues"
 
 [project.scripts]
-rigtune = "rigtune.cli:app"
+rigtune = "rigtune.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

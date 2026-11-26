@@ -111,13 +111,16 @@ def _set_dotted(obj: Dict[str, Any], key: str, value: Any) -> None:
     obj[last] = value
 
 
-def _flags(engine: str, rest: List[str]) -> List[Tuple[str, Any]]:
+def _flags(engine: str, rest: List[str],
+           spans: Optional[List[Tuple[str, Any, int, int]]] = None) -> List[Tuple[str, Any]]:
     """(name, value) in order, names with dashes; a bare flag's value is True. vLLM's dotted flags are gathered into
-    one object per flag, merged into the same flag's JSON value when both are given."""
+    one object per flag, merged into the same flag's JSON value when both are given. `spans`, when given, gets
+    (name, value, start, end) per flag as written: the tokens rest[start:end] it took."""
     out: List[Tuple[str, Any]] = []
     dotted: Dict[str, Dict[str, Any]] = {}
     i = 0
     while i < len(rest):
+        start = i
         tok = rest[i]
         if tok in SHORT[engine]:
             tok = "--" + SHORT[engine][tok]
@@ -139,6 +142,8 @@ def _flags(engine: str, rest: List[str]) -> List[Tuple[str, Any]]:
             value, i = "", i + 1
         else:
             raise ValueError(f"--{base} needs a value")
+        if spans is not None:
+            spans.append((name, value, start, i))
         if engine == "vllm" and dot:
             _set_dotted(dotted.setdefault(base, {}), key, _scalar(value))
             continue
@@ -442,6 +447,34 @@ def seed_config(seed: Seed, hw: Any, model: Any, precisions: List[str]) -> Tuple
     if seed.extra:
         f["extra"] = dict(seed.extra)
     return Config(backend=seed.engine, **f), notes
+
+
+# The flags a drop-in (`rigtune vllm serve ...`) takes for rigtune's own process rather than the engine's launch: where
+# it listens, the key its clients send, the Hub token its downloads use, the name clients ask for. They never enter
+# the seed (its cache key), so a new key, token or port is not a new calibration.
+SERVER_FLAGS = ("host", "port", "api-key", "hf-token", "token", "served-model-name")
+DEFAULT_PORT = {"vllm": 8000, "sglang": 30000}
+# Where each engine listens with no --host: vLLM on every interface (uvicorn's host None), SGLang on this machine.
+DEFAULT_HOST = {"vllm": "0.0.0.0", "sglang": "127.0.0.1"}
+
+
+def server_flags(tokens: List[str]) -> Tuple[str, List[str], Dict[str, Any]]:
+    """A server command as argv: its engine, the tokens without SERVER_FLAGS, and those flags' values (the last given
+    wins, as in both engines). Raises ValueError as parse_command does, never echoing a value."""
+    notes: List[str] = []
+    if not tokens:
+        raise ValueError("the command is empty")
+    engine, _, rest = _engine_and_model(list(tokens), notes)
+    head = len(tokens) - len(rest)
+    spans: List[Tuple[str, Any, int, int]] = []
+    _flags(engine, rest, spans)
+    found: Dict[str, Any] = {}
+    drop = set()
+    for name, value, start, end in spans:
+        if name in SERVER_FLAGS:
+            found[name] = value
+            drop.update(range(head + start, head + end))
+    return engine, [t for j, t in enumerate(tokens) if j not in drop], found
 
 
 def parse_command(command: str) -> Seed:

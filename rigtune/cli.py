@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
+import shlex
 import signal
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import typer
 from rich.console import Console
@@ -20,7 +22,9 @@ from rigtune import __version__
 from rigtune.models import OBJECTIVES, GiB, ModelSpec, Profile, TrialResult
 
 app = typer.Typer(help="rigtune: an autotuner for LLM serving. It measures serving settings on your GPU and your "
-                       "traffic, then serves the fastest behind one OpenAI-compatible API.",
+                       "traffic, then serves the fastest behind one OpenAI-compatible API. Put it in front of the "
+                       "command you already run: `rigtune [options] vllm serve MODEL [flags]` measures that command "
+                       "and changes to it, and serves the fastest (the options are `rigtune serve`'s).",
                   no_args_is_help=True, add_completion=False)
 console = Console()
 err = Console(stderr=True)
@@ -2055,5 +2059,88 @@ def ledger_rebuild(
                   f"{len(profile.calibration_table)} trials", markup=False, highlight=False)
 
 
+# --------------------------------------------------------------------------- the drop-in prefix
+
+_PYTHON = re.compile(r"^python(3(\.\d+)?)?(\.exe)?$")
+_DROP_IN_OWN = ("--seed", "--backend", "--port", "--host", "--profile")  # the command says these itself
+
+
+def _drop_in_start(argv: Sequence[str]) -> Optional[int]:
+    """Where a server command starts in rigtune's argv (`vllm serve`, `sglang serve`, `python -m ...`), when only
+    rigtune options come before it; None for any of rigtune's own commands."""
+    import typer.main
+
+    commands = set(typer.main.get_command(app).commands)
+    for i, tok in enumerate(argv):
+        if tok in commands:
+            return None
+        nxt = argv[i + 1] if i + 1 < len(argv) else None
+        if (tok in ("vllm", "sglang") and nxt == "serve") or (_PYTHON.match(Path(tok).name) and nxt == "-m"):
+            return i
+    return None
+
+
+def drop_in_argv(argv: Sequence[str], environ=os.environ) -> Optional[List[str]]:
+    """`rigtune [options] vllm serve MODEL [flags]` as the `rigtune serve` it stands for: the command is the seed
+    (measured first, so the pick is never measured below it), its engine the backend, its --host and --port where
+    rigtune listens, its --api-key the key rigtune requires (set in `environ`, never in argv or the cache key). None
+    when argv is not a drop-in. Raises ValueError with the reason, never echoing a value."""
+    from rigtune.seed import DEFAULT_HOST, DEFAULT_PORT, ENV, parse_command, server_flags
+
+    start = _drop_in_start(argv)
+    if start is None:
+        return None
+    before, command = [t for t in argv[:start] if t != "--"], list(argv[start:])
+    if "--help" in command or "-h" in command:
+        return ["serve", "--help"]
+    envs = sorted(t.split("=", 1)[0] for t in before if ENV.match(t))
+    if envs:
+        raise ValueError(f"environment variables after `rigtune` ({', '.join(envs)}): set them before it, as "
+                         "`NAME=value rigtune vllm serve ...`")
+    verbose = [t for t in before if t in ("-v", "--verbose")]
+    opts = [t for t in before if t not in ("-v", "--verbose")]
+    given = sorted({o.split("=", 1)[0] for o in opts if o.split("=", 1)[0] in _DROP_IN_OWN})
+    if given:
+        raise ValueError(f"{', '.join(given)} before the command: the command itself says that (its engine, model, "
+                         "--host and --port)")
+    engine, kept, found = server_flags(command)
+    seed = parse_command(shlex.join(kept))  # the reason a command cannot be launched, before any download
+    if "served-model-name" in found:
+        # rigtune launches the engine under the model's id; a client asking for another name would get a 404.
+        raise ValueError(f"--served-model-name: rigtune serves the model under its id ({seed.model}) and cannot "
+                         "rename it yet; point clients at that name, or leave rigtune out")
+    _move_to_env(found.get("api-key"), "RIGTUNE_API_KEY", "--api-key", environ,
+                 refuse=any(o.split("=", 1)[0] == "--api-key-env" for o in opts))
+    _move_to_env(found.get("hf-token") or found.get("token"), "HF_TOKEN", "--hf-token", environ)
+    port = str(found.get("port", DEFAULT_PORT[engine]))
+    if not (port.isdigit() and 1 <= int(port) <= 65535):
+        raise ValueError("--port: not a port number (1-65535)")
+    # Its own settings first, so a rigtune option left without its value fails as such rather than take one of them.
+    return [*verbose, "serve", seed.model, "--seed", shlex.join(kept), "--backend", engine, "--port", port,
+            "--host", str(found.get("host") or DEFAULT_HOST[engine]), *opts]
+
+
+def _move_to_env(value, name: str, flag: str, environ, refuse: bool = False) -> None:
+    """A secret from the command, for rigtune's own process (its env var), never argv or the seed."""
+    if not value:
+        return
+    if refuse:
+        raise ValueError(f"--api-key-env before a command that gives {flag}: give the key one way")
+    if environ.get(name) not in (None, "", value):
+        raise ValueError(f"the command's {flag} differs from {name} in the environment")
+    environ[name] = value
+
+
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    """The `rigtune` command: its own commands, or a server command after it (the drop-in prefix)."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    try:
+        dropped = drop_in_argv(args)
+    except ValueError as exc:
+        err.print(f"rigtune: {exc}", markup=False, highlight=False)
+        raise SystemExit(2)
+    app(args=dropped if dropped is not None else args, prog_name="rigtune")
+
+
 if __name__ == "__main__":
-    app()
+    main()
