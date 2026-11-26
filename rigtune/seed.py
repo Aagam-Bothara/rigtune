@@ -477,6 +477,19 @@ def server_flags(tokens: List[str]) -> Tuple[str, List[str], Dict[str, Any]]:
     return engine, [t for j, t in enumerate(tokens) if j not in drop], found
 
 
+def canonical(command: str) -> str:
+    """What a command launches, as one text: its engine, model, revision, the settings read and the flags passed
+    through, in a fixed order. Two spellings of one launch (spacing, flag order, `--a=b` or `--a b`, dashes or
+    underscores, `vllm serve` or vLLM's api_server module) read the same; the notes are left out. The command's text
+    when it does not parse (the caller refuses it there)."""
+    try:
+        seed = parse_command(command)
+    except ValueError:
+        return command
+    return json.dumps({"engine": seed.engine, "model": seed.model, "revision": seed.revision, "fields": seed.fields,
+                       "extra": seed.extra}, sort_keys=True, default=str)
+
+
 def parse_command(command: str) -> Seed:
     """Read a vLLM or SGLang server command into a Seed. Raises ValueError, with the reason, on a command rigtune
     cannot read or launch as given; the message never repeats the command's values."""

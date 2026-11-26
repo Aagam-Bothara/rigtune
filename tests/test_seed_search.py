@@ -122,6 +122,22 @@ def test_a_seeded_profile_is_cached_under_its_own_name():
     assert a != SearchOptions(seed="vllm serve m --max-num-seqs 32").key()["seed"]
 
 
+@pytest.mark.parametrize("same", [
+    "vllm serve m   --max-num-seqs 16 --enforce-eager",
+    "vllm serve m --enforce-eager --max_num_seqs=16",
+    "python -m vllm.entrypoints.openai.api_server --model m --max-num-seqs 16 --enforce-eager",
+    "vllm serve m --enforce-eager \\\n  --max-num-seqs 16",
+])
+def test_one_launch_spelled_another_way_is_the_same_cached_profile(same):
+    from rigtune.pipeline import SearchOptions
+
+    base = SearchOptions(seed="vllm serve m --max-num-seqs 16 --enforce-eager").key()["seed"]
+    assert SearchOptions(seed=same).key()["seed"] == base
+    # A pass-through flag's value still tells two launches apart, as does another engine.
+    assert SearchOptions(seed="vllm serve m --max-num-seqs 16").key()["seed"] != base
+    assert SearchOptions(seed="sglang serve --model-path m --max-running-requests 16").key()["seed"] != base
+
+
 class _Ranked(FakeRunner):
     """FakeRunner whose speed is set per batch, so the seed's rank is chosen; start-up OOM at memory 0.95."""
 

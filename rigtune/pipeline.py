@@ -202,9 +202,9 @@ class SearchOptions:
         if self.report_reuse:
             out["reuse"] = "on"
         if self.seed:  # a seeded profile measured a command the grid may not hold: cached under its own name
-            text = self.seed
-            from rigtune.seed import RECIPE
+            from rigtune.seed import RECIPE, canonical
 
+            text = self.seed if self.seed == RECIPE else canonical(self.seed)
             if text == RECIPE:  # the recipes it may resolve to (the model and GPU are in the cache path already)
                 from importlib import resources
 
