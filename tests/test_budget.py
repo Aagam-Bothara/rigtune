@@ -116,3 +116,14 @@ def test_duration_parsing():
     for bad in ("abc", "0", "10d"):
         with pytest.raises(typer.BadParameter):
             _duration(bad)
+
+
+def test_the_budget_never_skips_the_seed():
+    # Two precisions take 120 s of a 150 s budget: a third trial would end past it, but the seed is the user's own
+    # command, which the pick must be measured against (a slow first start-up took it away under a 20-minute budget).
+    seed = Config(backend="llamacpp-cuda", quant="Q8_0", ctx=4096, batch=16, n_gpu_layers=37, n_batch=512)
+    runner, search = _search(150, seed=seed)
+    winner, notes = search.run(FEASIBLE)
+    assert seed in runner.ran
+    assert winner is not None and winner.config.key() == seed.key()
+    assert not any("did not run" in n for n in notes)

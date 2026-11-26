@@ -1218,7 +1218,8 @@ class StagedSearch:
         key = cfg.key()
         if key in self._done:
             return self._done[key]
-        if self._over_budget():
+        # The seed is the user's own command, the floor the pick is held to: the budget never skips it.
+        if stage != "seed" and self._over_budget():
             self._skipped.append(f"{stage} {key}")
             return self._skip(TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
                                           error=BUDGET_SKIPPED, failure_kind="skipped_budget"))
