@@ -126,3 +126,23 @@ def test_select_with_no_backends(hw_cpu, spec):
         b.available = False
     candidates, _ = select(hw_cpu, spec)
     assert candidates == []
+
+
+@pytest.mark.usefixtures("no_network")
+def test_as_is_serves_the_seed_command_itself_uncalibrated_and_uncached(tmp_home, hw_a100, spec, monkeypatch):
+    import rigtune.backends.vllm as vl
+    from rigtune.pipeline import SearchOptions
+
+    monkeypatch.setattr(vl.VllmBackend, "materialize", lambda self, m, quants: m)
+    command = f"vllm serve {spec.hf_id} --max-num-seqs 48 --max-model-len 4096 --enforce-eager"
+    p = resolve_profile(spec, hw=hw_a100, force_backend="vllm", skip_calibration=True,
+                        options=SearchOptions(seed=command))
+    assert p.backend == "vllm" and p.calibration_table == []
+    assert (p.config.batch, p.config.ctx) == (48, 4096)
+    assert "--enforce-eager" in p.launch_args
+    assert p.notes[0] == "uncalibrated: the seed command as given (--as-is)"
+    assert any(n.startswith("seed measured as") for n in p.notes[1:])
+    assert cache.list_profiles() == []
+    # Without a seed, --skip-calibration is the backend's defaults, as before.
+    d = resolve_profile(spec, hw=hw_a100, force_backend="vllm", skip_calibration=True)
+    assert "uncalibrated defaults" in d.notes and d.config.batch != 48

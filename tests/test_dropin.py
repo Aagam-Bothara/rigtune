@@ -16,7 +16,8 @@ def test_a_vllm_command_becomes_a_seeded_serve_on_its_own_port():
     env = {}
     out = drop_in_argv(["vllm", "serve", QWEN, "--max-model-len", "8192", "--port", "9000"], env)
     assert out == ["serve", QWEN, "--seed", f"vllm serve {QWEN} --max-model-len 8192", "--backend", "vllm",
-                   "--port", "9000", "--host", "0.0.0.0"]  # vLLM listens on every interface with no --host
+                   "--port", "9000", "--host", "0.0.0.0",  # vLLM listens on every interface with no --host
+                   "--budget", "20m"]
     assert env == {}
 
 
@@ -149,3 +150,22 @@ def test_main_runs_the_drop_in_as_serve_and_reports_a_refusal(monkeypatch, capsy
 def test_the_installed_command_is_main():
     text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
     assert 'rigtune = "rigtune.cli:main"' in text
+
+
+def test_a_first_run_calibrates_under_twenty_minutes_unless_told_otherwise():
+    out = drop_in_argv(["vllm", "serve", QWEN], {})
+    assert out[out.index("--budget") + 1] == "20m"
+    out = drop_in_argv(["--budget", "1h", "vllm", "serve", QWEN], {})
+    assert out.count("--budget") == 1 and out[out.index("--budget") + 1] == "1h"
+    assert "--budget" not in drop_in_argv(["--budget=5m", "vllm", "serve", QWEN], {})[:-1]
+    as_is = drop_in_argv(["--as-is", "vllm", "serve", QWEN], {})
+    assert "--budget" not in as_is and as_is[-1] == "--as-is"
+
+
+def test_as_is_is_serve_s_skip_calibration():
+    import typer.main
+
+    cmd = typer.main.get_command(cli.app).commands["serve"]
+    out = drop_in_argv(["--as-is", "vllm", "serve", QWEN, "--max-num-seqs", "8"], {})
+    params = cmd.make_context("serve", out[1:]).params
+    assert params["skip_calibration"] is True and params["seed"] == f"vllm serve {QWEN} --max-num-seqs 8"

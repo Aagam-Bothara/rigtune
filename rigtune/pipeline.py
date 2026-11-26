@@ -1020,6 +1020,18 @@ def default_profile(hw: HardwareDescriptor, spec: ModelSpec, plan: PlanResult, r
     raise RuntimeError(f"no usable backend for {spec.hf_id}; errors: {plan.errors}")
 
 
+def seed_profile(hw: HardwareDescriptor, spec: ModelSpec, plan: PlanResult, reg: Dict[str, BaseBackend],
+                 objective: str, opts: SearchOptions, workload: Optional[Workload] = None) -> Profile:
+    """Uncalibrated: the --seed command itself (`--as-is`), launched as a calibration would have measured it."""
+    workload = workload or get_workload("default")
+    cfg, notes = seed_for(hw, spec, plan, reg, opts.seed, opts)
+    backend, prepared = reg[cfg.backend], plan.prepared[cfg.backend]
+    backend.materialize(prepared, [cfg.quant])
+    return _profile_for(hw, spec, objective, backend, cfg, prepared,
+                        notes=["uncalibrated: the seed command as given (--as-is)"] + notes,
+                        workload=workload, prepared_all=plan.prepared)
+
+
 def seed_for(hw: HardwareDescriptor, spec: ModelSpec, plan: "PlanResult", reg: Dict[str, BaseBackend],
              command: Optional[str], opts: Optional[SearchOptions] = None) -> Tuple[Optional[Config], List[str]]:
     """The Config a --seed command launches here, with notes on what it did not keep; (None, []) without one. Raises
@@ -1423,6 +1435,9 @@ def resolve_profile(
     plan = prepare_and_plan(hw, spec, candidates, reg, materialize=not skip_calibration, workload=workload,
                             quants=opts.search_quants(), speculative_all=opts.speculative_all,
                             drafts=opts.drafts, draft=opts.draft, hub=opts.hub)
+    if skip_calibration and opts.seed:
+        say("seed as given")
+        return seed_profile(hw, spec, plan, reg, objective, opts, workload=workload)
     if skip_calibration:
         say("defaults")
         return default_profile(hw, spec, plan, reg, objective, workload=workload)

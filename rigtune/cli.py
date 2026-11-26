@@ -1673,7 +1673,9 @@ def serve(
                              help="Address to listen on. The default is this machine only; 0.0.0.0 exposes the "
                                   "server, which has no authentication, to every network it can reach"),
     backend: Optional[str] = typer.Option(None, "--backend", help="Force a backend by name"),
-    skip_calibration: bool = typer.Option(False, "--skip-calibration", help="Serve with backend defaults"),
+    skip_calibration: bool = typer.Option(False, "--skip-calibration", "--as-is",
+                                          help="Serve without calibrating: the --seed command as given (rigtune "
+                                               "only supervises it), else the backend's defaults"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
     ttft_percentile: int = TTFT_PCT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None, help="latency/efficiency: absolute tok/s floor"),
@@ -2063,6 +2065,7 @@ def ledger_rebuild(
 
 _PYTHON = re.compile(r"^python(3(\.\d+)?)?(\.exe)?$")
 _DROP_IN_OWN = ("--seed", "--backend", "--port", "--host", "--profile")  # the command says these itself
+DROP_IN_BUDGET = "20m"  # a first run's calibration, unless --budget says otherwise; later runs start from the cache
 
 
 def _drop_in_start(argv: Sequence[str]) -> Optional[int]:
@@ -2115,9 +2118,11 @@ def drop_in_argv(argv: Sequence[str], environ=os.environ) -> Optional[List[str]]
     port = str(found.get("port", DEFAULT_PORT[engine]))
     if not (port.isdigit() and 1 <= int(port) <= 65535):
         raise ValueError("--port: not a port number (1-65535)")
+    named = {o.split("=", 1)[0] for o in opts}
+    budget = [] if named & {"--budget", "--as-is", "--skip-calibration"} else ["--budget", DROP_IN_BUDGET]
     # Its own settings first, so a rigtune option left without its value fails as such rather than take one of them.
     return [*verbose, "serve", seed.model, "--seed", shlex.join(kept), "--backend", engine, "--port", port,
-            "--host", str(found.get("host") or DEFAULT_HOST[engine]), *opts]
+            "--host", str(found.get("host") or DEFAULT_HOST[engine]), *budget, *opts]
 
 
 def _move_to_env(value, name: str, flag: str, environ, refuse: bool = False) -> None:
